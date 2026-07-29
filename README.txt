@@ -1,11 +1,21 @@
-VISUTRA FINAL WEBSITE
-Upload all files/folders to the root of your GitHub Pages repository.
+VISUTRA FINAL FIXED WEBSITE
 
-IMPORTANT — ENQUIRY FORM:
-1. Create a form at Formspree and set support@visutra.in as the recipient/verified email.
-2. Formspree will give an endpoint similar to https://formspree.io/f/abcdwxyz
-3. Open index.html and replace https://formspree.io/f/YOUR_FORM_ID with your actual endpoint.
-4. Commit the change to GitHub.
-5. Submit a test enquiry from visutra.in and confirm the email arrives.
+Changes in this package:
+- Removed the full postal address from the top bar/header.
+- Kept business address in the contact/footer area.
+- Formspree endpoint set to: https://formspree.io/f/mqerjkyl
+- Brand logo and all four supplied product images included in /assets.
+- Image filenames are simple and GitHub-safe.
 
-The Amazon, Flipkart and Meesho marketplace URLs supplied by you are already included.
+UPLOAD TO GITHUB:
+1. Extract this ZIP.
+2. In repository vidyaprajapati/visutra-website, upload/replace ALL files.
+3. IMPORTANT: upload the entire 'assets' folder too. GitHub should show:
+   assets/logo.png
+   assets/tv-cover.jpg
+   assets/table-cover.png
+   assets/washing-machine-cover.png
+   assets/fridge-top-cover.png
+4. Commit changes.
+5. Wait for GitHub Pages deployment, then hard refresh visutra.in (Ctrl+F5).
+6. Test the enquiry form. Formspree may require email verification/activation before delivery works.
