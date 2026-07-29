@@ -1,11 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://visutra.in/</loc></url>
-  <url><loc>https://visutra.in/about.html</loc></url>
-  <url><loc>https://visutra.in/contact.html</loc></url>
-  <url><loc>https://visutra.in/shipping.html</loc></url>
-  <url><loc>https://visutra.in/returns.html</loc></url>
-  <url><loc>https://visutra.in/privacy.html</loc></url>
-  <url><loc>https://visutra.in/terms.html</loc></url>
-  <url><loc>https://visutra.in/disclaimer.html</loc></url>
+<url><loc>https://visutra.in/</loc></url>
+<url><loc>https://visutra.in/about.html</loc></url>
+<url><loc>https://visutra.in/shipping.html</loc></url>
+<url><loc>https://visutra.in/returns.html</loc></url>
+<url><loc>https://visutra.in/privacy.html</loc></url>
+<url><loc>https://visutra.in/terms.html</loc></url>
 </urlset>
