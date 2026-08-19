@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin | VISUTRA</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  .admin-wrap{max-width:900px;margin:0 auto;padding:48px 6vw 80px}
+  .admin-card{background:var(--canvas);border:1px solid var(--thread);border-radius:var(--radius);padding:28px}
+  .admin-card + .admin-card{margin-top:24px}
+  .field{margin-bottom:16px}
+  .field label{display:block;font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:6px}
+  .field input[type=text], .field input[type=number], .field input[type=password], .field input[type=url], .field textarea{
+    width:100%;padding:11px 13px;border:1px solid var(--thread);border-radius:var(--radius-sm);font-family:var(--body);font-size:15px;background:#fff;color:var(--ink)
+  }
+  .field textarea{min-height:80px;resize:vertical}
+  .field.inline{display:flex;align-items:center;gap:8px}
+  .field.inline label{margin:0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:640px){.grid2{grid-template-columns:1fr}}
+  .row-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .row-actions .btn{padding:9px 16px;font-size:13px}
+  .btn.ghost-navy{background:transparent;color:var(--indigo);border:1.5px solid var(--thread)}
+  .btn.ghost-navy:hover{background:var(--ivory)}
+  .btn.danger{background:#9E3608}
+  .btn.danger:hover{background:#7c2a06}
+  .plist{display:flex;flex-direction:column;gap:14px}
+  .prow{display:flex;gap:14px;border:1px solid var(--thread);border-radius:var(--radius-sm);padding:14px;background:#fff}
+  .prow img{width:72px;height:72px;object-fit:cover;border-radius:8px;background:var(--thread);flex:none}
+  .prow .info{flex:1;min-width:0}
+  .prow .info h4{margin:0 0 4px;font-family:var(--display)}
+  .prow .meta{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .badge{display:inline-block;font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;padding:3px 8px;border-radius:999px;margin-right:6px}
+  .badge.on{background:#DFF3E6;color:#1F7A4D}
+  .badge.off{background:#F2E3DC;color:var(--paprika-dark)}
+  .badge.star{background:#FBEED0;color:var(--marigold)}
+  #loginScreen{max-width:420px;margin:80px auto;text-align:center}
+  #msg{font-family:var(--mono);font-size:13px;margin-top:10px;min-height:18px}
+  #msg.error{color:var(--paprika-dark)}
+  #msg.ok{color:#1F7A4D}
+  .hidden{display:none !important}
+</style>
+</head>
+<body>
+<header>
+<a class="logo" href="index.html"><img src="assets/logo.png" alt="VISUTRA logo"></a>
+<nav>
+<a href="index.html">Home</a>
+<a href="products.html">Products</a>
+</nav>
+</header>
+
+<div class="admin-wrap">
+
+<div id="loginScreen" class="admin-card">
+<div class="eyebrow" style="justify-content:center">ADMIN</div>
+<h1 style="margin:14px 0 18px;font-size:26px">VISUTRA Product Admin</h1>
+<div class="field">
+<label for="pw">Password</label>
+<input type="password" id="pw" placeholder="Enter admin password" autocomplete="current-password">
+</div>
+<button class="btn navy block" id="loginBtn">Log In</button>
+<p id="loginMsg" style="font-family:var(--mono);font-size:13px;color:var(--paprika-dark);margin-top:12px;min-height:18px"></p>
+</div>
+
+<div id="dashboard" class="hidden">
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px">
+<h1 style="font-size:26px">Manage Products</h1>
+<button class="btn ghost-navy" id="logoutBtn">Log Out</button>
+</div>
+
+<div class="admin-card">
+<h3 id="formTitle" style="margin-bottom:16px">Add a Product</h3>
+<input type="hidden" id="pId">
+<div class="grid2">
+<div class="field">
+<label for="pName">Name *</label>
+<input type="text" id="pName" placeholder="e.g. AC Cover">
+</div>
+<div class="field">
+<label for="pCategory">Category</label>
+<input type="text" id="pCategory" placeholder="e.g. Appliance Covers">
+</div>
+</div>
+<div class="grid2">
+<div class="field">
+<label for="pTag">Tag (shown as a small badge on the card)</label>
+<input type="text" id="pTag" placeholder="e.g. Dust protection">
+</div>
+<div class="field">
+<label for="pPrice">Price (optional, plain number)</label>
+<input type="number" id="pPrice" placeholder="e.g. 499">
+</div>
+</div>
+<div class="field">
+<label for="pDesc">Description</label>
+<textarea id="pDesc" placeholder="Short product description shown on the card"></textarea>
+</div>
+<div class="field">
+<label for="pImg">Image URL</label>
+<input type="url" id="pImg" placeholder="https://... (direct link to a hosted image)">
+</div>
+<div class="grid2">
+<div class="field inline">
+<input type="checkbox" id="pFeatured">
+<label for="pFeatured" style="margin:0">Show on homepage (Featured)</label>
+</div>
+<div class="field inline">
+<input type="checkbox" id="pActive" checked>
+<label for="pActive" style="margin:0">Active (visible on site)</label>
+</div>
+</div>
+<div class="row-actions">
+<button class="btn navy" id="saveBtn">Save Product</button>
+<button class="btn ghost-navy hidden" id="cancelEditBtn">Cancel Edit</button>
+</div>
+<p id="msg"></p>
+</div>
+
+<div class="admin-card">
+<h3 style="margin-bottom:16px">Current Products</h3>
+<div id="plist" class="plist"></div>
+<p id="emptyMsg" class="hidden" style="color:var(--muted)">No products yet — add your first one above.</p>
+</div>
+
+</div>
+</div>
+
+<script src="assets/config.js"></script>
+<script>
+(function(){
+  var API = window.VISUTRA_API_URL;
+  var token = sessionStorage.getItem('visutra_admin_token') || '';
+  var products = [];
+
+  var loginScreen = document.getElementById('loginScreen');
+  var dashboard = document.getElementById('dashboard');
+  var loginMsg = document.getElementById('loginMsg');
+  var msg = document.getElementById('msg');
+
+  function checkConfig(){
+    if (!API || API.indexOf('PASTE_YOUR') === 0) {
+      loginMsg.textContent = 'Admin panel not connected yet — paste the Apps Script Web App URL into assets/config.js.';
+      document.getElementById('loginBtn').disabled = true;
+      return false;
+    }
+    return true;
+  }
+
+  function api(action, payload){
+    payload = payload || {};
+    payload.action = action;
+    if (token) payload.token = token;
+    return fetch(API, { method: 'POST', body: JSON.stringify(payload) }).then(function(r){ return r.json(); });
+  }
+
+  function showMsg(el, text, ok){
+    el.textContent = text;
+    el.className = ok ? 'ok' : 'error';
+  }
+
+  document.getElementById('loginBtn').addEventListener('click', function(){
+    var pw = document.getElementById('pw').value;
+    if (!pw) return;
+    loginMsg.textContent = 'Checking...';
+    api('login', { password: pw }).then(function(res){
+      if (res.ok) {
+        token = res.token;
+        sessionStorage.setItem('visutra_admin_token', token);
+        enterDashboard();
+      } else {
+        loginMsg.textContent = res.error || 'Login failed.';
+      }
+    }).catch(function(){ loginMsg.textContent = 'Could not reach the server.'; });
+  });
+
+  document.getElementById('logoutBtn').addEventListener('click', function(){
+    api('logout', {}).finally(function(){
+      sessionStorage.removeItem('visutra_admin_token');
+      token = '';
+      dashboard.classList.add('hidden');
+      loginScreen.classList.remove('hidden');
+    });
+  });
+
+  function enterDashboard(){
+    loginScreen.classList.add('hidden');
+    dashboard.classList.remove('hidden');
+    loadProducts();
+  }
+
+  function loadProducts(){ fetchAll(); }
+
+  function fetchAll(){
+    fetch(API + '?action=listAll&token=' + encodeURIComponent(token))
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (!res.ok) { showMsg(msg, res.error || 'Session expired, please log in again.', false); return; }
+        products = res.products;
+        renderList();
+      })
+      .catch(function(){ showMsg(msg, 'Could not load products.', false); });
+  }
+
+  function renderList(){
+    var list = document.getElementById('plist');
+    var empty = document.getElementById('emptyMsg');
+    if (!products.length) { list.innerHTML = ''; empty.classList.remove('hidden'); return; }
+    empty.classList.add('hidden');
+    list.innerHTML = products.map(function(p){
+      return '' +
+        '<div class="prow">' +
+          '<img src="' + (p.imageUrl || '') + '" alt="">' +
+          '<div class="info">' +
+            '<h4>' + escapeHtml(p.name) + '</h4>' +
+            '<div class="meta">' + escapeHtml(p.category || 'Uncategorized') + (p.price ? ' &middot; \u20B9' + escapeHtml(String(p.price)) : '') + '</div>' +
+            '<div style="margin-top:6px">' +
+              '<span class="badge ' + (p.active ? 'on' : 'off') + '">' + (p.active ? 'Active' : 'Hidden') + '</span>' +
+              (p.featured ? '<span class="badge star">Featured</span>' : '') +
+            '</div>' +
+            '<div class="row-actions">' +
+              '<button class="btn ghost-navy" data-edit="' + p.id + '">Edit</button>' +
+              '<button class="btn danger" data-delete="' + p.id + '">Delete</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+    }).join('');
+
+    list.querySelectorAll('[data-edit]').forEach(function(btn){
+      btn.addEventListener('click', function(){ editProduct(btn.getAttribute('data-edit')); });
+    });
+    list.querySelectorAll('[data-delete]').forEach(function(btn){
+      btn.addEventListener('click', function(){ deleteProduct(btn.getAttribute('data-delete')); });
+    });
+  }
+
+  function escapeHtml(str){
+    return String(str == null ? '' : str).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function editProduct(id){
+    var p = products.filter(function(x){ return x.id === id; })[0];
+    if (!p) return;
+    document.getElementById('formTitle').textContent = 'Edit Product';
+    document.getElementById('pId').value = p.id;
+    document.getElementById('pName').value = p.name || '';
+    document.getElementById('pCategory').value = p.category || '';
+    document.getElementById('pTag').value = p.tag || '';
+    document.getElementById('pPrice').value = p.price || '';
+    document.getElementById('pDesc').value = p.description || '';
+    document.getElementById('pImg').value = p.imageUrl || '';
+    document.getElementById('pFeatured').checked = !!p.featured;
+    document.getElementById('pActive').checked = !!p.active;
+    document.getElementById('cancelEditBtn').classList.remove('hidden');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function resetForm(){
+    document.getElementById('formTitle').textContent = 'Add a Product';
+    document.getElementById('pId').value = '';
+    document.getElementById('pName').value = '';
+    document.getElementById('pCategory').value = '';
+    document.getElementById('pTag').value = '';
+    document.getElementById('pPrice').value = '';
+    document.getElementById('pDesc').value = '';
+    document.getElementById('pImg').value = '';
+    document.getElementById('pFeatured').checked = false;
+    document.getElementById('pActive').checked = true;
+    document.getElementById('cancelEditBtn').classList.add('hidden');
+  }
+
+  document.getElementById('cancelEditBtn').addEventListener('click', resetForm);
+
+  document.getElementById('saveBtn').addEventListener('click', function(){
+    var id = document.getElementById('pId').value;
+    var name = document.getElementById('pName').value.trim();
+    if (!name) { showMsg(msg, 'Product name is required.', false); return; }
+
+    var product = {
+      id: id || undefined,
+      name: name,
+      category: document.getElementById('pCategory').value.trim(),
+      tag: document.getElementById('pTag').value.trim(),
+      price: document.getElementById('pPrice').value.trim(),
+      description: document.getElementById('pDesc').value.trim(),
+      imageUrl: document.getElementById('pImg').value.trim(),
+      featured: document.getElementById('pFeatured').checked,
+      active: document.getElementById('pActive').checked
+    };
+
+    var action = id ? 'updateProduct' : 'addProduct';
+    showMsg(msg, 'Saving...', true);
+    api(action, { product: product }).then(function(res){
+      if (res.ok) {
+        showMsg(msg, 'Saved.', true);
+        resetForm();
+        fetchAll();
+      } else {
+        showMsg(msg, res.error || 'Could not save product.', false);
+      }
+    }).catch(function(){ showMsg(msg, 'Could not reach the server.', false); });
+  });
+
+  function deleteProduct(id){
+    if (!confirm('Delete this product? This cannot be undone.')) return;
+    api('deleteProduct', { id: id }).then(function(res){
+      if (res.ok) fetchAll();
+      else showMsg(msg, res.error || 'Could not delete product.', false);
+    });
+  }
+
+  if (checkConfig() && token) {
+    enterDashboard();
+  }
+})();
+</script>
+</body>
+</html>
