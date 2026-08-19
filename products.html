@@ -45,7 +45,8 @@
 
 <main>
 <section class="section">
-<div class="products">
+<div class="products" id="dynamic-products" hidden></div>
+<div class="products" id="static-products">
 
 <div class="card" id="washing-machine">
 <div class="imgwrap"><img src="assets/washing-machine-cover.jpg" alt="VISUTRA top load washing machine cover" loading="lazy"></div>
@@ -155,5 +156,8 @@
 <div class="copy"><span>&copy; 2026 VISUTRA / Visu Trader. All rights reserved.</span><span>Home utility &amp; handloom products for everyday India.</span></div>
 </footer>
 <a class="float" href="https://wa.me/919507023431?text=Hello%20VISUTRA%2C%20I%20need%20help">WhatsApp</a>
+<script src="assets/config.js"></script>
+<script src="assets/products-data.js"></script>
+<script>VISUTRA_loadProducts('dynamic-products', 'static-products');</script>
 </body>
 </html>
