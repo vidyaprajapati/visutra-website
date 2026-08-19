@@ -114,6 +114,7 @@ nav a.active{color:var(--paprika)}
 .card:hover .imgwrap::after{border-width:0 34px 34px 0;border-color:transparent var(--ivory) transparent transparent}
 .card div.body{padding:20px}
 .card h3{font-size:19px;margin-bottom:8px}
+.card .price{font-family:var(--mono);font-weight:600;color:var(--paprika-dark);font-size:16px;margin:2px 0 14px}
 .card p{color:var(--muted);font-size:13.8px;margin:0 0 16px}
 .card .tag{font-family:var(--mono);font-size:11px;color:var(--paprika);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px;display:block}
 
