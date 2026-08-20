@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VISUTRA Tools — Free Label, QR &amp; Barcode Makers for Sellers</title>
+<meta name="description" content="Free browser-based tools for Indian online sellers: QR code and barcode generators, price and shipping label makers, and an A4-to-thermal label cropper for Flipkart, Meesho and Amazon.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --ink:#172436; --ink-soft:#3B4A5E;
+  --paper:#EFF1EA; --paper-2:#E4E7DD; --card:#FCFCF9;
+  --teal:#0E7C6B; --teal-dark:#0A5C4F;
+  --stamp:#C1401F; --line:#C9CDBF; --radius:3px;
+  --font-display:'Space Grotesk',sans-serif;
+  --font-body:'Inter',sans-serif;
+  --font-mono:'IBM Plex Mono',monospace;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webkit-font-smoothing:antialiased;}
+::selection{background:var(--teal);color:#fff;}
+a{color:inherit;text-decoration:none;}
+
+.vth-app{max-width:1180px;margin:0 auto;padding:0 20px 70px;}
+
+/* topbar */
+.vth-topbar{display:flex;align-items:center;justify-content:space-between;padding:22px 0 18px;border-bottom:2px solid var(--ink);}
+.vth-brand{display:flex;align-items:baseline;gap:10px;}
+.vth-brand-mark{font-family:var(--font-display);font-weight:700;font-size:22px;letter-spacing:-0.02em;}
+.vth-brand-sub{font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);border-left:1px solid var(--line);padding-left:10px;}
+.vth-nav{display:flex;gap:22px;font-family:var(--font-mono);font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);}
+.vth-nav a:hover{color:var(--ink);}
+
+/* hero */
+.vth-hero{padding:56px 0 40px;display:grid;grid-template-columns:1.2fr 1fr;gap:40px;align-items:end;}
+@media (max-width:820px){.vth-hero{grid-template-columns:1fr;}}
+.vth-hero h1{font-family:var(--font-display);font-weight:700;font-size:clamp(32px,5vw,52px);line-height:1.03;letter-spacing:-0.02em;margin:0 0 16px;}
+.vth-hero p{font-size:16px;color:var(--ink-soft);line-height:1.6;max-width:520px;margin:0 0 20px;}
+.vth-eyebrow{font-family:var(--font-mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--teal-dark);margin-bottom:14px;display:flex;align-items:center;gap:8px;}
+.vth-eyebrow::before{content:"";width:16px;height:1.5px;background:var(--teal);}
+
+.vth-hero-stats{display:flex;flex-direction:column;gap:14px;border-left:2px solid var(--ink);padding-left:22px;}
+.vth-stat b{display:block;font-family:var(--font-display);font-size:26px;font-weight:700;}
+.vth-stat span{font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);}
+
+/* tool cards - signature element: torn ticket stubs */
+.vth-tools{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:40px 0 10px;}
+@media (max-width:780px){.vth-tools{grid-template-columns:1fr;}}
+
+.vth-card{
+  background:var(--card);border:1.5px solid var(--ink);border-radius:4px;
+  padding:26px 26px 22px;position:relative;
+  box-shadow:4px 4px 0 rgba(23,36,54,0.10);
+  transition:transform .15s ease, box-shadow .15s ease;
+  display:flex;flex-direction:column;
+}
+.vth-card:hover{transform:translate(-2px,-2px);box-shadow:6px 6px 0 rgba(23,36,54,0.14);}
+.vth-card::before, .vth-card::after{
+  content:"";position:absolute;top:-1.5px;width:12px;height:12px;background:var(--paper);
+  border:1.5px solid var(--ink);border-radius:50%;
+}
+.vth-card::before{left:20px;transform:translateY(-50%);}
+.vth-card::after{right:20px;transform:translateY(-50%);}
+
+.vth-card-tag{
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--stamp);border:1px solid var(--stamp);border-radius:14px;padding:3px 10px;
+  display:inline-block;width:fit-content;margin-bottom:14px;
+}
+.vth-card h3{font-family:var(--font-display);font-size:21px;font-weight:600;margin:0 0 8px;letter-spacing:-0.01em;}
+.vth-card p{font-size:13.5px;color:var(--ink-soft);line-height:1.55;margin:0 0 18px;flex-grow:1;}
+.vth-card-features{list-style:none;margin:0 0 20px;padding:0;display:flex;flex-wrap:wrap;gap:8px;}
+.vth-card-features li{
+  font-family:var(--font-mono);font-size:10.5px;color:var(--ink-soft);
+  background:var(--paper-2);border-radius:12px;padding:4px 10px;
+}
+.vth-card-cta{
+  font-family:var(--font-mono);font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;
+  background:var(--ink);color:#fff;border-radius:var(--radius);padding:11px 18px;
+  display:inline-flex;align-items:center;gap:8px;width:fit-content;
+  transition:background .15s ease;
+}
+.vth-card:hover .vth-card-cta{background:var(--teal-dark);}
+.vth-card-cta .arrow{transition:transform .15s ease;}
+.vth-card:hover .vth-card-cta .arrow{transform:translateX(3px);}
+
+/* how it works strip */
+.vth-strip{margin:60px 0 10px;padding:32px 0;border-top:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);}
+.vth-strip h2{font-family:var(--font-display);font-size:22px;font-weight:600;margin:0 0 24px;}
+.vth-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;}
+@media (max-width:780px){.vth-steps{grid-template-columns:1fr;}}
+.vth-step .num{font-family:var(--font-mono);font-size:11px;color:var(--teal-dark);letter-spacing:.06em;}
+.vth-step h4{font-family:var(--font-display);font-size:15.5px;font-weight:600;margin:6px 0 6px;}
+.vth-step p{font-size:13px;color:var(--ink-soft);line-height:1.55;margin:0;}
+
+/* trust / why free */
+.vth-why{margin:50px 0;display:grid;grid-template-columns:1fr 1fr;gap:30px;}
+@media (max-width:780px){.vth-why{grid-template-columns:1fr;}}
+.vth-why-card{background:var(--paper-2);border-radius:6px;padding:24px;border-left:3px solid var(--teal);}
+.vth-why-card h4{font-family:var(--font-display);font-size:16px;margin:0 0 8px;}
+.vth-why-card p{font-size:13.5px;color:var(--ink-soft);line-height:1.6;margin:0;}
+
+.vth-footer{margin-top:56px;padding-top:20px;border-top:1.5px solid var(--ink);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-family:var(--font-mono);font-size:11px;color:var(--ink-soft);}
+</style>
+</head>
+<body>
+
+<div class="vth-app">
+
+  <div class="vth-topbar">
+    <div class="vth-brand">
+      <span class="vth-brand-mark">VISUTRA</span>
+      <span class="vth-brand-sub">Tools</span>
+    </div>
+    <div class="vth-nav">
+      <a href="https://visutra.in">Shop</a>
+      <a href="label-studio.html">Label Studio</a>
+      <a href="label-cropper.html">Label Cropper</a>
+    </div>
+  </div>
+
+  <div class="vth-hero">
+    <div>
+      <div class="vth-eyebrow">Free tools for online sellers</div>
+      <h1>Print-ready labels,<br>without the software.</h1>
+      <p>Two browser-based tools built for Indian D2C sellers — design your own QR codes, barcodes and price tags, then crop your marketplace dispatch PDFs down to clean thermal labels. No installs, no sign-up, nothing uploaded anywhere.</p>
+    </div>
+    <div class="vth-hero-stats">
+      <div class="vth-stat"><b>0 uploads</b><span>Everything runs in your browser</span></div>
+      <div class="vth-stat"><b>₹0</b><span>No subscription, no watermark</span></div>
+      <div class="vth-stat"><b>3 marketplaces</b><span>Flipkart, Meesho, Amazon presets</span></div>
+    </div>
+  </div>
+
+  <div class="vth-tools">
+    <a class="vth-card" href="label-studio.html">
+      <span class="vth-card-tag">Design</span>
+      <h3>Label Studio</h3>
+      <p>Build QR codes, barcodes, price tags and shipping labels from scratch. Live preview, instant download, bulk-generate from a CSV of your SKUs.</p>
+      <ul class="vth-card-features">
+        <li>QR generator</li>
+        <li>Barcode (CODE128 / EAN / UPC)</li>
+        <li>Price &amp; product labels</li>
+        <li>Shipping labels</li>
+        <li>CSV bulk print</li>
+      </ul>
+      <span class="vth-card-cta">Open Label Studio <span class="arrow">→</span></span>
+    </a>
+
+    <a class="vth-card" href="label-cropper.html">
+      <span class="vth-card-tag">Prepare</span>
+      <h3>Label Cropper</h3>
+      <p>Upload the A4 shipping-label PDF your marketplace gives you and crop it straight down to a clean thermal-size label — calibrated per platform.</p>
+      <ul class="vth-card-features">
+        <li>Amazon preset</li>
+        <li>Flipkart preset</li>
+        <li>Meesho — 2-per-page split</li>
+        <li>4×6 / 3×5 output</li>
+        <li>Remembers your calibration</li>
+      </ul>
+      <span class="vth-card-cta">Open Label Cropper <span class="arrow">→</span></span>
+    </a>
+  </div>
+
+  <div class="vth-strip">
+    <h2>How sellers use these together</h2>
+    <div class="vth-steps">
+      <div class="vth-step">
+        <div class="num">01</div>
+        <h4>Design your product labels</h4>
+        <p>Use Label Studio to make price tags and QR labels for your own products — export a batch straight from your SKU list.</p>
+      </div>
+      <div class="vth-step">
+        <div class="num">02</div>
+        <h4>Download your dispatch PDF</h4>
+        <p>Get the shipping-label PDF from Flipkart, Meesho or Amazon Seller Central as usual — no change to your normal workflow.</p>
+      </div>
+      <div class="vth-step">
+        <div class="num">03</div>
+        <h4>Crop and print</h4>
+        <p>Run it through Label Cropper to strip the invoice and whitespace, then send the clean label straight to your thermal printer.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="vth-why">
+    <div class="vth-why-card">
+      <h4>Why it's free</h4>
+      <p>These are internal tools we built for our own VISUTRA dispatch process and are sharing as-is. No account, no watermark, no upsell — just what we use ourselves.</p>
+    </div>
+    <div class="vth-why-card">
+      <h4>Where your data goes</h4>
+      <p>Nothing is uploaded to a server. Both tools run entirely in your browser tab — close it and everything is gone, including any PDF you crop.</p>
+    </div>
+  </div>
+
+  <div class="vth-footer">
+    <span>VISUTRA Tools — free, browser-based, made for sellers.</span>
+    <span>visutra.in</span>
+  </div>
+</div>
+</body>
+</html>
