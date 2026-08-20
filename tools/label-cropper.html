@@ -95,6 +95,16 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 .vlc-empty{font-family:var(--font-mono);font-size:12.5px;color:var(--ink-soft);text-align:center;}
 
 .vlc-status{font-family:var(--font-mono);font-size:11.5px;color:var(--teal-dark);margin-top:10px;min-height:16px;}
+
+.vlc-courier-panel{background:var(--card);border:1.5px solid var(--ink);border-radius:var(--radius);padding:14px;}
+.vlc-courier-panel h4{margin:0 0 10px;font-family:var(--font-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);}
+.vlc-courier-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid var(--line);}
+.vlc-courier-row:first-of-type{border-top:none;}
+.vlc-courier-name{font-family:var(--font-mono);font-size:12.5px;font-weight:600;}
+.vlc-courier-count{font-family:var(--font-mono);font-size:12px;color:var(--ink-soft);margin-right:auto;padding-left:8px;}
+.vlc-courier-dl{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;background:transparent;border:1.5px solid var(--ink);color:var(--ink);border-radius:14px;padding:5px 10px;cursor:pointer;white-space:nowrap;}
+.vlc-courier-dl:hover{background:var(--ink);color:#fff;}
+.vlc-courier-total{margin-top:10px;padding-top:10px;border-top:1.5px solid var(--ink);font-family:var(--font-mono);font-size:12px;font-weight:600;display:flex;justify-content:space-between;}
 .vlc-footer{margin-top:50px;padding-top:18px;border-top:1.5px solid var(--ink);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-family:var(--font-mono);font-size:11px;color:var(--ink-soft);}
 </style>
 </head>
@@ -166,6 +176,8 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
       <button class="vlc-btn accent" id="vlcProcessBtn" onclick="processPdf()" disabled>Crop &amp; download PDF</button>
       <div class="vlc-status" id="vlcStatus"></div>
 
+      <div id="vlcCourierPanel" style="display:none;margin-top:16px;"></div>
+
       <div class="vlc-help" id="vlcHelpText">
         Amazon labels usually sit in the top ~45–55% of the page with an invoice underneath — the sliders above are a starting point. Drag them until the dashed box on the right hugs just the barcode label, then process. Your setting is remembered for next time.
       </div>
@@ -192,8 +204,8 @@ const PRESETS = {
               help:"Amazon labels usually sit in the top ~45–55% of the page with an invoice underneath — the sliders above are a starting point. Drag them until the dashed box hugs just the barcode label, then process." },
   flipkart: { top:4,  bottom:50, left:3, right:3, gap:2, mode:'single',
               help:"Flipkart's courier label typically occupies the upper half of the page, with the tax invoice below. Adjust the bottom cut first so the box stops right below the barcode block." },
-  meesho:   { top:2,  bottom:2,  left:3, right:3, gap:3, mode:'split',
-              help:"Meesho dispatch sheets often stack two labels per page. Use '2 stacked' mode — top/bottom cuts trim the outer edges, and the gap slider splits the middle." },
+  meesho:   { top:1,  bottom:60, left:2, right:2, gap:2, mode:'single',
+              help:"Meesho dispatch sheets are usually one shipping label per page, with the tax invoice underneath — drag the bottom cut up until the box hugs just the label. Labels are auto-detected by courier (Valmo, Shadowfax, Delhivery, etc.) and grouped together in the exported PDF, with a per-courier order count shown below." },
   custom:   { top:5,  bottom:5,  left:3, right:3, gap:2, mode:'single',
               help:"Set your own crop manually and fine-tune against the live preview." }
 };
@@ -204,6 +216,54 @@ let pdfBytes = null;
 let pdfFile = null;
 let pdfJsDoc = null;
 let pageAspect = 1 / 1.4142; // fallback A4 portrait ratio (w/h)
+
+/* ---------------- Meesho courier detection ---------------- */
+const KNOWN_COURIERS = [
+  'Valmo','Shadowfax','Delhivery','Xpressbees','Ekart','Ecom Express',
+  'DTDC','Bluedart','Blue Dart','India Post','Shree Maruti','Amazon Shipping','Ekart Logistics'
+];
+let pageCouriers = [];    // index -> courier name (0-based, matches PDF page order)
+let courierOrder = [];    // list of courier names in the order to export them
+
+async function detectCouriers(){
+  pageCouriers = [];
+  const counts = {};
+  for(let i=1;i<=pdfJsDoc.numPages;i++){
+    const page = await pdfJsDoc.getPage(i);
+    const content = await page.getTextContent();
+    const text = content.items.map(it=>it.str).join(' ');
+    let found = 'Other / Unrecognised';
+    for(const c of KNOWN_COURIERS){
+      if(text.toLowerCase().includes(c.toLowerCase())){ found = c === 'Blue Dart' ? 'Bluedart' : (c === 'Ekart Logistics' ? 'Ekart' : c); break; }
+    }
+    pageCouriers.push(found);
+    counts[found] = (counts[found]||0) + 1;
+  }
+  courierOrder = Object.keys(counts).sort((a,b)=> counts[b]-counts[a] || a.localeCompare(b));
+  renderCourierPanel(counts);
+}
+
+function renderCourierPanel(counts){
+  const panel = document.getElementById('vlcCourierPanel');
+  if(currentPlatform !== 'meesho' || !pageCouriers.length){ panel.style.display='none'; panel.innerHTML=''; return; }
+  const total = pageCouriers.length;
+  let rows = courierOrder.map(name=>{
+    return `<div class="vlc-courier-row">
+      <span class="vlc-courier-name">${escapeHtml(name)}</span>
+      <span class="vlc-courier-count">${counts[name]} order${counts[name]===1?'':'s'}</span>
+      <button class="vlc-courier-dl" onclick="processPdf('${escapeAttr(name)}')">Download</button>
+    </div>`;
+  }).join('');
+  panel.innerHTML = `<div class="vlc-courier-panel">
+    <h4>Orders by courier partner</h4>
+    ${rows}
+    <div class="vlc-courier-total"><span>Total</span><span>${total} order${total===1?'':'s'}</span></div>
+  </div>`;
+  panel.style.display = 'block';
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escapeAttr(s){ return String(s).replace(/'/g, "\\'"); }
 
 function loadStoredPreset(p){
   try{
@@ -237,6 +297,13 @@ document.getElementById('vlcPlatforms').addEventListener('click', e=>{
   btn.classList.add('active');
   currentPlatform = btn.dataset.p;
   applyPreset(currentPlatform);
+  if(currentPlatform === 'meesho' && pdfJsDoc && !pageCouriers.length){
+    detectCouriers();
+  } else if(currentPlatform !== 'meesho'){
+    document.getElementById('vlcCourierPanel').style.display = 'none';
+  } else {
+    renderCourierPanel(pageCouriers.reduce((acc,c)=>{ acc[c]=(acc[c]||0)+1; return acc; }, {}));
+  }
 });
 
 function setMode(mode){
@@ -293,7 +360,14 @@ async function handleFile(file){
   document.getElementById('vlcFilename').textContent = file.name;
   pdfBytes = new Uint8Array(await file.arrayBuffer());
   document.getElementById('vlcProcessBtn').disabled = false;
+  pageCouriers = []; courierOrder = [];
+  document.getElementById('vlcCourierPanel').style.display = 'none';
   await renderPreview();
+  if(currentPlatform === 'meesho'){
+    document.getElementById('vlcStatus').textContent = 'Detecting courier partners…';
+    await detectCouriers();
+    document.getElementById('vlcStatus').textContent = '';
+  }
 }
 
 async function renderPreview(){
@@ -368,7 +442,7 @@ const OUT_SIZES = {
   '4x4': [288, 288]
 };
 
-async function processPdf(){
+async function processPdf(courierFilter){
   if(!pdfBytes){ alert('Upload a PDF first.'); return; }
   const btn = document.getElementById('vlcProcessBtn');
   const status = document.getElementById('vlcStatus');
@@ -383,9 +457,24 @@ async function processPdf(){
     const v = getCropValues();
     const outSizeKey = document.getElementById('vlcOutSize').value;
 
-    status.textContent = `Cropping ${srcPages.length} page(s)…`;
+    // Meesho: process pages grouped by courier partner (or filtered to just one
+    // courier when exporting a single partner's batch) instead of file order.
+    let pageIndexOrder = embedded.map((_, i) => i);
+    if(currentPlatform === 'meesho' && pageCouriers.length === embedded.length){
+      if(courierFilter){
+        pageIndexOrder = pageIndexOrder.filter(i => pageCouriers[i] === courierFilter);
+      } else {
+        pageIndexOrder = pageIndexOrder.slice().sort((a,b)=>{
+          const ca = courierOrder.indexOf(pageCouriers[a]);
+          const cb = courierOrder.indexOf(pageCouriers[b]);
+          return ca - cb || a - b;
+        });
+      }
+    }
 
-    for(let i=0;i<embedded.length;i++){
+    status.textContent = `Cropping ${pageIndexOrder.length} page(s)…`;
+
+    for(const i of pageIndexOrder){
       const ep = embedded[i];
       const pw = ep.width, ph = ep.height;
 
@@ -404,16 +493,21 @@ async function processPdf(){
         const cropH = ph * (1 - (r.topPct+r.bottomPct)/100);
         if(cropW <= 1 || cropH <= 1) continue;
 
-        let pageW = cropW, pageH = cropH, scale = 1;
+        let pageW = cropW, pageH = cropH, scaleX = 1, scaleY = 1;
         if(outSizeKey !== 'native' && OUT_SIZES[outSizeKey]){
           [pageW, pageH] = OUT_SIZES[outSizeKey];
-          scale = Math.min(pageW/cropW, pageH/cropH);
+          // Fill the selected paper size exactly (no white borders). Scales X and Y
+          // independently to the crop's own aspect ratio, so the label always fits
+          // the chosen paper — this can stretch slightly if the crop isn't the same
+          // shape as the target size.
+          scaleX = pageW/cropW;
+          scaleY = pageH/cropH;
         }
 
         const newPage = outDoc.addPage([pageW, pageH]);
-        const drawW = pw*scale, drawH = ph*scale;
-        const offsetX = -(pw*(leftPct/100))*scale + (pageW - cropW*scale)/2;
-        const offsetY = -(ph*(r.bottomPct/100))*scale + (pageH - cropH*scale)/2;
+        const drawW = pw*scaleX, drawH = ph*scaleY;
+        const offsetX = -(pw*(leftPct/100))*scaleX;
+        const offsetY = -(ph*(r.bottomPct/100))*scaleY;
 
         newPage.drawPage(ep, { x: offsetX, y: offsetY, width: drawW, height: drawH });
       }
@@ -425,11 +519,12 @@ async function processPdf(){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     const stamp = currentPlatform;
+    const courierSuffix = courierFilter ? '-' + courierFilter.toLowerCase().replace(/[^a-z0-9]+/g,'-') : (currentPlatform==='meesho' ? '-grouped-by-courier' : '');
     a.href = url;
-    a.download = `visutra-${stamp}-labels-cropped.pdf`;
+    a.download = `visutra-${stamp}${courierSuffix}-labels-cropped.pdf`;
     a.click();
     URL.revokeObjectURL(url);
-    status.textContent = `Done — ${outDoc.getPageCount()} label(s) exported.`;
+    status.textContent = `Done — ${outDoc.getPageCount()} label(s) exported${courierFilter ? ' for ' + courierFilter : ''}.`;
   }catch(err){
     console.error(err);
     status.textContent = 'Something went wrong — check the file is a valid PDF.';
