@@ -194,11 +194,10 @@
 
 <nav class="navbar navbar-expand-lg site-navbar py-3">
   <div class="container">
-    <a class="navbar-brand" href="../index.html">
+    <a class="navbar-brand" href="#">
       <span class="navbar-brand-mark">V</span> Visutra GST Tool
     </a>
-    <div class="d-flex align-items-center gap-3">
-      <a href="tools-home.html" class="nav-link d-none d-sm-inline-flex">&larr; All Tools</a>
+    <div class="d-flex gap-2">
       <a href="#tool" class="btn btn-sm btn-warm hero-cta d-none d-sm-inline-flex align-items-center">Open the tool</a>
     </div>
   </div>
@@ -326,6 +325,11 @@
           <input type="text" class="form-control" id="period" placeholder="e.g. Apr-Jun 2026">
         </div>
         <div class="col-md-6">
+          <label class="field-label" for="fpInput">Filing period for JSON (MMYYYY, last month of the period)</label>
+          <input type="text" class="form-control" id="fpInput" placeholder="e.g. 062026" maxlength="6">
+          <div class="field-note">Required only for the JSON download. Use the last month of the return period — e.g. a quarter ending June 2026 is <code>062026</code>, not <code>042026</code>.</div>
+        </div>
+        <div class="col-md-6">
           <label class="field-label" for="b2clThreshold">B2CL threshold (₹)</label>
           <input type="number" class="form-control" id="b2clThreshold" value="100000">
           <div class="field-note">Inter-state B2C invoices above this value are reported invoice-wise (B2CL) instead of in the state summary (B2CS). Currently ₹1,00,000 per GST Notification 12/2024 — check the GST portal if this has changed since.</div>
@@ -342,6 +346,21 @@
             <option value="PAC-PACKS">PAC — Packs</option>
             <option value="OTH-OTHERS">OTH — Others</option>
           </select>
+        </div>
+        <div class="col-md-6">
+          <label class="field-label" for="amazonEcoGstin">Amazon operator GSTIN (Table 14, optional)</label>
+          <input type="text" class="form-control" id="amazonEcoGstin" placeholder="e.g. 09AAICA3918J1CR" maxlength="15">
+          <div class="field-note">Not in Amazon's reports — check your Seller Central GST/TCS reports. Leave blank to skip Table 14 for Amazon.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="field-label" for="flipkartEcoGstin">Flipkart operator GSTIN (Table 14, optional)</label>
+          <input type="text" class="form-control" id="flipkartEcoGstin" placeholder="e.g. 09AACCF0683K1CQ" maxlength="15">
+          <div class="field-note">Check your Flipkart Seller Hub tax reports. Leave blank to skip Table 14 for Flipkart.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="field-label" for="meeshoEcoGstin">Meesho operator GSTIN (Table 14)</label>
+          <input type="text" class="form-control" id="meeshoEcoGstin" placeholder="Auto-detected from your Meesho reports" maxlength="15">
+          <div class="field-note">Usually auto-filled once you upload your Meesho TCS reports.</div>
         </div>
       </div>
 
@@ -367,27 +386,46 @@
         <div class="section-title"><h4>B2B — registered buyers</h4><span class="count" id="b2bCount"></span></div>
         <div style="overflow-x:auto;"><table class="preview" id="b2bTable"></table></div>
 
+        <div class="section-title"><h4>CDNR — credit notes to registered buyers</h4><span class="count" id="cdnrCount"></span></div>
+        <div style="overflow-x:auto;"><table class="preview" id="cdnrTable"></table></div>
+
         <div class="section-title"><h4>B2CL — large inter-state invoices</h4><span class="count" id="b2clCount"></span></div>
         <div style="overflow-x:auto;"><table class="preview" id="b2clTable"></table></div>
 
         <div class="section-title"><h4>B2CS — consumer sales, state &amp; rate-wise</h4><span class="count" id="b2csCount"></span></div>
         <div style="overflow-x:auto;"><table class="preview" id="b2csTable"></table></div>
 
-        <div class="section-title"><h4>HSN summary</h4><span class="count" id="hsnCount"></span></div>
-        <div style="overflow-x:auto;"><table class="preview" id="hsnTable"></table></div>
+        <div class="section-title"><h4>Nil-rated / exempt supplies</h4><span class="count"></span></div>
+        <div style="overflow-x:auto;"><table class="preview" id="exemptTable"></table></div>
+
+        <div class="section-title"><h4>HSN summary — B2B</h4><span class="count" id="hsnb2bCount"></span></div>
+        <div style="overflow-x:auto;"><table class="preview" id="hsnb2bTable"></table></div>
+
+        <div class="section-title"><h4>HSN summary — B2C</h4><span class="count" id="hsnb2cCount"></span></div>
+        <div style="overflow-x:auto;"><table class="preview" id="hsnb2cTable"></table></div>
+
+        <div class="section-title"><h4>Supplies through e-commerce operators</h4><span class="count" id="ecoCount"></span></div>
+        <div style="overflow-x:auto;"><table class="preview" id="ecoTable"></table></div>
+
+        <div class="section-title"><h4>Documents issued (best-effort)</h4><span class="count" id="docsCount"></span></div>
+        <div style="overflow-x:auto;"><table class="preview" id="docsTable"></table></div>
 
         <div class="download-bar">
           <div>
-            <h3>Your GSTR-1 ready file</h3>
-            <p>An Excel workbook with B2B, B2CL, B2CS and HSN sheets, formatted to match the GST offline tool template — plus a full source-data sheet for your records.</p>
+            <h3>Your GSTR-1 ready files</h3>
+            <p>Excel matches the official offline-tool template exactly. The JSON is a best-effort reconstruction of the upload schema — verify on the portal before filing; the Excel-via-Offline-Tool path is the more reliable route.</p>
           </div>
-          <button class="btn" id="downloadBtn">Download Excel</button>
+          <div class="d-flex gap-2 flex-wrap">
+            <button class="btn" id="downloadBtn">Download Excel</button>
+            <button class="btn btn-outline-light" id="downloadJsonBtn">Download JSON (beta)</button>
+          </div>
         </div>
       </div>
     </div>
 
   </div>
 </section>
+
 
 <div class="container">
   <div class="disclaimer">
@@ -402,11 +440,9 @@
 </footer>
 
 <script>
-
-/* =========================================================================
-   GSTR-1 mapping engine (Amazon / Flipkart / Meesho -> B2B/B2CL/B2CS/HSN)
-   ========================================================================= */
 var GSTR1 = (function () {
+
+  // ---- GST state code table (official, 01-38) ----------------------------
   var STATE_CODES = [
     ['01', 'Jammu and Kashmir'], ['02', 'Himachal Pradesh'], ['03', 'Punjab'],
     ['04', 'Chandigarh'], ['05', 'Uttarakhand'], ['06', 'Haryana'],
@@ -424,6 +460,8 @@ var GSTR1 = (function () {
     ['97', 'Other Territory'], ['99', 'Centre Jurisdiction']
   ];
 
+  // Aliases seen in real marketplace reports -> canonical state name.
+  // Keys are pre-normalised (uppercase, '&'->'AND', collapsed whitespace).
   var STATE_ALIASES = {
     'ORISSA': 'Odisha', 'PONDICHERRY': 'Puducherry', 'UTTARANCHAL': 'Uttarakhand',
     'NCT OF DELHI': 'Delhi', 'DELHI': 'Delhi',
@@ -444,42 +482,71 @@ var GSTR1 = (function () {
     for (var i = 0; i < STATE_CODES.length; i++) {
       if (STATE_CODES[i][1].toUpperCase().replace(/&/g, 'AND') === s) return STATE_CODES[i][1];
     }
-    return null;
+    return null; // unrecognised
   }
+
   function stateCodeFor(raw) {
     var name = normStateName(raw);
     if (!name) return null;
-    for (var i = 0; i < STATE_CODES.length; i++) { if (STATE_CODES[i][1] === name) return STATE_CODES[i][0]; }
+    for (var i = 0; i < STATE_CODES.length; i++) {
+      if (STATE_CODES[i][1] === name) return STATE_CODES[i][0];
+    }
     return null;
   }
-  function stateCodeFromGstin(gstin) { if (!gstin || gstin.length < 2) return null; return gstin.substring(0, 2); }
+
+  function stateCodeFromGstin(gstin) {
+    if (!gstin || gstin.length < 2) return null;
+    return gstin.substring(0, 2);
+  }
+
   function stateNameFromCode(code) {
-    for (var i = 0; i < STATE_CODES.length; i++) { if (STATE_CODES[i][0] === code) return STATE_CODES[i][1]; }
+    for (var i = 0; i < STATE_CODES.length; i++) {
+      if (STATE_CODES[i][0] === code) return STATE_CODES[i][1];
+    }
     return code;
   }
+
   function num(v) {
     if (v === null || v === undefined || v === '') return 0;
     var n = parseFloat(String(v).replace(/,/g, ''));
     return isNaN(n) ? 0 : n;
   }
+
   function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
 
+  // A normalised transaction line. Callers must pass already-correctly-signed
+  // taxableValue/taxAmount/invoiceValue (positive for a sale, negative for a
+  // return) - Amazon and Flipkart both encode this sign in the source data
+  // itself, so it must NOT be multiplied again here. `qty` is always a
+  // positive count in the source files, so callers pass qtySign separately
+  // to net it correctly. `isReturn` flags a return/refund/credit line, used
+  // to route registered-buyer (B2B) returns to CDNR instead of netting them
+  // into the original invoice.
   function makeTxn(o) {
     return {
-      source: o.source, docType: o.docType,
-      invoiceNo: o.invoiceNo || '', invoiceDate: o.invoiceDate || '',
-      buyerGstin: o.buyerGstin || '', buyerName: o.buyerName || '',
-      posStateCode: o.posStateCode, hsn: (o.hsn || '').toString().trim(),
+      source: o.source,               // 'amazon' | 'flipkart' | 'meesho'
+      docType: o.docType,              // 'b2b' | 'b2c'
+      invoiceNo: o.invoiceNo || '',
+      invoiceDate: o.invoiceDate || '',
+      buyerGstin: o.buyerGstin || '',
+      buyerName: o.buyerName || '',
+      posStateCode: o.posStateCode,    // place of supply, GST state code
+      hsn: (o.hsn || '').toString().trim(),
       description: o.description || '',
-      qty: num(o.qty) * o.sign,
-      taxableValue: round2(num(o.taxableValue) * o.sign),
+      qty: num(o.qty) * (o.qtySign === undefined ? 1 : o.qtySign),
+      taxableValue: round2(num(o.taxableValue)),
       rate: num(o.rate),
-      taxAmount: round2(num(o.taxAmount) * o.sign),
-      invoiceValue: round2(num(o.invoiceValue) * o.sign),
-      ecoGstin: o.ecoGstin || '', sign: o.sign, warnings: o.warnings || []
+      taxAmount: round2(num(o.taxAmount)),
+      invoiceValue: round2(num(o.invoiceValue)),
+      ecoGstin: o.ecoGstin || '',
+      isReturn: !!o.isReturn,
+      creditNoteNo: o.creditNoteNo || '',
+      creditNoteDate: o.creditNoteDate || '',
+      warnings: o.warnings || []
     };
   }
 
+  // ---- Seller GSTIN / home-state detection --------------------------------
   function detectSellerGstin(allRowSets) {
     for (var i = 0; i < allRowSets.length; i++) {
       for (var j = 0; j < allRowSets[i].length; j++) {
@@ -491,57 +558,72 @@ var GSTR1 = (function () {
     return null;
   }
 
+  // ---- AMAZON --------------------------------------------------------------
+  // rowsB2B: rows from MTR_B2B-*.csv, rowsB2C: rows from MTR_B2C-*.csv
+  // Amazon's own monetary columns (Tax Exclusive Gross, Total Tax Amount,
+  // Invoice Amount) are already negative for Refund rows - do not re-sign
+  // them. Quantity, however, is always a positive count, so it needs an
+  // explicit sign to net out correctly.
   function normalizeAmazon(rowsB2B, rowsB2C) {
     var txns = [];
+
     (rowsB2B || []).forEach(function (r) {
       var type = (r['Transaction Type'] || '').trim();
-      var sign = (type === 'Shipment') ? 1 : -1;
+      var isReturn = (type === 'Refund');
+      var qtySign = (type === 'Shipment') ? 1 : -1;
       var igst = num(r['Igst Rate']), cgst = num(r['Cgst Rate']), sgst = num(r['Sgst Rate']), utgst = num(r['Utgst Rate']);
       var rate = igst > 0 ? igst : (cgst + sgst + utgst);
       var posCode = stateCodeFor(r['Bill To State']) || stateCodeFor(r['Ship To State']);
       var warnings = [];
-      if (!posCode) warnings.push('Amazon B2B ' + (r['Invoice Number']||'') + ': unrecognised state "' + (r['Bill To State'] || r['Ship To State']) + '"');
+      if (!posCode) warnings.push('Unrecognised state: ' + (r['Bill To State'] || r['Ship To State']));
       var gstin = (r['Customer Bill To Gstid'] || '').trim();
       txns.push(makeTxn({
         source: 'amazon', docType: gstin ? 'b2b' : 'b2c',
         invoiceNo: r['Invoice Number'], invoiceDate: r['Invoice Date'],
         buyerGstin: gstin, buyerName: r['Buyer Name'],
         posStateCode: posCode, hsn: r['Hsn/sac'], description: r['Item Description'],
-        qty: r['Quantity'], taxableValue: r['Tax Exclusive Gross'],
+        qty: r['Quantity'], qtySign: qtySign, taxableValue: r['Tax Exclusive Gross'],
         rate: rate, taxAmount: r['Total Tax Amount'], invoiceValue: r['Invoice Amount'],
-        sign: sign, warnings: warnings
+        isReturn: isReturn, creditNoteNo: r['Credit Note No'], creditNoteDate: r['Credit Note Date'],
+        warnings: warnings
       }));
     });
+
     (rowsB2C || []).forEach(function (r) {
       var type = (r['Transaction Type'] || '').trim();
-      var sign = (type === 'Shipment') ? 1 : -1;
+      var qtySign = (type === 'Shipment') ? 1 : -1;
       var igst = num(r['Igst Rate']), cgst = num(r['Cgst Rate']), sgst = num(r['Sgst Rate']), utgst = num(r['Utgst Rate']);
       var rate = igst > 0 ? igst : (cgst + sgst + utgst);
       var posCode = stateCodeFor(r['Ship To State']);
       var warnings = [];
-      if (!posCode) warnings.push('Amazon B2C ' + (r['Invoice Number']||r['Order Id']||'') + ': unrecognised state "' + r['Ship To State'] + '"');
+      if (!posCode) warnings.push('Unrecognised state: ' + r['Ship To State']);
       txns.push(makeTxn({
         source: 'amazon', docType: 'b2c',
         invoiceNo: r['Invoice Number'], invoiceDate: r['Invoice Date'],
         posStateCode: posCode, hsn: r['Hsn/sac'], description: r['Item Description'],
-        qty: r['Quantity'], taxableValue: r['Tax Exclusive Gross'],
+        qty: r['Quantity'], qtySign: qtySign, taxableValue: r['Tax Exclusive Gross'],
         rate: rate, taxAmount: r['Total Tax Amount'], invoiceValue: r['Invoice Amount'],
-        sign: sign, warnings: warnings
+        warnings: warnings
       }));
     });
+
     return txns;
   }
 
+  // ---- FLIPKART --------------------------------------------------------------
+  // Flipkart's monetary columns are already negative for Return-type rows;
+  // Item Quantity is always a positive count and needs an explicit sign.
   function normalizeFlipkart(rows) {
     var txns = [];
     (rows || []).forEach(function (r) {
       var eventType = (r['Event Type'] || '').trim();
-      var sign = (eventType === 'Return') ? -1 : 1;
+      var isReturn = (eventType === 'Return');
+      var qtySign = isReturn ? -1 : 1;
       var igst = num(r['IGST Rate']), cgst = num(r['CGST Rate']), sgst = num(r['SGST Rate (or UTGST as applicable)']);
       var rate = igst > 0 ? igst : (cgst + sgst);
       var posCode = stateCodeFor(r["Customer's Delivery State"]) || stateCodeFor(r["Customer's Billing State"]);
       var warnings = [];
-      if (!posCode) warnings.push('Flipkart ' + (r['Order ID']||'') + ': unrecognised state "' + r["Customer's Delivery State"] + '"');
+      if (!posCode) warnings.push('Unrecognised state: ' + r["Customer's Delivery State"]);
       var bizGstin = (r['Business GST Number'] || '').trim();
       var isB2B = bizGstin && bizGstin.toUpperCase() !== 'NA';
       var totalTax = num(r['IGST Amount']) + num(r['CGST Amount']) + num(r['SGST Amount (Or UTGST as applicable)']);
@@ -550,64 +632,165 @@ var GSTR1 = (function () {
         invoiceNo: r['Buyer Invoice ID'], invoiceDate: r['Buyer Invoice Date'],
         buyerGstin: isB2B ? bizGstin : '', buyerName: isB2B ? r['Business Name'] : '',
         posStateCode: posCode, hsn: r['HSN Code'], description: r['Product Title/Description'],
-        qty: r['Item Quantity'], taxableValue: r['Taxable Value (Final Invoice Amount -Taxes)'],
+        qty: r['Item Quantity'], qtySign: qtySign, taxableValue: r['Taxable Value (Final Invoice Amount -Taxes)'],
         rate: rate, taxAmount: totalTax, invoiceValue: r['Buyer Invoice Amount'],
-        sign: sign, warnings: warnings
+        isReturn: isReturn, creditNoteNo: isReturn ? r['Buyer Invoice ID'] : '', creditNoteDate: isReturn ? r['Buyer Invoice Date'] : '',
+        warnings: warnings
       }));
     });
     return txns;
   }
 
+  // ---- MEESHO --------------------------------------------------------------
+  // Uses tcs_sales (positive) and tcs_sales_return (negative). Both already
+  // carry HSN, rate, taxable value, tax amount and place-of-supply state.
+  // Tax_invoice_details is used only to look up the invoice number per
+  // suborder for reference/traceability (not required for the totals).
   function normalizeMeesho(tcsSalesRows, tcsReturnRows, invoiceInfoRows) {
     var invoiceBySuborder = {};
     (invoiceInfoRows || []).forEach(function (r) {
       var sub = r['Suborder No.'];
       if (sub) invoiceBySuborder[sub] = { invNo: r['Invoice No.'], invDate: r['Order Date'] };
     });
-    function toTxns(rows, sign) {
+
+    function toTxns(rows, sign, isReturn) {
       return (rows || []).map(function (r) {
         var posCode = stateCodeFor(r['end_customer_state_new']);
         var warnings = [];
-        if (!posCode) warnings.push('Meesho ' + (r['sub_order_num']||'') + ': unrecognised state "' + r['end_customer_state_new'] + '"');
+        if (!posCode) warnings.push('Unrecognised state: ' + r['end_customer_state_new']);
         var inv = invoiceBySuborder[r['sub_order_num']] || {};
         return makeTxn({
-          source: 'meesho', docType: 'b2c',
+          source: 'meesho', docType: 'b2c', // Meesho does not collect buyer GSTIN
           invoiceNo: inv.invNo || r['sub_order_num'], invoiceDate: r['order_date'],
           posStateCode: posCode, hsn: r['hsn_code'],
-          qty: r['quantity'], taxableValue: r['total_taxable_sale_value'],
-          rate: r['gst_rate'], taxAmount: r['tax_amount'], invoiceValue: r['total_invoice_value'],
-          ecoGstin: r['eco_tcs_gstin'], sign: sign, warnings: warnings
+          qty: num(r['quantity']) * sign, qtySign: 1,
+          taxableValue: num(r['total_taxable_sale_value']) * sign,
+          rate: r['gst_rate'], taxAmount: num(r['tax_amount']) * sign,
+          invoiceValue: num(r['total_invoice_value']) * sign,
+          ecoGstin: r['eco_tcs_gstin'], isReturn: isReturn, warnings: warnings
         });
       });
     }
-    return toTxns(tcsSalesRows, 1).concat(toTxns(tcsReturnRows, -1));
+
+    return toTxns(tcsSalesRows, 1, false).concat(toTxns(tcsReturnRows, -1, true));
   }
 
-  function buildGSTR1(allTxns, sellerStateCode, b2clThreshold) {
+  // ---- GSTR-1 aggregation ----------------------------------------------------
+  // b2clThreshold: invoice value above which an inter-state B2C invoice must
+  // be reported invoice-wise (B2CL) instead of in the state/rate summary
+  // (B2CS). Defaults to Rs 1,00,000 (effective 1 Aug 2024).
+  // operatorInfo: { amazon: {gstin, name}, flipkart: {...}, meesho: {...} } -
+  // used for the ECO (Table 14) sheet when a transaction's own row doesn't
+  // already carry the e-commerce operator's GSTIN.
+  function buildGSTR1(allTxns, sellerStateCode, b2clThreshold, operatorInfo) {
     b2clThreshold = b2clThreshold || 100000;
-    var b2b = {}, b2cs = {}, hsn = {}, b2clCandidates = {};
+    operatorInfo = operatorInfo || {};
+    var b2b = {};      // key: gstin|invoiceNo|rate -> row (original sales only)
+    var cdnr = {};     // key: gstin|noteNumber|rate -> row (B2B credit notes)
+    var b2cs = {};      // key: posCode|rate    -> row
+    var hsnB2B = {}, hsnB2C = {}; // key: hsn|rate -> row
+    var exempt = {      // Table 8: nil-rated / exempt / non-GST, by supply category
+      interReg: 0, intraReg: 0, interUnreg: 0, intraUnreg: 0
+    };
+    var eco = {};       // key: operatorGstin -> row
+    var docSeries = {}; // key: source|nature|prefix -> {nos:[], dates:[]}
+    var b2clCandidates = {};
     var docSummary = { count: 0, taxable: 0, tax: 0 };
     var skipped = [];
+
+    function addHsn(dict, t) {
+      var hkey = t.hsn + '|' + t.rate;
+      if (!dict[hkey]) dict[hkey] = { hsn: t.hsn, description: t.description, uqc: 'PCS-PIECES', qty: 0, rate: t.rate, taxableValue: 0, igst: 0, cgst: 0, sgst: 0, totalValue: 0 };
+      dict[hkey].qty += t.qty;
+      dict[hkey].taxableValue += t.taxableValue;
+      dict[hkey].totalValue += t.invoiceValue;
+      var interState = t.posStateCode !== sellerStateCode;
+      if (interState) dict[hkey].igst += t.taxAmount;
+      else { dict[hkey].cgst += t.taxAmount / 2; dict[hkey].sgst += t.taxAmount / 2; }
+    }
+
+    function invoicePrefix(invNo) {
+      var m = String(invNo || '').match(/^(.*?)(\d+)$/);
+      return m ? m[1] : String(invNo || '');
+    }
 
     allTxns.forEach(function (t) {
       if (!t.posStateCode || !t.hsn || t.rate === undefined) { skipped.push(t); return; }
       docSummary.count += 1; docSummary.taxable += t.taxableValue; docSummary.tax += t.taxAmount;
 
-      var hkey = t.hsn + '|' + t.rate;
-      if (!hsn[hkey]) hsn[hkey] = { hsn: t.hsn, description: t.description, uqc: 'PCS-PIECES', qty: 0, rate: t.rate, taxableValue: 0, igst: 0, cgst: 0, sgst: 0, totalValue: 0 };
-      hsn[hkey].qty += t.qty; hsn[hkey].taxableValue += t.taxableValue; hsn[hkey].totalValue += t.invoiceValue;
       var interState = t.posStateCode !== sellerStateCode;
-      if (interState) hsn[hkey].igst += t.taxAmount; else { hsn[hkey].cgst += t.taxAmount / 2; hsn[hkey].sgst += t.taxAmount / 2; }
 
-      if (t.docType === 'b2b' && t.buyerGstin) {
-        var bkey = t.buyerGstin + '|' + t.invoiceNo + '|' + t.rate;
-        if (!b2b[bkey]) b2b[bkey] = { gstin: t.buyerGstin, receiverName: t.buyerName, invoiceNo: t.invoiceNo, invoiceDate: t.invoiceDate, invoiceValue: 0, posStateCode: t.posStateCode, reverseCharge: 'N', invoiceType: 'Regular', rate: t.rate, taxableValue: 0 };
-        b2b[bkey].taxableValue += t.taxableValue; b2b[bkey].invoiceValue += t.invoiceValue;
+      // HSN summary - Table 12 covers ALL outward supplies incl. nil-rated,
+      // split by B2B/B2C origin.
+      addHsn(t.docType === 'b2b' ? hsnB2B : hsnB2C, t);
+
+      // ECO (Table 14) - net value of supplies routed through each operator.
+      var opInfo = operatorInfo[t.source] || {};
+      var opGstin = t.ecoGstin || opInfo.gstin || '';
+      if (opGstin) {
+        if (!eco[opGstin]) eco[opGstin] = { gstin: opGstin, name: opInfo.name || t.source, netValue: 0, igst: 0, cgst: 0, sgst: 0 };
+        eco[opGstin].netValue += t.taxableValue;
+        if (interState) eco[opGstin].igst += t.taxAmount;
+        else { eco[opGstin].cgst += t.taxAmount / 2; eco[opGstin].sgst += t.taxAmount / 2; }
+      }
+
+      // Documents issued (Table 13) - best-effort grouping by invoice-number
+      // series. Flagged to the user as an estimate, not authoritative.
+      var nature = t.isReturn ? 'Credit Note' : 'Invoices for outward supply';
+      var seriesInvNo = t.isReturn ? (t.creditNoteNo || t.invoiceNo) : t.invoiceNo;
+      if (seriesInvNo) {
+        var dkey = t.source + '|' + nature + '|' + invoicePrefix(seriesInvNo);
+        if (!docSeries[dkey]) docSeries[dkey] = { source: t.source, nature: nature, nos: [] };
+        docSeries[dkey].nos.push(seriesInvNo);
+      }
+
+      // Table 8: nil-rated / exempt supplies are reported separately and
+      // excluded from B2B/B2CL/B2CS (which are for taxable supplies only).
+      if (t.rate === 0) {
+        var registered = t.docType === 'b2b' && !!t.buyerGstin;
+        if (interState && registered) exempt.interReg += t.taxableValue;
+        else if (!interState && registered) exempt.intraReg += t.taxableValue;
+        else if (interState && !registered) exempt.interUnreg += t.taxableValue;
+        else exempt.intraUnreg += t.taxableValue;
         return;
       }
 
+      if (t.docType === 'b2b' && t.buyerGstin) {
+        if (t.isReturn) {
+          // Report as a credit note against the buyer, not netted into the
+          // original invoice.
+          var noteNo = t.creditNoteNo || (t.invoiceNo + '-CN');
+          var ckey = t.buyerGstin + '|' + noteNo + '|' + t.rate;
+          if (!cdnr[ckey]) {
+            cdnr[ckey] = {
+              gstin: t.buyerGstin, receiverName: t.buyerName, noteNumber: noteNo,
+              noteDate: t.creditNoteDate || t.invoiceDate, noteType: 'Credit Note',
+              posStateCode: t.posStateCode, reverseCharge: 'N', noteSupplyType: 'Regular',
+              rate: t.rate, taxableValue: 0, noteValue: 0
+            };
+          }
+          cdnr[ckey].taxableValue += Math.abs(t.taxableValue);
+          cdnr[ckey].noteValue += Math.abs(t.invoiceValue);
+          return;
+        }
+        var bkey = t.buyerGstin + '|' + t.invoiceNo + '|' + t.rate;
+        if (!b2b[bkey]) {
+          b2b[bkey] = {
+            gstin: t.buyerGstin, receiverName: t.buyerName, invoiceNo: t.invoiceNo,
+            invoiceDate: t.invoiceDate, invoiceValue: 0, posStateCode: t.posStateCode,
+            reverseCharge: 'N', invoiceType: 'Regular',
+            rate: t.rate, taxableValue: 0
+          };
+        }
+        b2b[bkey].taxableValue += t.taxableValue;
+        b2b[bkey].invoiceValue += t.invoiceValue;
+        return;
+      }
+
+      // B2C: bucket into a per-invoice candidate list; interstate invoices
+      // over the threshold get pulled out into B2CL after the pass.
       var ikey = t.invoiceNo + '||' + t.source;
-      if (!b2clCandidates[ikey]) b2clCandidates[ikey] = { rows: [], posCode: t.posStateCode, invoiceValue: 0, invoiceDate: t.invoiceDate, ecoGstin: t.ecoGstin };
+      if (!b2clCandidates[ikey]) b2clCandidates[ikey] = { rows: [], posCode: t.posStateCode, invoiceValue: 0, invoiceDate: t.invoiceDate };
       b2clCandidates[ikey].rows.push(t);
       b2clCandidates[ikey].invoiceValue += t.invoiceValue;
     });
@@ -623,11 +806,27 @@ var GSTR1 = (function () {
         b2cl.push({ invoiceNo: c.rows[0].invoiceNo, invoiceDate: c.invoiceDate, invoiceValue: round2(c.invoiceValue), posStateCode: c.posCode, items: Object.keys(byRate).map(function (r) { return byRate[r]; }) });
       } else {
         c.rows.forEach(function (t) {
+          // Current GSTR-1 offline utility reports e-commerce B2C sales as
+          // normal B2C (Type "OE") - no separate "E" type/operator GSTIN
+          // needed on this table; that detail is captured via Table 14 (eco)
+          // and via GSTR-8 on the operator's side instead.
           var skey = t.posStateCode + '|' + t.rate;
           if (!b2cs[skey]) b2cs[skey] = { type: 'OE', posStateCode: t.posStateCode, rate: t.rate, taxableValue: 0 };
           b2cs[skey].taxableValue += t.taxableValue;
         });
       }
+    });
+
+    // Finalise documents-issued series into from/to ranges.
+    function numericSuffix(s) { var m = String(s).match(/(\d+)$/); return m ? parseInt(m[1], 10) : null; }
+    var docs = Object.keys(docSeries).map(function (k) {
+      var s = docSeries[k];
+      var sorted = s.nos.slice().sort(function (a, b) {
+        var na = numericSuffix(a), nb = numericSuffix(b);
+        if (na !== null && nb !== null && na !== nb) return na - nb;
+        return String(a).localeCompare(String(b));
+      });
+      return { source: s.source, nature: s.nature, from: sorted[0], to: sorted[sorted.length - 1], total: s.nos.length, cancelled: 0 };
     });
 
     function rr() {
@@ -637,18 +836,34 @@ var GSTR1 = (function () {
 
     return {
       b2b: Object.keys(b2b).map(function (k) { return b2b[k]; }).map(rr('taxableValue', 'invoiceValue')),
+      cdnr: Object.keys(cdnr).map(function (k) { return cdnr[k]; }).map(rr('taxableValue', 'noteValue')),
       b2cl: b2cl,
       b2cs: Object.keys(b2cs).map(function (k) { return b2cs[k]; }).map(rr('taxableValue')),
-      hsn: Object.keys(hsn).map(function (k) { return hsn[k]; }).map(rr('taxableValue', 'igst', 'cgst', 'sgst', 'totalValue')),
-      docSummary: docSummary, skipped: skipped, allTxns: allTxns
+      hsnB2B: Object.keys(hsnB2B).map(function (k) { return hsnB2B[k]; }).map(rr('taxableValue', 'igst', 'cgst', 'sgst', 'totalValue')),
+      hsnB2C: Object.keys(hsnB2C).map(function (k) { return hsnB2C[k]; }).map(rr('taxableValue', 'igst', 'cgst', 'sgst', 'totalValue')),
+      exempt: {
+        interReg: round2(exempt.interReg), intraReg: round2(exempt.intraReg),
+        interUnreg: round2(exempt.interUnreg), intraUnreg: round2(exempt.intraUnreg)
+      },
+      eco: Object.keys(eco).map(function (k) { return eco[k]; }).map(rr('netValue', 'igst', 'cgst', 'sgst')),
+      docs: docs,
+      docSummary: docSummary,
+      skipped: skipped
     };
   }
 
   return {
-    STATE_CODES: STATE_CODES, stateCodeFor: stateCodeFor, stateCodeFromGstin: stateCodeFromGstin,
-    stateNameFromCode: stateNameFromCode, detectSellerGstin: detectSellerGstin,
-    normalizeAmazon: normalizeAmazon, normalizeFlipkart: normalizeFlipkart, normalizeMeesho: normalizeMeesho,
-    buildGSTR1: buildGSTR1, round2: round2
+    STATE_CODES: STATE_CODES,
+    normStateName: normStateName,
+    stateCodeFor: stateCodeFor,
+    stateCodeFromGstin: stateCodeFromGstin,
+    stateNameFromCode: stateNameFromCode,
+    detectSellerGstin: detectSellerGstin,
+    normalizeAmazon: normalizeAmazon,
+    normalizeFlipkart: normalizeFlipkart,
+    normalizeMeesho: normalizeMeesho,
+    buildGSTR1: buildGSTR1,
+    round2: round2
   };
 })();
 
@@ -818,7 +1033,14 @@ dropzone.addEventListener('drop', function (e) { handleFiles(e.dataTransfer.file
    Generate + render results
    ========================================================================= */
 function fmtMoney(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function posLabel(code) { return code ? (code + '-' + GSTR1.stateNameFromCode(code)) : ''; }
+// Official GST portal convention writes state names with "&", e.g.
+// "35-Andaman & Nicobar Islands" - our internal canonical names use "and"
+// for reliable matching, so convert only for display/export.
+function posLabel(code) {
+  if (!code) return '';
+  var name = GSTR1.stateNameFromCode(code).replace(/ and /g, ' & ');
+  return code + '-' + name;
+}
 
 document.getElementById('generateBtn').addEventListener('click', function () {
   var sellerGstin = document.getElementById('gstin').value.trim();
@@ -828,16 +1050,29 @@ document.getElementById('generateBtn').addEventListener('click', function () {
 
   if (!sellerState) { alert('Please enter a valid 15-character GSTIN so the tool knows your home state.'); return; }
 
+  var operatorInfo = {
+    amazon: { gstin: document.getElementById('amazonEcoGstin').value.trim(), name: 'Amazon' },
+    flipkart: { gstin: document.getElementById('flipkartEcoGstin').value.trim(), name: 'Flipkart' },
+    meesho: { gstin: document.getElementById('meeshoEcoGstin').value.trim(), name: 'Meesho' }
+  };
+
   var allTxns = []
     .concat(GSTR1.normalizeAmazon(store.amazonB2B, store.amazonB2C))
     .concat(GSTR1.normalizeFlipkart(store.flipkart))
     .concat(GSTR1.normalizeMeesho(store.meeshoSales, store.meeshoReturns, store.meeshoInvoiceInfo));
 
-  var result = GSTR1.buildGSTR1(allTxns, sellerState, threshold);
-  result.hsn.forEach(function (h) { h.uqc = uqc; });
+  var result = GSTR1.buildGSTR1(allTxns, sellerState, threshold, operatorInfo);
+  result.hsnB2B.forEach(function (h) { h.uqc = uqc; });
+  result.hsnB2C.forEach(function (h) { h.uqc = uqc; });
+  result.allTxns = allTxns;
   lastResult = result;
   lastResult.sellerGstin = sellerGstin;
   lastResult.sellerState = sellerState;
+
+  // Auto-fill Meesho's operator GSTIN box from the data itself, if we found one
+  var meeshoDetected = allTxns.find(function (t) { return t.source === 'meesho' && t.ecoGstin; });
+  var meeshoBox = document.getElementById('meeshoEcoGstin');
+  if (meeshoDetected && !meeshoBox.dataset.userEdited) meeshoBox.value = meeshoDetected.ecoGstin;
 
   renderResults(result);
   document.getElementById('results').classList.add('show');
@@ -846,17 +1081,22 @@ document.getElementById('generateBtn').addEventListener('click', function () {
 });
 
 function renderResults(r) {
+  var hsnAll = r.hsnB2B.length + r.hsnB2C.length;
+  var exemptTotal = r.exempt.interReg + r.exempt.intraReg + r.exempt.interUnreg + r.exempt.intraUnreg;
   var cards = [
-    ['Net taxable value', fmtMoney(r.docSummary.taxable)],
+    ['Net taxable value (rated)', fmtMoney(r.docSummary.taxable - exemptTotal)],
+    ['Nil-rated / exempt', fmtMoney(exemptTotal)],
     ['Net tax', fmtMoney(r.docSummary.tax)],
     ['Transaction lines', r.docSummary.count.toLocaleString('en-IN')],
     ['B2B invoices', r.b2b.length],
+    ['CDNR notes', r.cdnr.length],
     ['B2CL invoices', r.b2cl.length],
     ['B2CS rows', r.b2cs.length],
-    ['HSN lines', r.hsn.length]
+    ['HSN lines', hsnAll],
+    ['ECO operators', r.eco.length]
   ];
   document.getElementById('summaryCards').innerHTML = cards.map(function (c) {
-    return '<div class="card"><div class="label">' + c[0] + '</div><div class="value">' + c[1] + '</div></div>';
+    return '<div class="s-card"><div class="label">' + c[0] + '</div><div class="value">' + c[1] + '</div></div>';
   }).join('');
 
   var warnBox = document.getElementById('warnBox');
@@ -878,6 +1118,13 @@ function renderResults(r) {
     [5, 6, 7]
   );
 
+  document.getElementById('cdnrCount').textContent = r.cdnr.length + ' note(s)';
+  document.getElementById('cdnrTable').innerHTML = tableHTML(
+    ['GSTIN', 'Receiver', 'Note No.', 'Note Date', 'Note Type', 'Place of Supply', 'Rate', 'Taxable Value', 'Note Value'],
+    r.cdnr.slice(0, 25).map(function (x) { return [x.gstin, x.receiverName, x.noteNumber, x.noteDate, x.noteType, posLabel(x.posStateCode), x.rate + '%', fmtMoney(x.taxableValue), fmtMoney(x.noteValue)]; }),
+    [6, 7, 8]
+  );
+
   document.getElementById('b2clCount').textContent = r.b2cl.length + ' invoice(s)';
   var b2clRows = [];
   r.b2cl.forEach(function (inv) { inv.items.forEach(function (it) { b2clRows.push([inv.invoiceNo, inv.invoiceDate, posLabel(inv.posStateCode), it.rate + '%', fmtMoney(it.taxableValue), fmtMoney(inv.invoiceValue)]); }); });
@@ -890,11 +1137,43 @@ function renderResults(r) {
     [2, 3]
   );
 
-  document.getElementById('hsnCount').textContent = r.hsn.length + ' row(s)';
-  document.getElementById('hsnTable').innerHTML = tableHTML(
+  document.getElementById('exemptTable').innerHTML = tableHTML(
+    ['Description', 'Nil Rated Supplies'],
+    [
+      ['Inter-State supplies to registered persons', fmtMoney(r.exempt.interReg)],
+      ['Intra-State supplies to registered persons', fmtMoney(r.exempt.intraReg)],
+      ['Inter-State supplies to unregistered persons', fmtMoney(r.exempt.interUnreg)],
+      ['Intra-State supplies to unregistered persons', fmtMoney(r.exempt.intraUnreg)]
+    ],
+    [1]
+  );
+
+  document.getElementById('hsnb2bCount').textContent = r.hsnB2B.length + ' row(s)';
+  document.getElementById('hsnb2bTable').innerHTML = tableHTML(
     ['HSN', 'UQC', 'Qty', 'Rate', 'Taxable Value', 'IGST', 'CGST', 'SGST'],
-    r.hsn.map(function (x) { return [x.hsn, x.uqc, x.qty, x.rate + '%', fmtMoney(x.taxableValue), fmtMoney(x.igst), fmtMoney(x.cgst), fmtMoney(x.sgst)]; }),
+    r.hsnB2B.map(function (x) { return [x.hsn, x.uqc, x.qty, x.rate + '%', fmtMoney(x.taxableValue), fmtMoney(x.igst), fmtMoney(x.cgst), fmtMoney(x.sgst)]; }),
     [2, 3, 4, 5, 6, 7]
+  );
+
+  document.getElementById('hsnb2cCount').textContent = r.hsnB2C.length + ' row(s)';
+  document.getElementById('hsnb2cTable').innerHTML = tableHTML(
+    ['HSN', 'UQC', 'Qty', 'Rate', 'Taxable Value', 'IGST', 'CGST', 'SGST'],
+    r.hsnB2C.map(function (x) { return [x.hsn, x.uqc, x.qty, x.rate + '%', fmtMoney(x.taxableValue), fmtMoney(x.igst), fmtMoney(x.cgst), fmtMoney(x.sgst)]; }),
+    [2, 3, 4, 5, 6, 7]
+  );
+
+  document.getElementById('ecoCount').textContent = r.eco.length + ' operator(s)';
+  document.getElementById('ecoTable').innerHTML = tableHTML(
+    ['Operator GSTIN', 'Name', 'Net Value of Supplies', 'IGST', 'CGST', 'SGST'],
+    r.eco.map(function (x) { return [x.gstin, x.name, fmtMoney(x.netValue), fmtMoney(x.igst), fmtMoney(x.cgst), fmtMoney(x.sgst)]; }),
+    [2, 3, 4, 5]
+  );
+
+  document.getElementById('docsCount').textContent = r.docs.length + ' series (best-effort)';
+  document.getElementById('docsTable').innerHTML = tableHTML(
+    ['Source', 'Nature', 'From', 'To', 'Total'],
+    r.docs.slice(0, 30).map(function (x) { return [x.source, x.nature, x.from, x.to, x.total]; }),
+    [4]
   );
 }
 
@@ -907,28 +1186,40 @@ function tableHTML(headers, rows, numericCols) {
       return '<td' + cls + '>' + cell + '</td>';
     }).join('') + '</tr>';
   }).join('') + '</tbody>';
-  if (!rows.length) tbody = '<tbody><tr><td colspan="' + headers.length + '" style="color:var(--ink-soft);">No rows in this table.</td></tr></tbody>';
+  if (!rows.length) tbody = '<tbody><tr><td colspan="' + headers.length + '" style="color:var(--muted);">No rows in this table.</td></tr></tbody>';
   return thead + tbody;
 }
 
 /* =========================================================================
-   Excel export
+   Excel export - matches the official GSTR-1 offline-tool sheet layout:
+   a 3-row summary block, then a header row, then data.
    ========================================================================= */
+function summarySheet(titleRow, statsRow, subtotalRow, header, dataRows) {
+  var aoa = [titleRow, statsRow, subtotalRow, header].concat(dataRows);
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
 document.getElementById('downloadBtn').addEventListener('click', function () {
   if (!lastResult) return;
   var r = lastResult;
   var wb = XLSX.utils.book_new();
+  var sum = function (arr, f) { return round2(arr.reduce(function (s, x) { return s + (x[f] || 0); }, 0)); };
+  function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
 
   var readme = [
     ['GSTR-1 ready file — generated by Visutra GST Tool'],
     ['Seller GSTIN', r.sellerGstin],
     ['Generated on', new Date().toLocaleString('en-IN')],
     [],
-    ['Sheets in this workbook:'],
-    ['b2b', 'Invoice-wise supplies to registered buyers (Table 4)'],
+    ['Sheets in this workbook match the GST portal\'s Returns Offline Tool template:'],
+    ['b2b,sez,de', 'Invoice-wise supplies to registered buyers (Table 4A/4B/6B/6C)'],
+    ['cdnr', 'Credit/debit notes issued to registered buyers (Table 9B)'],
     ['b2cl', 'Invoice-wise inter-state supplies to consumers above the B2CL threshold (Table 5)'],
-    ['b2cs', 'State and rate-wise summary of all other consumer supplies (Table 7)'],
-    ['hsn', 'HSN/rate-wise summary of outward supplies (Table 12)'],
+    ['b2cs', 'State and rate-wise summary of other consumer supplies (Table 7)'],
+    ['hsn(b2b) / hsn(b2c)', 'HSN/rate-wise summary of outward supplies (Table 12), split by origin'],
+    ['exemp', 'Nil-rated / exempt / non-GST supplies (Table 8)'],
+    ['eco', 'Supplies through e-commerce operators liable for TCS (Table 14)'],
+    ['docs', 'Best-effort summary of document number series issued (Table 13) — please verify against your own invoice records, since cancelled/skipped numbers can\'t be inferred from sales reports alone'],
     ['source data', 'Every individual transaction line used to build the sheets above, for your own audit trail'],
     [],
     ['How to use this file:'],
@@ -937,35 +1228,241 @@ document.getElementById('downloadBtn').addEventListener('click', function () {
     ['3. Import the completed template into the Offline Tool and generate the JSON.'],
     ['4. Upload the JSON on the GST portal and reconcile the auto-populated totals against this file and your books before filing.'],
     [],
-    ['This file is a calculation aid, not a filed return. Verify totals, GST rates and thresholds before relying on it.']
+    ['This file is a calculation aid, not a filed return. Verify totals, GST rates, thresholds and the "docs" sheet before relying on it.']
   ];
-  var wsReadme = XLSX.utils.aoa_to_sheet(readme);
-  XLSX.utils.book_append_sheet(wb, wsReadme, 'Read Me');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(readme), 'Read Me');
 
-  var b2bHeader = ['GSTIN/UIN of Recipient', 'Receiver Name', 'Invoice Number', 'Invoice date', 'Invoice Value', 'Place Of Supply', 'Reverse Charge', 'Applicable % of Tax Rate', 'Invoice Type', 'Rate', 'Taxable Value', 'Cess Amount'];
-  var b2bRows = r.b2b.map(function (x) { return [x.gstin, x.receiverName, x.invoiceNo, x.invoiceDate, x.invoiceValue, posLabel(x.posStateCode), x.reverseCharge, '', x.invoiceType, x.rate, x.taxableValue, 0]; });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2bHeader].concat(b2bRows)), 'b2b');
+  // b2b,sez,de
+  var b2bInvoices = {}; r.b2b.forEach(function (x) { b2bInvoices[x.gstin + '|' + x.invoiceNo] = 1; });
+  var b2bHeader = ['GSTIN/UIN of Recipient', 'Receiver Name', 'Invoice Number', 'Invoice date', 'Invoice Value', 'Place Of Supply', 'Reverse Charge', 'Applicable % of Tax Rate', 'Invoice Type', 'E-Commerce GSTIN', 'Rate', 'Taxable Value', 'Cess Amount'];
+  var b2bRows = r.b2b.map(function (x) { return [x.gstin, x.receiverName, x.invoiceNo, x.invoiceDate, x.invoiceValue, posLabel(x.posStateCode), x.reverseCharge, '', x.invoiceType, '', x.rate, x.taxableValue, 0]; });
+  XLSX.utils.book_append_sheet(wb, summarySheet(
+    ['Summary For B2B, SEZ, DE (4A, 4B, 6B, 6C)'],
+    ['No. of Recipients', '', 'No. of Invoices', '', 'Total Invoice Value', '', '', '', '', '', '', 'Total Taxable Value', 'Total Cess'],
+    [Object.keys(b2bInvoices).length, '', b2bInvoices ? Object.keys(b2bInvoices).length : 0, '', sum(r.b2b, 'invoiceValue'), '', '', '', '', '', '', sum(r.b2b, 'taxableValue'), 0],
+    b2bHeader, b2bRows
+  ), 'b2b,sez,de');
 
-  var b2clHeader = ['Invoice Number', 'Invoice date', 'Invoice Value', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount'];
+  // cdnr
+  var cdnrRecipients = {}; r.cdnr.forEach(function (x) { cdnrRecipients[x.gstin] = 1; });
+  var cdnrHeader = ['GSTIN/UIN of Recipient', 'Receiver Name', 'Note Number', 'Note Date', 'Note Type', 'Place Of Supply', 'Reverse Charge', 'Note Supply Type', 'Note Value', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount'];
+  var cdnrRows = r.cdnr.map(function (x) { return [x.gstin, x.receiverName, x.noteNumber, x.noteDate, x.noteType, posLabel(x.posStateCode), x.reverseCharge, x.noteSupplyType, x.noteValue, '', x.rate, x.taxableValue, 0]; });
+  XLSX.utils.book_append_sheet(wb, summarySheet(
+    ['Summary For CDNR(9B)'],
+    ['No. of Recipients', '', 'No. of Notes', '', '', '', '', '', 'Total Note Value', '', '', 'Total Taxable Value', 'Total Cess'],
+    [Object.keys(cdnrRecipients).length, '', r.cdnr.length, '', '', '', '', '', sum(r.cdnr, 'noteValue'), '', '', sum(r.cdnr, 'taxableValue'), 0],
+    cdnrHeader, cdnrRows
+  ), 'cdnr');
+
+  // b2cl
+  var b2clHeader = ['Invoice Number', 'Invoice date', 'Invoice Value', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount', 'E-Commerce GSTIN'];
   var b2clRows = [];
-  r.b2cl.forEach(function (inv) { inv.items.forEach(function (it) { b2clRows.push([inv.invoiceNo, inv.invoiceDate, inv.invoiceValue, posLabel(inv.posStateCode), '', it.rate, it.taxableValue, 0]); }); });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2clHeader].concat(b2clRows)), 'b2cl');
+  r.b2cl.forEach(function (inv) { inv.items.forEach(function (it) { b2clRows.push([inv.invoiceNo, inv.invoiceDate, inv.invoiceValue, posLabel(inv.posStateCode), '', it.rate, it.taxableValue, 0, '']); }); });
+  var b2clTaxable = round2(b2clRows.reduce(function (s, row) { return s + row[6]; }, 0));
+  XLSX.utils.book_append_sheet(wb, summarySheet(
+    ['Summary For B2CL(5)'],
+    ['No. of Invoices', '', '', '', '', '', '', '', ''],
+    [r.b2cl.length, '', 0, '', '', '', b2clTaxable, '', ''],
+    b2clHeader, b2clRows
+  ), 'b2cl');
 
-  var b2csHeader = ['Type', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount'];
-  var b2csRows = r.b2cs.map(function (x) { return [x.type, posLabel(x.posStateCode), '', x.rate, x.taxableValue, 0]; });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2csHeader].concat(b2csRows)), 'b2cs');
+  // b2cs
+  var b2csHeader = ['Type', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount', 'E-Commerce GSTIN'];
+  var b2csRows = r.b2cs.map(function (x) { return [x.type, posLabel(x.posStateCode), '', x.rate, x.taxableValue, 0, '']; });
+  XLSX.utils.book_append_sheet(wb, summarySheet(
+    ['Summary For B2CS(7)'],
+    ['', '', '', '', 'Total Taxable Value', 'Total Cess', ''],
+    ['', '', '', '', sum(r.b2cs, 'taxableValue'), 0, ''],
+    b2csHeader, b2csRows
+  ), 'b2cs');
 
+  // hsn(b2b), hsn(b2c)
   var hsnHeader = ['HSN', 'Description', 'UQC', 'Total Quantity', 'Total Value', 'Rate', 'Taxable Value', 'Integrated Tax Amount', 'Central Tax Amount', 'State/UT Tax Amount', 'Cess Amount'];
-  var hsnRows = r.hsn.map(function (x) { return [x.hsn, x.description, x.uqc, x.qty, x.totalValue, x.rate, x.taxableValue, x.igst, x.cgst, x.sgst, 0]; });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hsnHeader].concat(hsnRows)), 'hsn');
+  function hsnSheet(list) {
+    var rows = list.map(function (x) { return [x.hsn, x.description, x.uqc, x.qty, x.totalValue, x.rate, x.taxableValue, x.igst, x.cgst, x.sgst, 0]; });
+    return summarySheet(
+      ['Summary For HSN(12)'],
+      ['No. of HSN', '', '', '', 'Total Value', '', 'Total Taxable Value', 'Total Integrated Tax', 'Total Central Tax', 'Total State/UT Tax', 'Total Cess'],
+      [list.length, '', '', '', sum(list, 'totalValue'), '', sum(list, 'taxableValue'), sum(list, 'igst'), sum(list, 'cgst'), sum(list, 'sgst'), 0],
+      hsnHeader, rows
+    );
+  }
+  XLSX.utils.book_append_sheet(wb, hsnSheet(r.hsnB2B), 'hsn(b2b)');
+  XLSX.utils.book_append_sheet(wb, hsnSheet(r.hsnB2C), 'hsn(b2c)');
 
-  var srcHeader = ['Source', 'Doc Type', 'Invoice No.', 'Invoice Date', 'Place of Supply', 'HSN', 'Qty', 'Rate', 'Taxable Value', 'Tax Amount', 'Invoice Value', 'Warnings'];
-  var srcRows = r.allTxns.map(function (t) { return [t.source, t.docType, t.invoiceNo, t.invoiceDate, posLabel(t.posStateCode), t.hsn, t.qty, t.rate, t.taxableValue, t.taxAmount, t.invoiceValue, (t.warnings || []).join('; ')]; });
+  // exemp
+  var exempHeader = ['Description', 'Nil Rated Supplies', 'Exempted(other than nil rated/non GST supply)', 'Non-GST Supplies'];
+  var exempRows = [
+    ['Inter-State supplies to registered persons', r.exempt.interReg, 0, 0],
+    ['Intra-State supplies to registered persons', r.exempt.intraReg, 0, 0],
+    ['Inter-State supplies to unregistered persons', r.exempt.interUnreg, 0, 0],
+    ['Intra-State supplies to unregistered persons', r.exempt.intraUnreg, 0, 0]
+  ];
+  var exemptTotal = r.exempt.interReg + r.exempt.intraReg + r.exempt.interUnreg + r.exempt.intraUnreg;
+  XLSX.utils.book_append_sheet(wb, summarySheet(
+    ['Summary For Nil rated, exempted and non GST outward supplies (8)'],
+    ['', 'Total Nil Rated Supplies', 'Total Exempted Supplies', 'Total Non-GST Supplies'],
+    ['', round2(exemptTotal), 0, 0],
+    exempHeader, exempRows
+  ), 'exemp');
+
+  // eco
+  var ecoHeader = ['Nature of Supply', 'GSTIN of E-Commerce Operator', 'E-Commerce Operator Name', 'Net value of supplies', 'Integrated tax', 'Central tax', 'State/UT tax', 'Cess'];
+  var ecoRows = r.eco.map(function (x) { return ['Liable to collect tax u/s 52(TCS)', x.gstin, x.name, x.netValue, x.igst, x.cgst, x.sgst, 0]; });
+  XLSX.utils.book_append_sheet(wb, summarySheet(
+    ['Summary For Supplies through ECO-14'],
+    ['', 'No. of E-Commerce Operator', '', 'Total Net Value of Supplies', 'Total Integrated Tax', 'Total Central Tax ', 'Total State/UT Tax ', 'Total Cess'],
+    ['', r.eco.length, '', sum(r.eco, 'netValue'), sum(r.eco, 'igst'), sum(r.eco, 'cgst'), sum(r.eco, 'sgst'), 0],
+    ecoHeader, ecoRows
+  ), 'eco');
+
+  // docs (best-effort)
+  var docsHeader = ['Nature of Document', 'Sr. No. From', 'Sr. No. To', 'Total Number', 'Cancelled'];
+  var docsRows = r.docs.map(function (x) { return [x.nature, x.from, x.to, x.total, x.cancelled]; });
+  var docsTotal = r.docs.reduce(function (s, x) { return s + x.total; }, 0);
+  XLSX.utils.book_append_sheet(wb, summarySheet(
+    ['Summary of documents issued during the tax period (13) — best-effort, verify before filing'],
+    ['', '', '', 'Total Number', 'Total Cancelled'],
+    ['', '', '', docsTotal, 0],
+    docsHeader, docsRows
+  ), 'docs');
+
+  // source data (audit trail)
+  var srcHeader = ['Source', 'Doc Type', 'Invoice No.', 'Invoice Date', 'Place of Supply', 'HSN', 'Qty', 'Rate', 'Taxable Value', 'Tax Amount', 'Invoice Value', 'Is Return', 'Warnings'];
+  var srcRows = r.allTxns.map(function (t) { return [t.source, t.docType, t.invoiceNo, t.invoiceDate, posLabel(t.posStateCode), t.hsn, t.qty, t.rate, t.taxableValue, t.taxAmount, t.invoiceValue, t.isReturn ? 'Y' : '', (t.warnings || []).join('; ')]; });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([srcHeader].concat(srcRows)), 'source data');
 
   var period = document.getElementById('period').value.trim().replace(/[^\w-]+/g, '_') || 'period';
   var fname = 'GSTR1_' + (r.sellerGstin || 'seller') + '_' + period + '.xlsx';
   XLSX.writeFile(wb, fname);
+});
+
+/* =========================================================================
+   JSON export - best-effort GSTR-1 upload-schema JSON.
+   Field names (ctin, inum, idt, val, pos, itms, txval, rt, iamt/camt/samt,
+   csamt, doc_issue.doc_det, nil.inv.sply_ty, hsn.data) are reconstructed
+   from real accepted GSTN API payloads and the offline-tool's published
+   behaviour, NOT from an official schema file (GSTN doesn't publish one
+   publicly) - so treat this as a strong best-effort, not a guarantee. The
+   Excel download above matches the actual offline-tool template exactly and
+   is converted to JSON by GSTN's own certified tool, which is the safer
+   path if this JSON is rejected or looks wrong on upload.
+   ========================================================================= */
+function toDDMMYYYY(raw) {
+  if (!raw) return '';
+  var s = String(raw).trim();
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); // YYYY-MM-DD...
+  if (m) return m[3] + '-' + m[2] + '-' + m[1];
+  m = s.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})/); // DD-MM-YYYY or DD/MM/YYYY already
+  if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  return s;
+}
+function jn(n) { return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100; }
+
+function buildGstr1Json(r, fp) {
+  var out = { gstin: r.sellerGstin, fp: fp, b2b: [], b2cl: [], b2cs: [], cdnr: [], hsn: { data: [] }, nil: { inv: [] }, doc_issue: { doc_det: [] } };
+
+  // b2b - grouped by buyer GSTIN, then invoice, then rate-wise items
+  var byCtin = {};
+  r.b2b.forEach(function (x) {
+    if (!byCtin[x.gstin]) byCtin[x.gstin] = {};
+    if (!byCtin[x.gstin][x.invoiceNo]) byCtin[x.gstin][x.invoiceNo] = { inum: x.invoiceNo, idt: toDDMMYYYY(x.invoiceDate), val: jn(x.invoiceValue), pos: x.posStateCode, rchrg: 'N', inv_typ: 'R', itms: [] };
+    var inter = x.posStateCode !== r.sellerState;
+    var itmDet = { rt: x.rate, txval: jn(x.taxableValue), csamt: 0 };
+    if (inter) itmDet.iamt = jn(x.taxableValue * x.rate / 100);
+    else { itmDet.camt = jn(x.taxableValue * x.rate / 200); itmDet.samt = jn(x.taxableValue * x.rate / 200); }
+    byCtin[x.gstin][x.invoiceNo].itms.push({ num: byCtin[x.gstin][x.invoiceNo].itms.length + 1, itm_det: itmDet });
+  });
+  Object.keys(byCtin).forEach(function (ctin) {
+    out.b2b.push({ ctin: ctin, inv: Object.keys(byCtin[ctin]).map(function (k) { return byCtin[ctin][k]; }) });
+  });
+
+  // cdnr - grouped by buyer GSTIN, note type 'C' (credit note)
+  var cdnrByCtin = {};
+  r.cdnr.forEach(function (x) {
+    if (!cdnrByCtin[x.gstin]) cdnrByCtin[x.gstin] = {};
+    if (!cdnrByCtin[x.gstin][x.noteNumber]) cdnrByCtin[x.gstin][x.noteNumber] = { ntty: 'C', nt_num: x.noteNumber, nt_dt: toDDMMYYYY(x.noteDate), val: jn(x.noteValue), pos: x.posStateCode, rchrg: 'N', inv_typ: 'R', itms: [] };
+    var inter = x.posStateCode !== r.sellerState;
+    var itmDet = { rt: x.rate, txval: jn(x.taxableValue), csamt: 0 };
+    if (inter) itmDet.iamt = jn(x.taxableValue * x.rate / 100);
+    else { itmDet.camt = jn(x.taxableValue * x.rate / 200); itmDet.samt = jn(x.taxableValue * x.rate / 200); }
+    cdnrByCtin[x.gstin][x.noteNumber].itms.push({ num: cdnrByCtin[x.gstin][x.noteNumber].itms.length + 1, itm_det: itmDet });
+  });
+  Object.keys(cdnrByCtin).forEach(function (ctin) {
+    out.cdnr.push({ ctin: ctin, nt: Object.keys(cdnrByCtin[ctin]).map(function (k) { return cdnrByCtin[ctin][k]; }) });
+  });
+
+  // b2cl - grouped by place of supply, each invoice with rate-wise items (IGST only, since B2CL is always inter-state)
+  var byPos = {};
+  r.b2cl.forEach(function (inv) {
+    if (!byPos[inv.posStateCode]) byPos[inv.posStateCode] = [];
+    byPos[inv.posStateCode].push({
+      inum: inv.invoiceNo, idt: toDDMMYYYY(inv.invoiceDate), val: jn(inv.invoiceValue),
+      itms: inv.items.map(function (it, i) { return { num: i + 1, itm_det: { rt: it.rate, txval: jn(it.taxableValue), iamt: jn(it.taxableValue * it.rate / 100) } }; })
+    });
+  });
+  Object.keys(byPos).forEach(function (pos) { out.b2cl.push({ pos: pos, inv: byPos[pos] }); });
+
+  // b2cs - flat, state+rate summary
+  r.b2cs.forEach(function (x) {
+    var inter = x.posStateCode !== r.sellerState;
+    var row = { sply_ty: inter ? 'INTER' : 'INTRA', rt: x.rate, typ: x.type, pos: x.posStateCode, txval: jn(x.taxableValue), csamt: 0 };
+    if (inter) row.iamt = jn(x.taxableValue * x.rate / 100);
+    else { row.camt = jn(x.taxableValue * x.rate / 200); row.samt = jn(x.taxableValue * x.rate / 200); }
+    out.b2cs.push(row);
+  });
+
+  // hsn - government schema is a single unified table (not split b2b/b2c)
+  var hsnMerged = {};
+  r.hsnB2B.concat(r.hsnB2C).forEach(function (x) {
+    var k = x.hsn + '|' + x.rate;
+    if (!hsnMerged[k]) hsnMerged[k] = { hsn_sc: x.hsn, desc: x.description || '', uqc: x.uqc, qty: 0, val: 0, rt: x.rate, txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 };
+    hsnMerged[k].qty += x.qty; hsnMerged[k].val += x.totalValue; hsnMerged[k].txval += x.taxableValue;
+    hsnMerged[k].iamt += x.igst; hsnMerged[k].camt += x.cgst; hsnMerged[k].samt += x.sgst;
+  });
+  out.hsn.data = Object.keys(hsnMerged).map(function (k, i) {
+    var h = hsnMerged[k];
+    // GST portal rejects negative HSN quantities even where net taxable
+    // value/tax legitimately go negative from returns - clamp qty only.
+    return { num: i + 1, hsn_sc: h.hsn_sc, desc: h.desc, uqc: h.uqc, qty: jn(Math.max(0, h.qty)), val: jn(h.val), rt: h.rt, txval: jn(h.txval), iamt: jn(h.iamt), camt: jn(h.camt), samt: jn(h.samt), csamt: 0 };
+  });
+
+  // nil-rated / exempt (Table 8) - four fixed categories
+  var nilMap = [
+    ['INTERB2B', r.exempt.interReg], ['INTRAB2B', r.exempt.intraReg],
+    ['INTERB2C', r.exempt.interUnreg], ['INTRAB2C', r.exempt.intraUnreg]
+  ];
+  nilMap.forEach(function (pair) {
+    out.nil.inv.push({ sply_ty: pair[0], nil_amt: jn(pair[1]), expt_amt: 0, ngsup_amt: 0 });
+  });
+
+  // documents issued (Table 13) - doc_num 1 = Invoices for outward supply, 5 = Credit Note
+  var docNumMap = { 'Invoices for outward supply': 1, 'Credit Note': 5 };
+  var docsByNature = {};
+  r.docs.forEach(function (d) {
+    var dn = docNumMap[d.nature] || 1;
+    if (!docsByNature[dn]) docsByNature[dn] = [];
+    docsByNature[dn].push({ num: docsByNature[dn].length + 1, from: String(d.from), to: String(d.to), totnum: d.total, cancel: d.cancelled, net_issue: d.total - d.cancelled });
+  });
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].forEach(function (dn) {
+    out.doc_issue.doc_det.push({ doc_num: dn, docs: docsByNature[dn] || [] });
+  });
+
+  return out;
+}
+
+document.getElementById('downloadJsonBtn').addEventListener('click', function () {
+  if (!lastResult) return;
+  var fp = document.getElementById('fpInput').value.trim();
+  if (!/^\d{6}$/.test(fp)) { alert('Enter the filing period as MMYYYY (e.g. 062026 for a quarter ending June 2026) before downloading the JSON.'); return; }
+  var json = buildGstr1Json(lastResult, fp);
+  var blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'GSTR1_' + (lastResult.sellerGstin || 'seller') + '_' + fp + '.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 });
 
 </script>
