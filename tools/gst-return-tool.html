@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GST Return Ready File Generator — Amazon, Flipkart & Meesho | Visutra</title>
+<meta name="description" content="Free tool to convert your Amazon, Flipkart and Meesho sales reports into a GSTR-1 ready Excel file — B2B, B2CL, B2CS and HSN summary tables, generated entirely in your browser.">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --navy:#1e2a3a;
+    --navy-deep:#141d29;
+    --primary:#1a56db;
+    --primary-deep:#153fac;
+    --success:#12854f;
+    --success-bg:#e7f8f0;
+    --muted:#64748b;
+    --faint:#94a0b3;
+    --bg-soft:#f8f9fb;
+    --bg-panel:#eef1f6;
+    --line:#e7eaf0;
+    --warn-bg:#fff7ed;
+    --warn-line:#fed7aa;
+    --warn-text:#9a3412;
+  }
+  body{font-family:'Inter',system-ui,sans-serif;color:var(--navy);background:#fff;}
+  .navbar-brand-mark{width:34px;height:34px;border-radius:8px;background:var(--primary);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;}
+  .site-navbar{background:var(--navy);}
+  .site-navbar .navbar-brand{color:#fff;font-weight:700;display:flex;align-items:center;gap:10px;}
+  .site-navbar .nav-link{color:#c7d0dc;}
+  .site-navbar .nav-link:hover{color:#fff;}
+
+  /* ---- HERO ---- */
+  .hero{
+    background:var(--navy);
+    background-image:
+      radial-gradient(circle at 15% 20%, rgba(255,255,255,.05), transparent 40%),
+      radial-gradient(circle at 85% 0%, rgba(26,86,219,.25), transparent 45%);
+    position:relative;
+    overflow:hidden;
+    padding:76px 0 120px;
+  }
+  .hero h1{font-size:clamp(30px,4vw,44px);font-weight:700;color:#fff;line-height:1.18;}
+  .hero h1 .accent{color:#ffb547;}
+  .hero p.lead{color:#c7d0dc;font-size:17.5px;max-width:46ch;}
+  .list-checked{list-style:none;padding:0;margin:0 0 28px;}
+  .list-checked li{color:#fff;font-size:14.5px;padding-left:26px;position:relative;margin-bottom:8px;}
+  .list-checked li::before{
+    content:"\f26a"; font-family:"bootstrap-icons"; position:absolute;left:0;top:1px;
+    color:#3fd08a; font-size:14px;
+  }
+  .hero-cta .btn-warm{background:#ffb547;border:none;color:#1e2a3a;font-weight:600;}
+  .hero-cta .btn-warm:hover{background:#f2a233;color:#1e2a3a;}
+  .hero-cta .btn-outline-light:hover{color:var(--navy);}
+
+  .browser-mock{
+    background:#fff;border-radius:10px;box-shadow:0 30px 60px -20px rgba(0,0,0,.5);overflow:hidden;
+  }
+  .browser-mock .bar{
+    background:#eef1f6;padding:9px 12px;display:flex;gap:6px;align-items:center;border-bottom:1px solid var(--line);
+  }
+  .browser-mock .bar span{width:9px;height:9px;border-radius:50%;background:#d7dde6;display:inline-block;}
+  .browser-mock .bar .url{
+    margin-left:10px;background:#fff;border:1px solid var(--line);border-radius:5px;
+    font-size:11px;color:var(--muted);padding:3px 10px;flex:1;
+  }
+  .browser-mock .screen{padding:22px;}
+  .mock-card{border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:10px;}
+  .mock-card .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);}
+  .mock-card .v{font-size:18px;font-weight:700;color:var(--navy);margin-top:2px;}
+  .mock-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+
+  .float-card{
+    position:absolute;right:-10px;bottom:-28px;max-width:230px;background:var(--success);
+    border-radius:10px;padding:16px 18px;box-shadow:0 20px 40px -14px rgba(0,0,0,.5);
+  }
+  .float-card p{color:#fff;font-size:13px;margin:0 0 10px;}
+  .float-card .who{display:flex;align-items:center;gap:8px;}
+  .float-card .who .dot{width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;}
+  .float-card .who small{color:#d7f2e3;display:block;font-size:11px;}
+  .float-card .who strong{color:#fff;font-size:12.5px;}
+
+  .hero-wave{position:absolute;left:0;right:0;bottom:-2px;line-height:0;}
+
+  /* ---- FEATURE CARD GRID ---- */
+  .section-pad{padding:64px 0;}
+  .section-head{max-width:640px;margin:0 auto 40px;text-align:center;}
+  .section-head h2{font-weight:700;font-size:28px;}
+  .section-head p{color:var(--muted);}
+  .feat-card{
+    border:1px solid var(--line);border-radius:10px;padding:26px 22px;height:100%;background:#fff;
+    transition:box-shadow .15s, transform .15s;
+  }
+  .feat-card:hover{box-shadow:0 14px 30px -18px rgba(30,42,58,.35);transform:translateY(-2px);}
+  .feat-card .ic{
+    width:42px;height:42px;border-radius:9px;background:var(--bg-panel);color:var(--primary);
+    display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:14px;
+  }
+  .feat-card h5{font-weight:700;font-size:16px;}
+  .feat-card p{color:var(--muted);font-size:14px;margin:0;}
+
+  /* ---- TOOL PANEL ---- */
+  .tool-shell{background:var(--bg-soft);}
+  .step-card{
+    background:#fff;border:1px solid var(--line);border-radius:10px;padding:28px 26px;margin-bottom:22px;
+  }
+  .step-badge{
+    display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--primary);
+    text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;
+  }
+  .step-badge .n{
+    width:22px;height:22px;border-radius:50%;background:var(--primary);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:11px;
+  }
+  .step-card h3{font-weight:700;font-size:19px;}
+  .step-card .sub{color:var(--muted);font-size:14px;margin-bottom:18px;}
+
+  .dropzone{
+    border:1.5px dashed #c9d3e5;border-radius:8px;background:var(--bg-panel);
+    padding:34px 22px;text-align:center;cursor:pointer;transition:border-color .15s, background .15s;
+  }
+  .dropzone.dragover{border-color:var(--primary);background:#e8f0fe;}
+  .dropzone p{margin:0;color:var(--muted);font-size:14px;}
+  .dropzone strong{color:var(--navy);}
+  .dropzone input{display:none;}
+
+  .file-list{margin-top:16px;display:flex;flex-direction:column;gap:8px;}
+  .file-row{
+    display:grid;grid-template-columns:1fr auto auto auto;align-items:center;gap:14px;
+    background:#fff;border:1px solid var(--line);border-radius:6px;padding:9px 14px;font-size:13px;
+  }
+  .file-row .fname{font-family:ui-monospace,Consolas,monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .kind-badge{font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:20px;background:var(--success-bg);color:var(--success);white-space:nowrap;}
+  .kind-badge.unknown{background:#fdecea;color:#c0392b;}
+  .row-count{color:var(--muted);font-size:12px;white-space:nowrap;}
+  .remove-btn{background:none;border:none;color:var(--faint);cursor:pointer;font-size:17px;line-height:1;padding:2px 6px;}
+  .remove-btn:hover{color:#c0392b;}
+
+  label.field-label{font-size:12.5px;font-weight:600;color:var(--navy);margin-bottom:6px;display:block;}
+  .form-control, select.form-control{border-radius:6px;border:1px solid #d7dde6;font-size:14px;}
+  .form-control:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(26,86,219,.12);}
+  .field-note{font-size:11.5px;color:var(--muted);margin-top:5px;}
+
+  .btn-primary{background:var(--primary);border-color:var(--primary);font-weight:600;}
+  .btn-primary:hover{background:var(--primary-deep);border-color:var(--primary-deep);}
+  .btn-primary:disabled{background:#c9d3e5;border-color:#c9d3e5;}
+
+  .results{display:none;}
+  .results.show{display:block;}
+  .summary-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:8px 0 24px;}
+  .s-card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:16px;}
+  .s-card .label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;}
+  .s-card .value{font-size:21px;font-weight:700;color:var(--navy);margin-top:4px;}
+
+  .warn-box{background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:8px;padding:14px 16px;margin:16px 0;font-size:13.5px;}
+  .warn-box summary{cursor:pointer;font-weight:600;color:var(--warn-text);}
+  .warn-box ul{margin:10px 0 0;padding-left:18px;max-height:180px;overflow-y:auto;}
+  .warn-box li{font-size:12px;color:#7c4a1e;margin-bottom:3px;}
+
+  table.preview{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0 30px;background:#fff;}
+  table.preview th{
+    text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);
+    background:var(--bg-panel);padding:9px 12px;border-bottom:2px solid #d7dde6;
+  }
+  table.preview td{padding:8px 12px;border-bottom:1px solid var(--line);}
+  table.preview tbody tr:hover{background:var(--bg-soft);}
+  .section-title{display:flex;align-items:baseline;justify-content:space-between;margin-top:30px;margin-bottom:4px;}
+  .section-title h4{margin:0;font-weight:700;font-size:17px;}
+  .section-title .count{font-size:12.5px;color:var(--muted);}
+  .num{text-align:right;font-variant-numeric:tabular-nums;}
+
+  .download-bar{
+    background:var(--navy);color:#fff;border-radius:10px;padding:26px 28px;
+    display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-top:30px;
+  }
+  .download-bar h3{color:#fff;font-weight:700;font-size:18px;margin-bottom:4px;}
+  .download-bar p{margin:0;color:#c7d0dc;font-size:13.5px;max-width:46ch;}
+  .download-bar .btn{background:#ffb547;color:var(--navy);border:none;font-weight:700;padding:11px 22px;}
+  .download-bar .btn:hover{background:#f2a233;}
+
+  .disclaimer{
+    background:var(--warn-bg);border:1px solid var(--warn-line);border-left:4px solid #ffb547;
+    padding:16px 18px;border-radius:6px;margin-bottom:20px;font-size:13.5px;color:#5c3a15;
+  }
+  footer{background:var(--navy-deep);color:#8a95a5;padding:34px 0;font-size:13px;}
+  footer a{color:#c7d0dc;}
+  @media (prefers-reduced-motion: reduce){ *{scroll-behavior:auto!important;} }
+</style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg site-navbar py-3">
+  <div class="container">
+    <a class="navbar-brand" href="../index.html">
+      <span class="navbar-brand-mark">V</span> Visutra GST Tool
+    </a>
+    <div class="d-flex align-items-center gap-3">
+      <a href="tools-home.html" class="nav-link d-none d-sm-inline-flex">&larr; All Tools</a>
+      <a href="#tool" class="btn btn-sm btn-warm hero-cta d-none d-sm-inline-flex align-items-center">Open the tool</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="container position-relative" style="z-index:2;">
+    <div class="row align-items-center g-5">
+      <div class="col-lg-5">
+        <h1>Turn marketplace reports into a <span class="accent">GSTR-1 ready file</span></h1>
+        <p class="lead mt-3">Upload what you already download from Amazon, Flipkart and Meesho. Get back a B2B / B2CL / B2CS / HSN summary Excel, formatted for the GST offline tool — calculated entirely on your device.</p>
+        <ul class="list-checked mt-4">
+          <li>Nothing is uploaded to a server — files stay in your browser</li>
+          <li>Auto-detects each report by its columns, not its filename</li>
+          <li>Cross-checked line-by-line against real seller data</li>
+        </ul>
+        <div class="d-flex gap-3 hero-cta">
+          <a href="#tool" class="btn btn-warm px-4">Open the tool</a>
+          <a href="#how" class="btn btn-outline-light px-4">How it works</a>
+        </div>
+      </div>
+      <div class="col-lg-7">
+        <div class="position-relative">
+          <div class="browser-mock">
+            <div class="bar">
+              <span></span><span></span><span></span>
+              <div class="url">visutra.in/tools/gst-return-ready-file</div>
+            </div>
+            <div class="screen">
+              <div class="mock-row">
+                <div class="mock-card"><div class="k">Net taxable value</div><div class="v">₹13,56,375</div></div>
+                <div class="mock-card"><div class="k">B2CS rows</div><div class="v">83</div></div>
+                <div class="mock-card"><div class="k">HSN lines</div><div class="v">6</div></div>
+              </div>
+              <div class="mock-card mt-1">
+                <div class="k">Sources detected</div>
+                <div class="d-flex gap-2 mt-2 flex-wrap">
+                  <span class="badge rounded-pill" style="background:var(--success-bg);color:var(--success);">Amazon · B2C</span>
+                  <span class="badge rounded-pill" style="background:var(--success-bg);color:var(--success);">Flipkart · Sales</span>
+                  <span class="badge rounded-pill" style="background:var(--success-bg);color:var(--success);">Meesho · TCS</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="float-card d-none d-sm-block">
+            <p>"Reconciled to the rupee across three months before we trusted it."</p>
+            <div class="who">
+              <div class="dot"><i class="bi bi-check-lg"></i></div>
+              <div><strong>Build check</strong><small>Cross-verified against real report data</small></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="hero-wave">
+    <svg viewBox="0 0 1440 90" width="100%" height="90" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 90 L1440 90 L1440 30 C1140 90 900 0 720 30 C540 60 300 0 0 40 Z" fill="#ffffff"></path>
+    </svg>
+  </div>
+</section>
+
+<section class="section-pad" id="how">
+  <div class="container">
+    <div class="section-head">
+      <h2>Built for how you actually sell</h2>
+      <p>One workflow across all three marketplaces — no manual copy-pasting between report formats.</p>
+    </div>
+    <div class="row g-4">
+      <div class="col-md-4">
+        <div class="feat-card">
+          <div class="ic"><i class="bi bi-shield-lock"></i></div>
+          <h5>Runs in your browser</h5>
+          <p>Your report files are read and calculated on your own device. Nothing is sent to a server, ever.</p>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="feat-card">
+          <div class="ic"><i class="bi bi-diagram-3"></i></div>
+          <h5>Three platforms, one file</h5>
+          <p>Mix Amazon, Flipkart and Meesho reports from any months — they're auto-sorted and merged automatically.</p>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="feat-card">
+          <div class="ic"><i class="bi bi-file-earmark-spreadsheet"></i></div>
+          <h5>Offline-tool ready</h5>
+          <p>Output columns match the GST portal's Returns Offline Tool template, ready to import and convert to JSON.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="tool-shell section-pad" id="tool">
+  <div class="container">
+
+    <div class="step-card">
+      <div class="step-badge"><span class="n">1</span> Upload your reports</div>
+      <h3>Add your files</h3>
+      <p class="sub">Drop in any mix of files — the tool reads each one's columns and sorts it automatically. You can add files from more than one month in a single go.</p>
+
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload report files">
+        <p><strong>Drop files here</strong> or click to browse<br>
+        Amazon MTR CSVs · Flipkart Sales Report .xlsx · Meesho Tax_invoice_details / tcs_sales / tcs_sales_return .xlsx</p>
+        <input type="file" id="fileInput" multiple accept=".csv,.xlsx,.xls">
+      </div>
+
+      <div class="file-list" id="fileList"></div>
+    </div>
+
+    <div class="step-card">
+      <div class="step-badge"><span class="n">2</span> Filing details</div>
+      <h3>Confirm before generating</h3>
+      <p class="sub">Auto-filled from your reports where possible — check them before generating the file.</p>
+
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="field-label" for="gstin">Your GSTIN</label>
+          <input type="text" class="form-control" id="gstin" placeholder="e.g. 09BVHPP4321G1ZJ" maxlength="15">
+          <div class="field-note" id="gstinNote">Detected automatically from your uploaded reports.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="field-label" for="period">Return period (label only, for the file name)</label>
+          <input type="text" class="form-control" id="period" placeholder="e.g. Apr-Jun 2026">
+        </div>
+        <div class="col-md-6">
+          <label class="field-label" for="b2clThreshold">B2CL threshold (₹)</label>
+          <input type="number" class="form-control" id="b2clThreshold" value="100000">
+          <div class="field-note">Inter-state B2C invoices above this value are reported invoice-wise (B2CL) instead of in the state summary (B2CS). Currently ₹1,00,000 per GST Notification 12/2024 — check the GST portal if this has changed since.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="field-label" for="uqc">Unit of measure (UQC) for HSN summary</label>
+          <select id="uqc" class="form-control">
+            <option value="PCS-PIECES" selected>PCS — Pieces</option>
+            <option value="NOS-NUMBERS">NOS — Numbers</option>
+            <option value="SET-SETS">SET — Sets</option>
+            <option value="KGS-KILOGRAMS">KGS — Kilograms</option>
+            <option value="MTR-METERS">MTR — Meters</option>
+            <option value="BOX-BOX">BOX — Box</option>
+            <option value="PAC-PACKS">PAC — Packs</option>
+            <option value="OTH-OTHERS">OTH — Others</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="mt-4">
+        <button class="btn btn-primary btn-lg" id="generateBtn" disabled>Generate GSTR-1 file</button>
+      </div>
+    </div>
+
+    <div class="step-card" id="resultsStep">
+      <div class="step-badge"><span class="n">3</span> Review &amp; download</div>
+      <h3>Check the totals</h3>
+      <p class="sub">Review the tables and warnings below against your own records before filing.</p>
+
+      <div class="results" id="results">
+
+        <div class="summary-cards" id="summaryCards"></div>
+
+        <details class="warn-box" id="warnBox" style="display:none;">
+          <summary id="warnSummary"></summary>
+          <ul id="warnList"></ul>
+        </details>
+
+        <div class="section-title"><h4>B2B — registered buyers</h4><span class="count" id="b2bCount"></span></div>
+        <div style="overflow-x:auto;"><table class="preview" id="b2bTable"></table></div>
+
+        <div class="section-title"><h4>B2CL — large inter-state invoices</h4><span class="count" id="b2clCount"></span></div>
+        <div style="overflow-x:auto;"><table class="preview" id="b2clTable"></table></div>
+
+        <div class="section-title"><h4>B2CS — consumer sales, state &amp; rate-wise</h4><span class="count" id="b2csCount"></span></div>
+        <div style="overflow-x:auto;"><table class="preview" id="b2csTable"></table></div>
+
+        <div class="section-title"><h4>HSN summary</h4><span class="count" id="hsnCount"></span></div>
+        <div style="overflow-x:auto;"><table class="preview" id="hsnTable"></table></div>
+
+        <div class="download-bar">
+          <div>
+            <h3>Your GSTR-1 ready file</h3>
+            <p>An Excel workbook with B2B, B2CL, B2CS and HSN sheets, formatted to match the GST offline tool template — plus a full source-data sheet for your records.</p>
+          </div>
+          <button class="btn" id="downloadBtn">Download Excel</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<div class="container">
+  <div class="disclaimer">
+    <strong>Before you file:</strong> this tool calculates totals from the reports you upload — it doesn't file anything on your behalf. Import the downloaded Excel into the GST portal's <a href="https://www.gst.gov.in/download/returns" target="_blank" rel="noopener">Returns Offline Tool</a> to generate the upload JSON, and reconcile the totals against your own books first. GST rates, thresholds and formats change from time to time — verify the current B2CL threshold and tax rates on the GST portal before relying on this output. This is a free utility, not professional advice.
+  </div>
+</div>
+
+<footer>
+  <div class="container">
+    <p class="mb-0">Built by Visutra for sellers on Amazon, Flipkart and Meesho. All processing happens in your browser — your report files are never uploaded to a server.</p>
+  </div>
+</footer>
+
+<script>
+
+/* =========================================================================
+   GSTR-1 mapping engine (Amazon / Flipkart / Meesho -> B2B/B2CL/B2CS/HSN)
+   ========================================================================= */
+var GSTR1 = (function () {
+  var STATE_CODES = [
+    ['01', 'Jammu and Kashmir'], ['02', 'Himachal Pradesh'], ['03', 'Punjab'],
+    ['04', 'Chandigarh'], ['05', 'Uttarakhand'], ['06', 'Haryana'],
+    ['07', 'Delhi'], ['08', 'Rajasthan'], ['09', 'Uttar Pradesh'],
+    ['10', 'Bihar'], ['11', 'Sikkim'], ['12', 'Arunachal Pradesh'],
+    ['13', 'Nagaland'], ['14', 'Manipur'], ['15', 'Mizoram'],
+    ['16', 'Tripura'], ['17', 'Meghalaya'], ['18', 'Assam'],
+    ['19', 'West Bengal'], ['20', 'Jharkhand'], ['21', 'Odisha'],
+    ['22', 'Chhattisgarh'], ['23', 'Madhya Pradesh'], ['24', 'Gujarat'],
+    ['26', 'Dadra and Nagar Haveli and Daman and Diu'], ['27', 'Maharashtra'],
+    ['29', 'Karnataka'], ['30', 'Goa'], ['31', 'Lakshadweep'],
+    ['32', 'Kerala'], ['33', 'Tamil Nadu'], ['34', 'Puducherry'],
+    ['35', 'Andaman and Nicobar Islands'], ['36', 'Telangana'],
+    ['37', 'Andhra Pradesh'], ['38', 'Ladakh'],
+    ['97', 'Other Territory'], ['99', 'Centre Jurisdiction']
+  ];
+
+  var STATE_ALIASES = {
+    'ORISSA': 'Odisha', 'PONDICHERRY': 'Puducherry', 'UTTARANCHAL': 'Uttarakhand',
+    'NCT OF DELHI': 'Delhi', 'DELHI': 'Delhi',
+    'CHATTISGARH': 'Chhattisgarh', 'CHHATTISGARH': 'Chhattisgarh',
+    'DAMAN': 'Dadra and Nagar Haveli and Daman and Diu',
+    'DAMAN AND DIU': 'Dadra and Nagar Haveli and Daman and Diu',
+    'DADRA AND NAGAR HAVELI': 'Dadra and Nagar Haveli and Daman and Diu',
+    'DADRA AND NAGAR HAVELI AND DAMAN AND DIU': 'Dadra and Nagar Haveli and Daman and Diu',
+    'ANDAMAN AND NICOBAR': 'Andaman and Nicobar Islands',
+    'ANDAMAN AND NICOBAR ISLANDS': 'Andaman and Nicobar Islands',
+    'JAMMU AND KASHMIR': 'Jammu and Kashmir'
+  };
+
+  function normStateName(raw) {
+    if (!raw) return null;
+    var s = String(raw).trim().toUpperCase().replace(/&/g, 'AND').replace(/\s+/g, ' ').trim();
+    if (STATE_ALIASES[s]) return STATE_ALIASES[s];
+    for (var i = 0; i < STATE_CODES.length; i++) {
+      if (STATE_CODES[i][1].toUpperCase().replace(/&/g, 'AND') === s) return STATE_CODES[i][1];
+    }
+    return null;
+  }
+  function stateCodeFor(raw) {
+    var name = normStateName(raw);
+    if (!name) return null;
+    for (var i = 0; i < STATE_CODES.length; i++) { if (STATE_CODES[i][1] === name) return STATE_CODES[i][0]; }
+    return null;
+  }
+  function stateCodeFromGstin(gstin) { if (!gstin || gstin.length < 2) return null; return gstin.substring(0, 2); }
+  function stateNameFromCode(code) {
+    for (var i = 0; i < STATE_CODES.length; i++) { if (STATE_CODES[i][0] === code) return STATE_CODES[i][1]; }
+    return code;
+  }
+  function num(v) {
+    if (v === null || v === undefined || v === '') return 0;
+    var n = parseFloat(String(v).replace(/,/g, ''));
+    return isNaN(n) ? 0 : n;
+  }
+  function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
+
+  function makeTxn(o) {
+    return {
+      source: o.source, docType: o.docType,
+      invoiceNo: o.invoiceNo || '', invoiceDate: o.invoiceDate || '',
+      buyerGstin: o.buyerGstin || '', buyerName: o.buyerName || '',
+      posStateCode: o.posStateCode, hsn: (o.hsn || '').toString().trim(),
+      description: o.description || '',
+      qty: num(o.qty) * o.sign,
+      taxableValue: round2(num(o.taxableValue) * o.sign),
+      rate: num(o.rate),
+      taxAmount: round2(num(o.taxAmount) * o.sign),
+      invoiceValue: round2(num(o.invoiceValue) * o.sign),
+      ecoGstin: o.ecoGstin || '', sign: o.sign, warnings: o.warnings || []
+    };
+  }
+
+  function detectSellerGstin(allRowSets) {
+    for (var i = 0; i < allRowSets.length; i++) {
+      for (var j = 0; j < allRowSets[i].length; j++) {
+        var row = allRowSets[i][j];
+        var g = row['Seller Gstin'] || row['Seller GSTIN'] || row['gstin'];
+        if (g && String(g).trim().length === 15) return String(g).trim();
+      }
+    }
+    return null;
+  }
+
+  function normalizeAmazon(rowsB2B, rowsB2C) {
+    var txns = [];
+    (rowsB2B || []).forEach(function (r) {
+      var type = (r['Transaction Type'] || '').trim();
+      var sign = (type === 'Shipment') ? 1 : -1;
+      var igst = num(r['Igst Rate']), cgst = num(r['Cgst Rate']), sgst = num(r['Sgst Rate']), utgst = num(r['Utgst Rate']);
+      var rate = igst > 0 ? igst : (cgst + sgst + utgst);
+      var posCode = stateCodeFor(r['Bill To State']) || stateCodeFor(r['Ship To State']);
+      var warnings = [];
+      if (!posCode) warnings.push('Amazon B2B ' + (r['Invoice Number']||'') + ': unrecognised state "' + (r['Bill To State'] || r['Ship To State']) + '"');
+      var gstin = (r['Customer Bill To Gstid'] || '').trim();
+      txns.push(makeTxn({
+        source: 'amazon', docType: gstin ? 'b2b' : 'b2c',
+        invoiceNo: r['Invoice Number'], invoiceDate: r['Invoice Date'],
+        buyerGstin: gstin, buyerName: r['Buyer Name'],
+        posStateCode: posCode, hsn: r['Hsn/sac'], description: r['Item Description'],
+        qty: r['Quantity'], taxableValue: r['Tax Exclusive Gross'],
+        rate: rate, taxAmount: r['Total Tax Amount'], invoiceValue: r['Invoice Amount'],
+        sign: sign, warnings: warnings
+      }));
+    });
+    (rowsB2C || []).forEach(function (r) {
+      var type = (r['Transaction Type'] || '').trim();
+      var sign = (type === 'Shipment') ? 1 : -1;
+      var igst = num(r['Igst Rate']), cgst = num(r['Cgst Rate']), sgst = num(r['Sgst Rate']), utgst = num(r['Utgst Rate']);
+      var rate = igst > 0 ? igst : (cgst + sgst + utgst);
+      var posCode = stateCodeFor(r['Ship To State']);
+      var warnings = [];
+      if (!posCode) warnings.push('Amazon B2C ' + (r['Invoice Number']||r['Order Id']||'') + ': unrecognised state "' + r['Ship To State'] + '"');
+      txns.push(makeTxn({
+        source: 'amazon', docType: 'b2c',
+        invoiceNo: r['Invoice Number'], invoiceDate: r['Invoice Date'],
+        posStateCode: posCode, hsn: r['Hsn/sac'], description: r['Item Description'],
+        qty: r['Quantity'], taxableValue: r['Tax Exclusive Gross'],
+        rate: rate, taxAmount: r['Total Tax Amount'], invoiceValue: r['Invoice Amount'],
+        sign: sign, warnings: warnings
+      }));
+    });
+    return txns;
+  }
+
+  function normalizeFlipkart(rows) {
+    var txns = [];
+    (rows || []).forEach(function (r) {
+      var eventType = (r['Event Type'] || '').trim();
+      var sign = (eventType === 'Return') ? -1 : 1;
+      var igst = num(r['IGST Rate']), cgst = num(r['CGST Rate']), sgst = num(r['SGST Rate (or UTGST as applicable)']);
+      var rate = igst > 0 ? igst : (cgst + sgst);
+      var posCode = stateCodeFor(r["Customer's Delivery State"]) || stateCodeFor(r["Customer's Billing State"]);
+      var warnings = [];
+      if (!posCode) warnings.push('Flipkart ' + (r['Order ID']||'') + ': unrecognised state "' + r["Customer's Delivery State"] + '"');
+      var bizGstin = (r['Business GST Number'] || '').trim();
+      var isB2B = bizGstin && bizGstin.toUpperCase() !== 'NA';
+      var totalTax = num(r['IGST Amount']) + num(r['CGST Amount']) + num(r['SGST Amount (Or UTGST as applicable)']);
+      txns.push(makeTxn({
+        source: 'flipkart', docType: isB2B ? 'b2b' : 'b2c',
+        invoiceNo: r['Buyer Invoice ID'], invoiceDate: r['Buyer Invoice Date'],
+        buyerGstin: isB2B ? bizGstin : '', buyerName: isB2B ? r['Business Name'] : '',
+        posStateCode: posCode, hsn: r['HSN Code'], description: r['Product Title/Description'],
+        qty: r['Item Quantity'], taxableValue: r['Taxable Value (Final Invoice Amount -Taxes)'],
+        rate: rate, taxAmount: totalTax, invoiceValue: r['Buyer Invoice Amount'],
+        sign: sign, warnings: warnings
+      }));
+    });
+    return txns;
+  }
+
+  function normalizeMeesho(tcsSalesRows, tcsReturnRows, invoiceInfoRows) {
+    var invoiceBySuborder = {};
+    (invoiceInfoRows || []).forEach(function (r) {
+      var sub = r['Suborder No.'];
+      if (sub) invoiceBySuborder[sub] = { invNo: r['Invoice No.'], invDate: r['Order Date'] };
+    });
+    function toTxns(rows, sign) {
+      return (rows || []).map(function (r) {
+        var posCode = stateCodeFor(r['end_customer_state_new']);
+        var warnings = [];
+        if (!posCode) warnings.push('Meesho ' + (r['sub_order_num']||'') + ': unrecognised state "' + r['end_customer_state_new'] + '"');
+        var inv = invoiceBySuborder[r['sub_order_num']] || {};
+        return makeTxn({
+          source: 'meesho', docType: 'b2c',
+          invoiceNo: inv.invNo || r['sub_order_num'], invoiceDate: r['order_date'],
+          posStateCode: posCode, hsn: r['hsn_code'],
+          qty: r['quantity'], taxableValue: r['total_taxable_sale_value'],
+          rate: r['gst_rate'], taxAmount: r['tax_amount'], invoiceValue: r['total_invoice_value'],
+          ecoGstin: r['eco_tcs_gstin'], sign: sign, warnings: warnings
+        });
+      });
+    }
+    return toTxns(tcsSalesRows, 1).concat(toTxns(tcsReturnRows, -1));
+  }
+
+  function buildGSTR1(allTxns, sellerStateCode, b2clThreshold) {
+    b2clThreshold = b2clThreshold || 100000;
+    var b2b = {}, b2cs = {}, hsn = {}, b2clCandidates = {};
+    var docSummary = { count: 0, taxable: 0, tax: 0 };
+    var skipped = [];
+
+    allTxns.forEach(function (t) {
+      if (!t.posStateCode || !t.hsn || t.rate === undefined) { skipped.push(t); return; }
+      docSummary.count += 1; docSummary.taxable += t.taxableValue; docSummary.tax += t.taxAmount;
+
+      var hkey = t.hsn + '|' + t.rate;
+      if (!hsn[hkey]) hsn[hkey] = { hsn: t.hsn, description: t.description, uqc: 'PCS-PIECES', qty: 0, rate: t.rate, taxableValue: 0, igst: 0, cgst: 0, sgst: 0, totalValue: 0 };
+      hsn[hkey].qty += t.qty; hsn[hkey].taxableValue += t.taxableValue; hsn[hkey].totalValue += t.invoiceValue;
+      var interState = t.posStateCode !== sellerStateCode;
+      if (interState) hsn[hkey].igst += t.taxAmount; else { hsn[hkey].cgst += t.taxAmount / 2; hsn[hkey].sgst += t.taxAmount / 2; }
+
+      if (t.docType === 'b2b' && t.buyerGstin) {
+        var bkey = t.buyerGstin + '|' + t.invoiceNo + '|' + t.rate;
+        if (!b2b[bkey]) b2b[bkey] = { gstin: t.buyerGstin, receiverName: t.buyerName, invoiceNo: t.invoiceNo, invoiceDate: t.invoiceDate, invoiceValue: 0, posStateCode: t.posStateCode, reverseCharge: 'N', invoiceType: 'Regular', rate: t.rate, taxableValue: 0 };
+        b2b[bkey].taxableValue += t.taxableValue; b2b[bkey].invoiceValue += t.invoiceValue;
+        return;
+      }
+
+      var ikey = t.invoiceNo + '||' + t.source;
+      if (!b2clCandidates[ikey]) b2clCandidates[ikey] = { rows: [], posCode: t.posStateCode, invoiceValue: 0, invoiceDate: t.invoiceDate, ecoGstin: t.ecoGstin };
+      b2clCandidates[ikey].rows.push(t);
+      b2clCandidates[ikey].invoiceValue += t.invoiceValue;
+    });
+
+    var b2cl = [];
+    Object.keys(b2clCandidates).forEach(function (k) {
+      var c = b2clCandidates[k];
+      var interState = c.posCode !== sellerStateCode;
+      var qualifiesB2CL = interState && Math.abs(c.invoiceValue) > b2clThreshold;
+      if (qualifiesB2CL) {
+        var byRate = {};
+        c.rows.forEach(function (t) { if (!byRate[t.rate]) byRate[t.rate] = { rate: t.rate, taxableValue: 0 }; byRate[t.rate].taxableValue += t.taxableValue; });
+        b2cl.push({ invoiceNo: c.rows[0].invoiceNo, invoiceDate: c.invoiceDate, invoiceValue: round2(c.invoiceValue), posStateCode: c.posCode, items: Object.keys(byRate).map(function (r) { return byRate[r]; }) });
+      } else {
+        c.rows.forEach(function (t) {
+          var skey = t.posStateCode + '|' + t.rate;
+          if (!b2cs[skey]) b2cs[skey] = { type: 'OE', posStateCode: t.posStateCode, rate: t.rate, taxableValue: 0 };
+          b2cs[skey].taxableValue += t.taxableValue;
+        });
+      }
+    });
+
+    function rr() {
+      var fields = Array.prototype.slice.call(arguments);
+      return function (row) { fields.forEach(function (f) { if (row[f] !== undefined) row[f] = round2(row[f]); }); return row; };
+    }
+
+    return {
+      b2b: Object.keys(b2b).map(function (k) { return b2b[k]; }).map(rr('taxableValue', 'invoiceValue')),
+      b2cl: b2cl,
+      b2cs: Object.keys(b2cs).map(function (k) { return b2cs[k]; }).map(rr('taxableValue')),
+      hsn: Object.keys(hsn).map(function (k) { return hsn[k]; }).map(rr('taxableValue', 'igst', 'cgst', 'sgst', 'totalValue')),
+      docSummary: docSummary, skipped: skipped, allTxns: allTxns
+    };
+  }
+
+  return {
+    STATE_CODES: STATE_CODES, stateCodeFor: stateCodeFor, stateCodeFromGstin: stateCodeFromGstin,
+    stateNameFromCode: stateNameFromCode, detectSellerGstin: detectSellerGstin,
+    normalizeAmazon: normalizeAmazon, normalizeFlipkart: normalizeFlipkart, normalizeMeesho: normalizeMeesho,
+    buildGSTR1: buildGSTR1, round2: round2
+  };
+})();
+
+/* =========================================================================
+   File parsing + kind detection
+   ========================================================================= */
+var store = {
+  files: [], // {id, name, kind, rows, sheetName}
+  amazonB2B: [], amazonB2C: [], flipkart: [], meeshoSales: [], meeshoReturns: [], meeshoInvoiceInfo: []
+};
+var lastResult = null;
+var fileIdSeq = 0;
+
+function readFileAsWorkbook(file) {
+  return new Promise(function (resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      try { resolve(XLSX.read(e.target.result, { type: 'array' })); }
+      catch (err) { reject(err); }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Some marketplace exports (seen in Flipkart's Sales Report sheet) declare a
+// stale/truncated !ref even though data extends far beyond it. Recompute the
+// true used range from actual cell addresses so no rows get silently dropped.
+function fixSheetRange(ws) {
+  var maxR = 0, maxC = 0, any = false;
+  Object.keys(ws).forEach(function (addr) {
+    if (addr[0] === '!') return;
+    var cell = XLSX.utils.decode_cell(addr);
+    any = true;
+    if (cell.r > maxR) maxR = cell.r;
+    if (cell.c > maxC) maxC = cell.c;
+  });
+  if (any) ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } });
+  return ws;
+}
+
+function sheetHeaders(ws) {
+  var range = XLSX.utils.decode_range(ws['!ref']);
+  var headers = [];
+  for (var c = range.s.c; c <= range.e.c; c++) {
+    var cell = ws[XLSX.utils.encode_cell({ r: range.s.r, c: c })];
+    headers.push(cell ? String(cell.v).trim() : '');
+  }
+  return headers;
+}
+
+function classifySheet(headers) {
+  var set = headers.map(function (h) { return h.toLowerCase(); });
+  function has(h) { return set.indexOf(h.toLowerCase()) !== -1; }
+
+  if (has('seller gstin') && has('event type') && has('fsn')) return 'flipkart';
+  if (has('seller gstin') && has('transaction type') && has('customer bill to gstid')) return 'amazon_b2b';
+  if (has('seller gstin') && has('transaction type')) return 'amazon_b2c';
+  if (has('sub_order_num') && has('gst_rate') && has('cancel_return_date')) return 'meesho_return';
+  if (has('sub_order_num') && has('gst_rate')) return 'meesho_sales';
+  if (has('suborder no.') && has('invoice no.')) return 'meesho_invoice_info';
+  return 'unknown';
+}
+
+var KIND_LABELS = {
+  amazon_b2b: 'Amazon · B2B', amazon_b2c: 'Amazon · B2C',
+  flipkart: 'Flipkart · Sales', meesho_sales: 'Meesho · TCS Sales',
+  meesho_return: 'Meesho · TCS Return', meesho_invoice_info: 'Meesho · Invoice Info',
+  unknown: 'Not recognised'
+};
+
+function processFile(file) {
+  return readFileAsWorkbook(file).then(function (wb) {
+    var best = null;
+    wb.SheetNames.forEach(function (sn) {
+      var ws = wb.Sheets[sn];
+      if (!ws) return;
+      fixSheetRange(ws);
+      if (!ws['!ref']) return;
+      var headers = sheetHeaders(ws);
+      var kind = classifySheet(headers);
+      if (kind !== 'unknown' && !best) {
+        var rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: true });
+        best = { kind: kind, rows: rows, sheetName: sn };
+      }
+    });
+    if (!best) best = { kind: 'unknown', rows: [], sheetName: wb.SheetNames[0] || '' };
+    return { id: 'f' + (fileIdSeq++), name: file.name, kind: best.kind, rows: best.rows, count: best.rows.length };
+  });
+}
+
+function rebuildBuckets() {
+  store.amazonB2B = []; store.amazonB2C = []; store.flipkart = [];
+  store.meeshoSales = []; store.meeshoReturns = []; store.meeshoInvoiceInfo = [];
+  store.files.forEach(function (f) {
+    if (f.kind === 'amazon_b2b') store.amazonB2B = store.amazonB2B.concat(f.rows);
+    else if (f.kind === 'amazon_b2c') store.amazonB2C = store.amazonB2C.concat(f.rows);
+    else if (f.kind === 'flipkart') store.flipkart = store.flipkart.concat(f.rows);
+    else if (f.kind === 'meesho_sales') store.meeshoSales = store.meeshoSales.concat(f.rows);
+    else if (f.kind === 'meesho_return') store.meeshoReturns = store.meeshoReturns.concat(f.rows);
+    else if (f.kind === 'meesho_invoice_info') store.meeshoInvoiceInfo = store.meeshoInvoiceInfo.concat(f.rows);
+  });
+}
+
+function renderFileList() {
+  var el = document.getElementById('fileList');
+  el.innerHTML = '';
+  store.files.forEach(function (f) {
+    var row = document.createElement('div');
+    row.className = 'file-row';
+    var badgeClass = f.kind === 'unknown' ? 'kind-badge unknown' : 'kind-badge';
+    row.innerHTML =
+      '<span class="fname">' + f.name + '</span>' +
+      '<span class="' + badgeClass + '">' + KIND_LABELS[f.kind] + '</span>' +
+      '<span class="row-count">' + f.count + ' rows</span>' +
+      '<button class="remove-btn" data-id="' + f.id + '" title="Remove">&times;</button>';
+    el.appendChild(row);
+  });
+  el.querySelectorAll('.remove-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      store.files = store.files.filter(function (f) { return f.id !== btn.dataset.id; });
+      renderFileList(); rebuildBuckets(); updateGstinField(); updateGenerateEnabled();
+    });
+  });
+  updateGenerateEnabled();
+}
+
+function updateGenerateEnabled() {
+  document.getElementById('generateBtn').disabled = store.files.length === 0;
+}
+
+function updateGstinField() {
+  var input = document.getElementById('gstin');
+  if (input.dataset.userEdited === '1') return;
+  var allSets = [store.amazonB2B, store.amazonB2C, store.flipkart, store.meeshoSales, store.meeshoReturns];
+  var g = GSTR1.detectSellerGstin(allSets);
+  if (g) { input.value = g; document.getElementById('gstinNote').textContent = 'Detected automatically from your uploaded reports.'; }
+}
+document.getElementById('gstin').addEventListener('input', function () { this.dataset.userEdited = '1'; });
+
+function handleFiles(fileListObj) {
+  var files = Array.prototype.slice.call(fileListObj);
+  Promise.all(files.map(processFile)).then(function (results) {
+    results.forEach(function (r) { store.files.push(r); });
+    renderFileList();
+    rebuildBuckets();
+    updateGstinField();
+  }).catch(function (err) {
+    alert('Could not read one of the files: ' + err.message);
+  });
+}
+
+var dropzone = document.getElementById('dropzone');
+var fileInput = document.getElementById('fileInput');
+dropzone.addEventListener('click', function () { fileInput.click(); });
+dropzone.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+fileInput.addEventListener('change', function (e) { handleFiles(e.target.files); fileInput.value = ''; });
+['dragenter', 'dragover'].forEach(function (evt) {
+  dropzone.addEventListener(evt, function (e) { e.preventDefault(); dropzone.classList.add('dragover'); });
+});
+['dragleave', 'drop'].forEach(function (evt) {
+  dropzone.addEventListener(evt, function (e) { e.preventDefault(); dropzone.classList.remove('dragover'); });
+});
+dropzone.addEventListener('drop', function (e) { handleFiles(e.dataTransfer.files); });
+
+/* =========================================================================
+   Generate + render results
+   ========================================================================= */
+function fmtMoney(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function posLabel(code) { return code ? (code + '-' + GSTR1.stateNameFromCode(code)) : ''; }
+
+document.getElementById('generateBtn').addEventListener('click', function () {
+  var sellerGstin = document.getElementById('gstin').value.trim();
+  var sellerState = GSTR1.stateCodeFromGstin(sellerGstin);
+  var threshold = parseFloat(document.getElementById('b2clThreshold').value) || 100000;
+  var uqc = document.getElementById('uqc').value;
+
+  if (!sellerState) { alert('Please enter a valid 15-character GSTIN so the tool knows your home state.'); return; }
+
+  var allTxns = []
+    .concat(GSTR1.normalizeAmazon(store.amazonB2B, store.amazonB2C))
+    .concat(GSTR1.normalizeFlipkart(store.flipkart))
+    .concat(GSTR1.normalizeMeesho(store.meeshoSales, store.meeshoReturns, store.meeshoInvoiceInfo));
+
+  var result = GSTR1.buildGSTR1(allTxns, sellerState, threshold);
+  result.hsn.forEach(function (h) { h.uqc = uqc; });
+  lastResult = result;
+  lastResult.sellerGstin = sellerGstin;
+  lastResult.sellerState = sellerState;
+
+  renderResults(result);
+  document.getElementById('results').classList.add('show');
+  document.getElementById('resultsStep').classList.add('active');
+  document.getElementById('resultsStep').scrollIntoView({ behavior: 'smooth' });
+});
+
+function renderResults(r) {
+  var cards = [
+    ['Net taxable value', fmtMoney(r.docSummary.taxable)],
+    ['Net tax', fmtMoney(r.docSummary.tax)],
+    ['Transaction lines', r.docSummary.count.toLocaleString('en-IN')],
+    ['B2B invoices', r.b2b.length],
+    ['B2CL invoices', r.b2cl.length],
+    ['B2CS rows', r.b2cs.length],
+    ['HSN lines', r.hsn.length]
+  ];
+  document.getElementById('summaryCards').innerHTML = cards.map(function (c) {
+    return '<div class="card"><div class="label">' + c[0] + '</div><div class="value">' + c[1] + '</div></div>';
+  }).join('');
+
+  var warnBox = document.getElementById('warnBox');
+  if (r.skipped.length) {
+    var withValue = r.skipped.filter(function (t) { return Math.abs(t.taxableValue) > 0.01; });
+    warnBox.style.display = 'block';
+    document.getElementById('warnSummary').textContent = r.skipped.length + ' row(s) could not be placed (' + withValue.length + ' with a non-zero value) — click to review';
+    document.getElementById('warnList').innerHTML = r.skipped.slice(0, 200).map(function (t) {
+      return '<li>' + (t.warnings.join('; ') || (t.source + ' ' + t.invoiceNo + ': missing HSN or rate')) + ' — value ' + fmtMoney(t.taxableValue) + '</li>';
+    }).join('');
+  } else {
+    warnBox.style.display = 'none';
+  }
+
+  document.getElementById('b2bCount').textContent = r.b2b.length + ' invoice line(s)';
+  document.getElementById('b2bTable').innerHTML = tableHTML(
+    ['GSTIN', 'Receiver', 'Invoice No.', 'Invoice Date', 'Place of Supply', 'Rate', 'Taxable Value', 'Invoice Value'],
+    r.b2b.slice(0, 25).map(function (x) { return [x.gstin, x.receiverName, x.invoiceNo, x.invoiceDate, posLabel(x.posStateCode), x.rate + '%', fmtMoney(x.taxableValue), fmtMoney(x.invoiceValue)]; }),
+    [5, 6, 7]
+  );
+
+  document.getElementById('b2clCount').textContent = r.b2cl.length + ' invoice(s)';
+  var b2clRows = [];
+  r.b2cl.forEach(function (inv) { inv.items.forEach(function (it) { b2clRows.push([inv.invoiceNo, inv.invoiceDate, posLabel(inv.posStateCode), it.rate + '%', fmtMoney(it.taxableValue), fmtMoney(inv.invoiceValue)]); }); });
+  document.getElementById('b2clTable').innerHTML = tableHTML(['Invoice No.', 'Invoice Date', 'Place of Supply', 'Rate', 'Taxable Value', 'Invoice Value'], b2clRows.slice(0, 25), [3, 4, 5]);
+
+  document.getElementById('b2csCount').textContent = r.b2cs.length + ' row(s)';
+  document.getElementById('b2csTable').innerHTML = tableHTML(
+    ['Type', 'Place of Supply', 'Rate', 'Taxable Value'],
+    r.b2cs.slice(0, 25).map(function (x) { return [x.type, posLabel(x.posStateCode), x.rate + '%', fmtMoney(x.taxableValue)]; }),
+    [2, 3]
+  );
+
+  document.getElementById('hsnCount').textContent = r.hsn.length + ' row(s)';
+  document.getElementById('hsnTable').innerHTML = tableHTML(
+    ['HSN', 'UQC', 'Qty', 'Rate', 'Taxable Value', 'IGST', 'CGST', 'SGST'],
+    r.hsn.map(function (x) { return [x.hsn, x.uqc, x.qty, x.rate + '%', fmtMoney(x.taxableValue), fmtMoney(x.igst), fmtMoney(x.cgst), fmtMoney(x.sgst)]; }),
+    [2, 3, 4, 5, 6, 7]
+  );
+}
+
+function tableHTML(headers, rows, numericCols) {
+  numericCols = numericCols || [];
+  var thead = '<thead><tr>' + headers.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead>';
+  var tbody = '<tbody>' + rows.map(function (row) {
+    return '<tr>' + row.map(function (cell, i) {
+      var cls = numericCols.indexOf(i) !== -1 ? ' class="num"' : '';
+      return '<td' + cls + '>' + cell + '</td>';
+    }).join('') + '</tr>';
+  }).join('') + '</tbody>';
+  if (!rows.length) tbody = '<tbody><tr><td colspan="' + headers.length + '" style="color:var(--ink-soft);">No rows in this table.</td></tr></tbody>';
+  return thead + tbody;
+}
+
+/* =========================================================================
+   Excel export
+   ========================================================================= */
+document.getElementById('downloadBtn').addEventListener('click', function () {
+  if (!lastResult) return;
+  var r = lastResult;
+  var wb = XLSX.utils.book_new();
+
+  var readme = [
+    ['GSTR-1 ready file — generated by Visutra GST Tool'],
+    ['Seller GSTIN', r.sellerGstin],
+    ['Generated on', new Date().toLocaleString('en-IN')],
+    [],
+    ['Sheets in this workbook:'],
+    ['b2b', 'Invoice-wise supplies to registered buyers (Table 4)'],
+    ['b2cl', 'Invoice-wise inter-state supplies to consumers above the B2CL threshold (Table 5)'],
+    ['b2cs', 'State and rate-wise summary of all other consumer supplies (Table 7)'],
+    ['hsn', 'HSN/rate-wise summary of outward supplies (Table 12)'],
+    ['source data', 'Every individual transaction line used to build the sheets above, for your own audit trail'],
+    [],
+    ['How to use this file:'],
+    ['1. Open the GST portal\'s Returns Offline Tool and load the official GSTR-1 Excel template for your return period.'],
+    ['2. Copy the rows from each sheet here into the matching sheet in the official template (column order matches).'],
+    ['3. Import the completed template into the Offline Tool and generate the JSON.'],
+    ['4. Upload the JSON on the GST portal and reconcile the auto-populated totals against this file and your books before filing.'],
+    [],
+    ['This file is a calculation aid, not a filed return. Verify totals, GST rates and thresholds before relying on it.']
+  ];
+  var wsReadme = XLSX.utils.aoa_to_sheet(readme);
+  XLSX.utils.book_append_sheet(wb, wsReadme, 'Read Me');
+
+  var b2bHeader = ['GSTIN/UIN of Recipient', 'Receiver Name', 'Invoice Number', 'Invoice date', 'Invoice Value', 'Place Of Supply', 'Reverse Charge', 'Applicable % of Tax Rate', 'Invoice Type', 'Rate', 'Taxable Value', 'Cess Amount'];
+  var b2bRows = r.b2b.map(function (x) { return [x.gstin, x.receiverName, x.invoiceNo, x.invoiceDate, x.invoiceValue, posLabel(x.posStateCode), x.reverseCharge, '', x.invoiceType, x.rate, x.taxableValue, 0]; });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2bHeader].concat(b2bRows)), 'b2b');
+
+  var b2clHeader = ['Invoice Number', 'Invoice date', 'Invoice Value', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount'];
+  var b2clRows = [];
+  r.b2cl.forEach(function (inv) { inv.items.forEach(function (it) { b2clRows.push([inv.invoiceNo, inv.invoiceDate, inv.invoiceValue, posLabel(inv.posStateCode), '', it.rate, it.taxableValue, 0]); }); });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2clHeader].concat(b2clRows)), 'b2cl');
+
+  var b2csHeader = ['Type', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount'];
+  var b2csRows = r.b2cs.map(function (x) { return [x.type, posLabel(x.posStateCode), '', x.rate, x.taxableValue, 0]; });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2csHeader].concat(b2csRows)), 'b2cs');
+
+  var hsnHeader = ['HSN', 'Description', 'UQC', 'Total Quantity', 'Total Value', 'Rate', 'Taxable Value', 'Integrated Tax Amount', 'Central Tax Amount', 'State/UT Tax Amount', 'Cess Amount'];
+  var hsnRows = r.hsn.map(function (x) { return [x.hsn, x.description, x.uqc, x.qty, x.totalValue, x.rate, x.taxableValue, x.igst, x.cgst, x.sgst, 0]; });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hsnHeader].concat(hsnRows)), 'hsn');
+
+  var srcHeader = ['Source', 'Doc Type', 'Invoice No.', 'Invoice Date', 'Place of Supply', 'HSN', 'Qty', 'Rate', 'Taxable Value', 'Tax Amount', 'Invoice Value', 'Warnings'];
+  var srcRows = r.allTxns.map(function (t) { return [t.source, t.docType, t.invoiceNo, t.invoiceDate, posLabel(t.posStateCode), t.hsn, t.qty, t.rate, t.taxableValue, t.taxAmount, t.invoiceValue, (t.warnings || []).join('; ')]; });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([srcHeader].concat(srcRows)), 'source data');
+
+  var period = document.getElementById('period').value.trim().replace(/[^\w-]+/g, '_') || 'period';
+  var fname = 'GSTR1_' + (r.sellerGstin || 'seller') + '_' + period + '.xlsx';
+  XLSX.writeFile(wb, fname);
+});
+
+</script>
+
+</body>
+</html>
