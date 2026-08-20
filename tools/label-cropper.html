@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VISUTRA Label Cropper — Flipkart, Meesho, Amazon A4-to-Thermal</title>
+<meta name="description" content="Crop Flipkart, Meesho and Amazon shipping label PDFs down to clean thermal-size labels. Runs entirely in your browser.">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --ink:#172436; --ink-soft:#3B4A5E;
+  --paper:#EFF1EA; --paper-2:#E4E7DD; --card:#FCFCF9;
+  --teal:#0E7C6B; --teal-dark:#0A5C4F;
+  --stamp:#C1401F; --line:#C9CDBF; --radius:3px;
+  --font-display:'Space Grotesk',sans-serif;
+  --font-body:'Inter',sans-serif;
+  --font-mono:'IBM Plex Mono',monospace;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webkit-font-smoothing:antialiased;}
+::selection{background:var(--teal);color:#fff;}
+
+.vlc-app{max-width:1180px;margin:0 auto;padding:0 20px 60px;}
+.vlc-topbar{display:flex;align-items:center;justify-content:space-between;padding:22px 0 18px;border-bottom:2px solid var(--ink);}
+.vlc-brand{display:flex;align-items:baseline;gap:10px;}
+.vlc-brand-mark{font-family:var(--font-display);font-weight:700;font-size:22px;letter-spacing:-0.02em;}
+.vlc-brand-sub{font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);border-left:1px solid var(--line);padding-left:10px;}
+.vlc-stamp{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;color:var(--stamp);border:1.5px solid var(--stamp);border-radius:20px;padding:4px 12px;transform:rotate(-3deg);text-transform:uppercase;white-space:nowrap;}
+
+.vlc-hero{padding:34px 0 26px;}
+.vlc-hero h1{font-family:var(--font-display);font-weight:700;font-size:clamp(26px,4vw,38px);line-height:1.08;letter-spacing:-0.02em;margin:0 0 10px;}
+.vlc-hero p{font-size:15px;color:var(--ink-soft);max-width:600px;margin:0;line-height:1.55;}
+
+/* platform picker */
+.vlc-platforms{display:flex;gap:10px;margin:26px 0 30px;flex-wrap:wrap;}
+.vlc-plat{
+  font-family:var(--font-mono);font-size:12px;letter-spacing:.04em;text-transform:uppercase;
+  border:1.5px solid var(--ink);background:var(--card);color:var(--ink);border-radius:20px;
+  padding:9px 18px;cursor:pointer;transition:all .12s ease;
+}
+.vlc-plat.active{background:var(--ink);color:#fff;}
+.vlc-plat .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;position:relative;top:-1px;}
+.vlc-plat[data-p="amazon"] .dot{background:#E8A32C;}
+.vlc-plat[data-p="flipkart"] .dot{background:#2874F0;}
+.vlc-plat[data-p="meesho"] .dot{background:#9F1D66;}
+.vlc-plat[data-p="custom"] .dot{background:var(--teal);}
+
+.vlc-bench{display:grid;grid-template-columns:340px 1fr;gap:34px;align-items:start;}
+@media (max-width:900px){.vlc-bench{grid-template-columns:1fr;}}
+
+/* dropzone */
+.vlc-drop{
+  border:1.5px dashed var(--line);border-radius:6px;padding:26px 18px;text-align:center;
+  background:var(--card);cursor:pointer;transition:border-color .15s ease, background .15s ease;
+}
+.vlc-drop.drag{border-color:var(--teal);background:#EAF3F1;}
+.vlc-drop b{display:block;font-family:var(--font-mono);font-size:12px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;}
+.vlc-drop span{font-size:12.5px;color:var(--ink-soft);}
+.vlc-drop input{display:none;}
+.vlc-filename{font-family:var(--font-mono);font-size:11.5px;color:var(--teal-dark);margin-top:10px;word-break:break-all;}
+
+.vlc-field{margin:16px 0;}
+.vlc-field label{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:6px;}
+.vlc-field label b{color:var(--ink);font-weight:600;}
+.vlc-field input[type=range]{width:100%;accent-color:var(--teal);}
+.vlc-field select{width:100%;padding:9px 10px;border:1.5px solid var(--ink);border-radius:var(--radius);background:var(--card);font-family:var(--font-body);font-size:13.5px;}
+
+.vlc-mode-toggle{display:flex;border:1.5px solid var(--ink);border-radius:20px;overflow:hidden;margin-bottom:6px;}
+.vlc-mode-toggle button{flex:1;background:var(--card);border:none;padding:9px 6px;font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;color:var(--ink-soft);}
+.vlc-mode-toggle button.active{background:var(--ink);color:#fff;}
+
+.vlc-btn{font-family:var(--font-mono);font-size:12.5px;letter-spacing:.05em;text-transform:uppercase;background:var(--ink);color:#fff;border:none;border-radius:var(--radius);padding:12px 20px;cursor:pointer;width:100%;margin-top:10px;transition:background .15s ease;}
+.vlc-btn:hover{background:var(--teal-dark);}
+.vlc-btn:disabled{background:#B7BCB2;cursor:not-allowed;}
+.vlc-btn.accent{background:var(--teal);}
+.vlc-btn.accent:hover{background:var(--teal-dark);}
+
+.vlc-help{font-family:var(--font-mono);font-size:11px;color:var(--ink-soft);line-height:1.6;margin-top:14px;padding:12px;background:var(--paper-2);border-radius:var(--radius);border-left:3px solid var(--teal);}
+
+/* preview stage */
+.vlc-stage{background:var(--paper-2);border:1.5px dashed var(--line);border-radius:6px;padding:20px;min-height:420px;display:flex;align-items:center;justify-content:center;position:relative;}
+.vlc-stage-tag{position:absolute;top:10px;left:12px;font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);}
+.vlc-canvas-wrap{position:relative;box-shadow:3px 3px 0 rgba(23,36,54,0.12);}
+#vlcPageCanvas{display:block;max-width:100%;height:auto;border:1.5px solid var(--ink);}
+.vlc-cropbox{position:absolute;border:2px dashed var(--stamp);background:rgba(193,64,31,0.06);pointer-events:none;}
+.vlc-cropbox::before{content:attr(data-label);position:absolute;top:-20px;left:0;font-family:var(--font-mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--stamp);white-space:nowrap;}
+
+.vlc-empty{font-family:var(--font-mono);font-size:12.5px;color:var(--ink-soft);text-align:center;}
+
+.vlc-status{font-family:var(--font-mono);font-size:11.5px;color:var(--teal-dark);margin-top:10px;min-height:16px;}
+.vlc-footer{margin-top:50px;padding-top:18px;border-top:1.5px solid var(--ink);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-family:var(--font-mono);font-size:11px;color:var(--ink-soft);}
+</style>
+</head>
+<body>
+
+<div class="vlc-app">
+  <div class="vlc-topbar">
+    <div class="vlc-brand">
+      <span class="vlc-brand-mark">VISUTRA</span>
+      <span class="vlc-brand-sub">Label Cropper</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:16px">
+      <a href="tools-home.html" style="font-family:var(--font-mono);font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft)">&larr; All Tools</a>
+      <div class="vlc-stamp">Free · Runs in-browser</div>
+    </div>
+  </div>
+
+  <div class="vlc-hero">
+    <h1>Crop A4 dispatch PDFs<br>to thermal-size labels.</h1>
+    <p>Upload the shipping-label PDF from Flipkart, Meesho or Amazon, calibrate the crop once per platform, and export a clean thermal-ready PDF. Your files never leave this browser.</p>
+  </div>
+
+  <div class="vlc-platforms" id="vlcPlatforms">
+    <button class="vlc-plat active" data-p="amazon"><span class="dot"></span>Amazon</button>
+    <button class="vlc-plat" data-p="flipkart"><span class="dot"></span>Flipkart</button>
+    <button class="vlc-plat" data-p="meesho"><span class="dot"></span>Meesho</button>
+    <button class="vlc-plat" data-p="custom"><span class="dot"></span>Custom</button>
+  </div>
+
+  <div class="vlc-bench">
+    <!-- LEFT: controls -->
+    <div>
+      <div class="vlc-drop" id="vlcDrop">
+        <input type="file" id="vlcFile" accept="application/pdf">
+        <b>Drop PDF here</b>
+        <span>or click to browse — Flipkart / Meesho / Amazon label PDF</span>
+        <div class="vlc-filename" id="vlcFilename"></div>
+      </div>
+
+      <div class="vlc-field">
+        <label>Labels per page</label>
+        <div class="vlc-mode-toggle">
+          <button class="active" data-mode="single" onclick="setMode('single')">1 per page</button>
+          <button data-mode="split" onclick="setMode('split')">2 stacked</button>
+        </div>
+      </div>
+
+      <div id="vlcTopCropFields">
+        <div class="vlc-field"><label>Top margin cut <b id="valTop">6%</b></label><input type="range" id="rngTop" min="0" max="60" value="6" oninput="updatePreview()"></div>
+        <div class="vlc-field"><label>Bottom margin cut <b id="valBottom">48%</b></label><input type="range" id="rngBottom" min="0" max="80" value="48" oninput="updatePreview()"></div>
+        <div class="vlc-field"><label>Left margin cut <b id="valLeft">3%</b></label><input type="range" id="rngLeft" min="0" max="40" value="3" oninput="updatePreview()"></div>
+        <div class="vlc-field"><label>Right margin cut <b id="valRight">3%</b></label><input type="range" id="rngRight" min="0" max="40" value="3" oninput="updatePreview()"></div>
+      </div>
+
+      <div id="vlcSplitGap" style="display:none;">
+        <div class="vlc-field"><label>Gap between the two labels <b id="valGap">2%</b></label><input type="range" id="rngGap" min="0" max="20" value="2" oninput="updatePreview()"></div>
+      </div>
+
+      <div class="vlc-field">
+        <label>Output paper size</label>
+        <select id="vlcOutSize">
+          <option value="native">Keep cropped size (recommended)</option>
+          <option value="4x6">Force 4 × 6 in</option>
+          <option value="3x5">Force 3 × 5 in</option>
+          <option value="4x4">Force 4 × 4 in</option>
+        </select>
+      </div>
+
+      <button class="vlc-btn accent" id="vlcProcessBtn" onclick="processPdf()" disabled>Crop &amp; download PDF</button>
+      <div class="vlc-status" id="vlcStatus"></div>
+
+      <div class="vlc-help" id="vlcHelpText">
+        Amazon labels usually sit in the top ~45–55% of the page with an invoice underneath — the sliders above are a starting point. Drag them until the dashed box on the right hugs just the barcode label, then process. Your setting is remembered for next time.
+      </div>
+    </div>
+
+    <!-- RIGHT: preview -->
+    <div class="vlc-stage">
+      <span class="vlc-stage-tag">Preview — page 1</span>
+      <div id="vlcPreviewMount"><div class="vlc-empty">Upload a PDF to see the crop preview here.</div></div>
+    </div>
+  </div>
+
+  <div class="vlc-footer">
+    <span>VISUTRA Label Cropper — free tool, 100% client-side.</span>
+    <span>visutra.in</span>
+  </div>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js".replace('pdf.min.js','pdf.worker.min.js');
+
+const PRESETS = {
+  amazon:   { top:6,  bottom:48, left:3, right:3, gap:2, mode:'single',
+              help:"Amazon labels usually sit in the top ~45–55% of the page with an invoice underneath — the sliders above are a starting point. Drag them until the dashed box hugs just the barcode label, then process." },
+  flipkart: { top:4,  bottom:50, left:3, right:3, gap:2, mode:'single',
+              help:"Flipkart's courier label typically occupies the upper half of the page, with the tax invoice below. Adjust the bottom cut first so the box stops right below the barcode block." },
+  meesho:   { top:2,  bottom:2,  left:3, right:3, gap:3, mode:'split',
+              help:"Meesho dispatch sheets often stack two labels per page. Use '2 stacked' mode — top/bottom cuts trim the outer edges, and the gap slider splits the middle." },
+  custom:   { top:5,  bottom:5,  left:3, right:3, gap:2, mode:'single',
+              help:"Set your own crop manually and fine-tune against the live preview." }
+};
+
+let currentPlatform = 'amazon';
+let currentMode = 'single';
+let pdfBytes = null;
+let pdfFile = null;
+let pdfJsDoc = null;
+let pageAspect = 1 / 1.4142; // fallback A4 portrait ratio (w/h)
+
+function loadStoredPreset(p){
+  try{
+    const raw = localStorage.getItem('vlc_preset_' + p);
+    if(raw) return JSON.parse(raw);
+  }catch(e){}
+  return null;
+}
+function storePreset(p, vals){
+  try{ localStorage.setItem('vlc_preset_' + p, JSON.stringify(vals)); }catch(e){}
+}
+
+function applyPreset(p){
+  const stored = loadStoredPreset(p);
+  const preset = stored || PRESETS[p];
+  document.getElementById('rngTop').value = preset.top;
+  document.getElementById('rngBottom').value = preset.bottom;
+  document.getElementById('rngLeft').value = preset.left;
+  document.getElementById('rngRight').value = preset.right;
+  document.getElementById('rngGap').value = preset.gap;
+  document.getElementById('vlcHelpText').textContent = PRESETS[p].help;
+  setMode(preset.mode || 'single');
+  updateLabels();
+  updatePreview();
+}
+
+document.getElementById('vlcPlatforms').addEventListener('click', e=>{
+  const btn = e.target.closest('.vlc-plat');
+  if(!btn) return;
+  document.querySelectorAll('.vlc-plat').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  currentPlatform = btn.dataset.p;
+  applyPreset(currentPlatform);
+});
+
+function setMode(mode){
+  currentMode = mode;
+  document.querySelectorAll('.vlc-mode-toggle button').forEach(b=>b.classList.toggle('active', b.dataset.mode===mode));
+  document.getElementById('vlcSplitGap').style.display = mode==='split' ? 'block' : 'none';
+  document.getElementById('rngBottom').parentElement.querySelector('label').firstChild.textContent =
+    mode==='split' ? 'Bottom margin cut ' : 'Bottom margin cut ';
+  updatePreview();
+}
+
+function updateLabels(){
+  document.getElementById('valTop').textContent = document.getElementById('rngTop').value + '%';
+  document.getElementById('valBottom').textContent = document.getElementById('rngBottom').value + '%';
+  document.getElementById('valLeft').textContent = document.getElementById('rngLeft').value + '%';
+  document.getElementById('valRight').textContent = document.getElementById('rngRight').value + '%';
+  document.getElementById('valGap').textContent = document.getElementById('rngGap').value + '%';
+}
+
+['rngTop','rngBottom','rngLeft','rngRight','rngGap'].forEach(id=>{
+  document.getElementById(id).addEventListener('input', ()=>{
+    updateLabels();
+    storePreset(currentPlatform, getCropValues());
+  });
+});
+
+function getCropValues(){
+  return {
+    top: parseFloat(document.getElementById('rngTop').value),
+    bottom: parseFloat(document.getElementById('rngBottom').value),
+    left: parseFloat(document.getElementById('rngLeft').value),
+    right: parseFloat(document.getElementById('rngRight').value),
+    gap: parseFloat(document.getElementById('rngGap').value),
+    mode: currentMode
+  };
+}
+
+/* ---------------- File handling ---------------- */
+const drop = document.getElementById('vlcDrop');
+const fileInput = document.getElementById('vlcFile');
+drop.addEventListener('click', ()=> fileInput.click());
+['dragover','dragenter'].forEach(evt=> drop.addEventListener(evt, e=>{ e.preventDefault(); drop.classList.add('drag'); }));
+['dragleave','drop'].forEach(evt=> drop.addEventListener(evt, e=>{ e.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', e=>{
+  if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e=>{
+  if(e.target.files.length) handleFile(e.target.files[0]);
+});
+
+async function handleFile(file){
+  if(file.type !== 'application/pdf'){ alert('Please upload a PDF file.'); return; }
+  pdfFile = file;
+  document.getElementById('vlcFilename').textContent = file.name;
+  pdfBytes = new Uint8Array(await file.arrayBuffer());
+  document.getElementById('vlcProcessBtn').disabled = false;
+  await renderPreview();
+}
+
+async function renderPreview(){
+  const mount = document.getElementById('vlcPreviewMount');
+  mount.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.className = 'vlc-canvas-wrap';
+  const canvas = document.createElement('canvas');
+  canvas.id = 'vlcPageCanvas';
+  wrap.appendChild(canvas);
+  mount.appendChild(wrap);
+
+  const loadingTask = pdfjsLib.getDocument({ data: pdfBytes.slice() });
+  pdfJsDoc = await loadingTask.promise;
+  const page = await pdfJsDoc.getPage(1);
+  const viewport = page.getViewport({ scale: 1.4 });
+  canvas.width = viewport.width; canvas.height = viewport.height;
+  pageAspect = viewport.width / viewport.height;
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  drawCropOverlay(wrap, canvas);
+}
+
+function drawCropOverlay(wrap, canvas){
+  wrap.querySelectorAll('.vlc-cropbox').forEach(el=>el.remove());
+  const v = getCropValues();
+  const w = canvas.clientWidth || canvas.width;
+  const h = canvas.clientHeight || canvas.height;
+
+  function box(topPct, bottomPct, label){
+    const el = document.createElement('div');
+    el.className = 'vlc-cropbox';
+    el.dataset.label = label;
+    const leftPx = w * (v.left/100);
+    const rightPx = w * (v.right/100);
+    const topPx = h * (topPct/100);
+    const bottomPx = h * (bottomPct/100);
+    el.style.left = leftPx + 'px';
+    el.style.right = rightPx + 'px';
+    el.style.top = topPx + 'px';
+    el.style.bottom = bottomPx + 'px';
+    wrap.appendChild(el);
+  }
+
+  if(v.mode === 'single'){
+    box(v.top, v.bottom, 'Label region');
+  } else {
+    const midGapHalf = v.gap/2;
+    const availTop = v.top;
+    const availBottom = v.bottom;
+    const midline = 50;
+    box(availTop, 100-(midline-midGapHalf), 'Label 1');
+    box(midline+midGapHalf, availBottom, 'Label 2');
+  }
+}
+
+function updatePreview(){
+  updateLabels();
+  const canvas = document.getElementById('vlcPageCanvas');
+  if(!canvas) return;
+  const wrap = canvas.parentElement;
+  drawCropOverlay(wrap, canvas);
+}
+
+/* ---------------- Processing with pdf-lib ---------------- */
+const { PDFDocument } = PDFLib;
+
+const OUT_SIZES = {
+  '4x6': [288, 432],
+  '3x5': [216, 360],
+  '4x4': [288, 288]
+};
+
+async function processPdf(){
+  if(!pdfBytes){ alert('Upload a PDF first.'); return; }
+  const btn = document.getElementById('vlcProcessBtn');
+  const status = document.getElementById('vlcStatus');
+  btn.disabled = true;
+  status.textContent = 'Reading PDF…';
+
+  try{
+    const srcDoc = await PDFDocument.load(pdfBytes);
+    const outDoc = await PDFDocument.create();
+    const srcPages = srcDoc.getPages();
+    const embedded = await outDoc.embedPages(srcPages);
+    const v = getCropValues();
+    const outSizeKey = document.getElementById('vlcOutSize').value;
+
+    status.textContent = `Cropping ${srcPages.length} page(s)…`;
+
+    for(let i=0;i<embedded.length;i++){
+      const ep = embedded[i];
+      const pw = ep.width, ph = ep.height;
+
+      const regions = [];
+      if(v.mode === 'single'){
+        regions.push({ topPct:v.top, bottomPct:v.bottom });
+      } else {
+        const midGapHalf = v.gap/2;
+        regions.push({ topPct:v.top, bottomPct:100-(50-midGapHalf) });
+        regions.push({ topPct:50+midGapHalf, bottomPct:v.bottom });
+      }
+
+      for(const r of regions){
+        const leftPct = v.left, rightPct = v.right;
+        const cropW = pw * (1 - (leftPct+rightPct)/100);
+        const cropH = ph * (1 - (r.topPct+r.bottomPct)/100);
+        if(cropW <= 1 || cropH <= 1) continue;
+
+        let pageW = cropW, pageH = cropH, scale = 1;
+        if(outSizeKey !== 'native' && OUT_SIZES[outSizeKey]){
+          [pageW, pageH] = OUT_SIZES[outSizeKey];
+          scale = Math.min(pageW/cropW, pageH/cropH);
+        }
+
+        const newPage = outDoc.addPage([pageW, pageH]);
+        const drawW = pw*scale, drawH = ph*scale;
+        const offsetX = -(pw*(leftPct/100))*scale + (pageW - cropW*scale)/2;
+        const offsetY = -(ph*(r.bottomPct/100))*scale + (pageH - cropH*scale)/2;
+
+        newPage.drawPage(ep, { x: offsetX, y: offsetY, width: drawW, height: drawH });
+      }
+    }
+
+    status.textContent = 'Generating PDF…';
+    const outBytes = await outDoc.save();
+    const blob = new Blob([outBytes], { type:'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = currentPlatform;
+    a.href = url;
+    a.download = `visutra-${stamp}-labels-cropped.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+    status.textContent = `Done — ${outDoc.getPageCount()} label(s) exported.`;
+  }catch(err){
+    console.error(err);
+    status.textContent = 'Something went wrong — check the file is a valid PDF.';
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+/* init */
+applyPreset('amazon');
+</script>
+</body>
+</html>
