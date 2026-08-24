@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in | VISUTRA GST Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+<script src="https://www.google.com/recaptcha/api.js" async defer></script>
+<style>
+  .wrap{max-width:460px;margin:50px auto;padding:0 20px}
+  .logo-row{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:26px}
+  .logo-row img{height:36px;width:36px;border-radius:8px}
+  .logo-row span{font-family:var(--display);font-size:20px}
+  .tabs{display:flex;gap:8px;margin-bottom:20px}
+  .tabs button{flex:1;padding:10px;border-radius:999px;border:1.5px solid var(--thread);background:#fff;font-family:var(--mono);font-size:12.5px;cursor:pointer}
+  .tabs button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .google-btn{width:100%;padding:11px;border-radius:var(--radius-sm);border:1.5px solid var(--thread);background:#fff;display:flex;align-items:center;justify-content:center;gap:10px;font-family:var(--body);font-weight:600;font-size:14.5px;cursor:pointer;margin-bottom:16px}
+  .google-btn:hover{background:var(--ivory)}
+  .divider{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;margin:16px 0}
+  .divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--thread)}
+  .verify-box{text-align:center;padding:20px 0}
+  .g-recaptcha{margin:14px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo-row"><img src="../assets/logo.png" alt="VISUTRA"><span>VISUTRA Billing</span></div>
+
+  <div class="card" id="authCard">
+    <div class="tabs">
+      <button id="tabSignin" class="active" onclick="setMode('signin')">Sign In</button>
+      <button id="tabSignup" onclick="setMode('signup')">Sign Up</button>
+    </div>
+
+    <button class="google-btn" onclick="googleAuth()">
+      <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84c-.21 1.13-.84 2.09-1.8 2.73v2.27h2.91c1.7-1.57 2.69-3.88 2.69-6.64z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.91-2.27c-.81.54-1.84.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33C2.44 15.98 5.48 18 9 18z"/><path fill="#FBBC05" d="M3.96 10.7c-.18-.54-.28-1.11-.28-1.7s.1-1.16.28-1.7V4.97H.96A8.99 8.99 0 000 9c0 1.45.35 2.83.96 4.03l3-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0 5.48 0 2.44 2.02.96 4.97l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/></svg>
+      Continue with Google
+    </button>
+    <div class="divider">or with email</div>
+
+    <!-- SIGN IN fields -->
+    <div id="signinFields">
+      <div class="field"><label for="siIdentifier">Username or Email</label><input type="text" id="siIdentifier" placeholder="you@business.com or your username"></div>
+      <div class="field"><label for="siPw">Password</label><input type="password" id="siPw"></div>
+    </div>
+
+    <!-- SIGN UP fields -->
+    <div id="signupFields" class="hidden">
+      <div class="field"><label for="suName">Full name</label><input type="text" id="suName"></div>
+      <div class="grid2">
+        <div class="field"><label for="suBusinessType">Type of business</label>
+          <select id="suBusinessType">
+            <option value="">Select…</option>
+            <option>Manufacturer</option>
+            <option>Trader / Reseller</option>
+            <option>Retailer</option>
+            <option>Wholesaler</option>
+            <option>Service Provider</option>
+            <option>E-commerce Seller</option>
+            <option>Freelancer / Consultant</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="field"><label for="suMobile">Mobile number</label><input type="tel" id="suMobile" placeholder="10-digit mobile"></div>
+      </div>
+      <div class="field"><label for="suUsername">Choose a username</label><input type="text" id="suUsername" placeholder="letters, numbers, underscores only" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,'').toLowerCase()"></div>
+      <div class="field"><label for="suEmail">Email</label><input type="email" id="suEmail"></div>
+      <div class="field"><label for="suPw">Password</label><input type="password" id="suPw" placeholder="At least 6 characters"></div>
+      <div class="field"><label for="suPwConfirm">Confirm password</label><input type="password" id="suPwConfirm"></div>
+    </div>
+
+    <div class="g-recaptcha" id="recaptchaBox" data-sitekey=""></div>
+
+    <button class="btn primary" style="width:100%" id="submitBtn" onclick="submitAuth()">Sign In</button>
+    <p style="text-align:center;margin-top:12px"><a href="#" id="forgotLink" onclick="forgotPassword();return false" style="font-size:13px">Forgot password?</a></p>
+    <p class="msg" id="authMsg"></p>
+  </div>
+
+  <div class="card hidden" id="verifyCard">
+    <div class="verify-box">
+      <h2>Check your email</h2>
+      <p class="sub">We sent a verification link to <b id="verifyEmail"></b>. Click it, then come back here and sign in.</p>
+      <button class="btn" onclick="resendVerification()">Resend verification email</button>
+      <p class="msg" id="verifyMsg"></p>
+    </div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script>
+let mode = 'signin';
+
+function postLoginTarget(){
+  const params = new URLSearchParams(window.location.search);
+  const r = params.get('redirect');
+  return r ? decodeURIComponent(r) : 'app.html';
+}
+
+// Fill in the reCAPTCHA site key from config (kept out of the HTML so the
+// same placeholder pattern as the rest of the site config applies).
+document.addEventListener('DOMContentLoaded', () => {
+  const box = document.getElementById('recaptchaBox');
+  if(typeof RECAPTCHA_SITE_KEY !== 'undefined' && RECAPTCHA_SITE_KEY && RECAPTCHA_SITE_KEY.indexOf('PASTE_YOUR') !== 0){
+    box.setAttribute('data-sitekey', RECAPTCHA_SITE_KEY);
+  } else {
+    box.style.display = 'none'; // not configured yet — don't block the site owner during setup
+  }
+});
+function recaptchaOk(){
+  const box = document.getElementById('recaptchaBox');
+  if(box.style.display === 'none') return true; // not configured yet, fail open
+  return typeof grecaptcha !== 'undefined' && grecaptcha.getResponse() !== '';
+}
+
+function setMode(m){
+  mode = m;
+  document.getElementById('tabSignin').classList.toggle('active', m==='signin');
+  document.getElementById('tabSignup').classList.toggle('active', m==='signup');
+  document.getElementById('signinFields').classList.toggle('hidden', m!=='signin');
+  document.getElementById('signupFields').classList.toggle('hidden', m!=='signup');
+  document.getElementById('submitBtn').textContent = m==='signin' ? 'Sign In' : 'Create Account';
+  document.getElementById('authMsg').textContent = '';
+}
+
+function showMsg(text, ok){
+  const el = document.getElementById('authMsg');
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+
+/* ---------------- Location capture (best-effort, never blocks signup) ---------------- */
+async function captureLocation(){
+  if(!navigator.geolocation) return null;
+  try{
+    const pos = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {timeout: 6000});
+    });
+    const {latitude, longitude} = pos.coords;
+    let place = null;
+    try{
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
+      const data = await res.json();
+      place = data.address ? {
+        city: data.address.city || data.address.town || data.address.village || '',
+        state: data.address.state || '',
+        country: data.address.country || ''
+      } : null;
+    }catch(e){ /* reverse geocoding is a nice-to-have; ignore failures */ }
+    return { lat: latitude, lng: longitude, ...place };
+  }catch(e){
+    return null; // permission denied or unavailable — signup continues without it
+  }
+}
+
+/* ---------------- Username <-> email resolution ---------------- */
+async function resolveEmailForSignin(identifier){
+  if(identifier.includes('@')) return identifier;
+  const doc = await db.collection('usernames').doc(identifier.toLowerCase()).get();
+  if(!doc.exists) throw new Error('No account found with that username.');
+  return doc.data().email;
+}
+
+async function googleAuth(){
+  const provider = new firebase.auth.GoogleAuthProvider();
+  try{
+    const result = await auth.signInWithPopup(provider);
+    const complete = await ensureUserDoc(result.user);
+    window.location.href = complete ? postLoginTarget() : 'complete-profile.html?redirect=' + encodeURIComponent(postLoginTarget());
+  }catch(err){ showMsg(err.message, false); }
+}
+
+async function submitAuth(){
+  if(!recaptchaOk()){ showMsg('Please confirm the "I\'m not a robot" checkbox.', false); return; }
+
+  if(mode === 'signup'){
+    const name = document.getElementById('suName').value.trim();
+    const businessType = document.getElementById('suBusinessType').value;
+    const mobile = document.getElementById('suMobile').value.trim();
+    const username = document.getElementById('suUsername').value.trim().toLowerCase();
+    const email = document.getElementById('suEmail').value.trim();
+    const pw = document.getElementById('suPw').value;
+    const pwConfirm = document.getElementById('suPwConfirm').value;
+
+    if(!name || !businessType || !mobile || !username || !email || !pw){ showMsg('Please fill in every field.', false); return; }
+    if(!/^[a-z0-9_]{3,20}$/.test(username)){ showMsg('Username must be 3–20 characters: letters, numbers, underscores only.', false); return; }
+    if(pw !== pwConfirm){ showMsg('Passwords do not match.', false); return; }
+    if(pw.length < 6){ showMsg('Password must be at least 6 characters.', false); return; }
+
+    showMsg('Checking username availability…', true);
+    const usernameDoc = await db.collection('usernames').doc(username).get();
+    if(usernameDoc.exists){ showMsg('That username is already taken — please choose another.', false); return; }
+
+    try{
+      showMsg('Creating your account…', true);
+      const cred = await auth.createUserWithEmailAndPassword(email, pw);
+      const location = await captureLocation();
+
+      await db.collection('users').doc(cred.user.uid).set({
+        email, fullName: name, businessType, mobileNumber: mobile, username,
+        location: location || null,
+        profileComplete: true,
+        businessName: '', gstin: '', address: '', state: '', stateCode: '', phone: mobile, signature: '',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      await db.collection('usernames').doc(username).set({ uid: cred.user.uid, email });
+
+      await cred.user.sendEmailVerification();
+      await auth.signOut();
+      document.getElementById('verifyEmail').textContent = email;
+      document.getElementById('authCard').classList.add('hidden');
+      document.getElementById('verifyCard').classList.remove('hidden');
+    }catch(err){ showMsg(err.message, false); }
+
+  } else {
+    const identifier = document.getElementById('siIdentifier').value.trim();
+    const pw = document.getElementById('siPw').value;
+    if(!identifier || !pw){ showMsg('Enter your username/email and password.', false); return; }
+    try{
+      const email = await resolveEmailForSignin(identifier);
+      const cred = await auth.signInWithEmailAndPassword(email, pw);
+      if(!cred.user.emailVerified && cred.user.providerData.some(p=>p.providerId==='password')){
+        await auth.signOut();
+        document.getElementById('verifyEmail').textContent = email;
+        document.getElementById('authCard').classList.add('hidden');
+        document.getElementById('verifyCard').classList.remove('hidden');
+        return;
+      }
+      const complete = await ensureUserDoc(cred.user);
+      window.location.href = complete ? postLoginTarget() : 'complete-profile.html?redirect=' + encodeURIComponent(postLoginTarget());
+    }catch(err){ showMsg(err.message, false); }
+  }
+}
+
+async function forgotPassword(){
+  const identifier = mode === 'signin' ? document.getElementById('siIdentifier').value.trim() : document.getElementById('suEmail').value.trim();
+  if(!identifier){ showMsg('Enter your email (or username) above first, then click "Forgot password?".', false); return; }
+  try{
+    const email = await resolveEmailForSignin(identifier);
+    await auth.sendPasswordResetEmail(email);
+    showMsg('Password reset email sent.', true);
+  }catch(err){ showMsg(err.message, false); }
+}
+
+async function resendVerification(){
+  const email = document.getElementById('verifyEmail').textContent;
+  const pw = document.getElementById('suPw').value || document.getElementById('siPw').value;
+  const msgEl = document.getElementById('verifyMsg');
+  try{
+    const cred = await auth.signInWithEmailAndPassword(email, pw);
+    await cred.user.sendEmailVerification();
+    await auth.signOut();
+    msgEl.textContent = 'Verification email re-sent.';
+    msgEl.className = 'msg ok';
+  }catch(err){
+    msgEl.textContent = 'Could not resend automatically — please sign in again to trigger it.';
+    msgEl.className = 'msg error';
+  }
+}
+
+// Returns true if the profile is already complete (so callers know whether
+// to route into the app directly or first to complete-profile.html).
+async function ensureUserDoc(user){
+  const ref = db.collection('users').doc(user.uid);
+  const snap = await ref.get();
+  if(!snap.exists){
+    await ref.set({
+      email: user.email,
+      fullName: user.displayName || '',
+      businessName: '', gstin: '', address: '', state: '', stateCode: '', phone: '', signature: '',
+      businessType: '', mobileNumber: '', username: '', location: null,
+      profileComplete: false,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    return false;
+  }
+  return !!snap.data().profileComplete;
+}
+
+// If already signed in and verified, skip straight to the app (or profile completion).
+auth.onAuthStateChanged(async user => {
+  if(user && (user.emailVerified || user.providerData.some(p=>p.providerId==='google.com'))){
+    const snap = await db.collection('users').doc(user.uid).get();
+    const complete = snap.exists && snap.data().profileComplete;
+    window.location.href = complete ? postLoginTarget() : 'complete-profile.html?redirect=' + encodeURIComponent(postLoginTarget());
+  }
+});
+</script>
+</body>
+</html>

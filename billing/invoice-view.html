@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invoice | VISUTRA</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#1F1B16;--paprika:#C1440E;--indigo:#2E4374;--ivory:#F7F1E3;--thread:#E4D8BD;--muted:#6B6255;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'IBM Plex Sans',sans-serif;background:var(--ivory);color:var(--ink)}
+  .wrap{max-width:760px;margin:0 auto;padding:32px 20px}
+  .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+  .top a{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);font-weight:700}
+  .top img{height:28px;width:28px;border-radius:6px}
+  .invoice-card{background:#fff;border:1px solid var(--thread);border-radius:14px;padding:32px}
+  .badge{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:4px 10px;border-radius:999px;background:var(--ivory);color:var(--muted);margin-bottom:14px}
+  h1{font-size:20px;margin:0 0 4px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:20px 0}
+  .box h3{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 8px}
+  .box p{margin:0;font-size:14px;line-height:1.5}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:10px}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--thread)}
+  th{font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-transform:uppercase;color:var(--muted)}
+  .totals{margin-top:16px;text-align:right}
+  .totals div{margin:4px 0}
+  .grand{font-weight:700;font-size:17px;border-top:1.5px solid var(--ink);padding-top:8px;margin-top:8px}
+  .btn{display:inline-block;margin-top:20px;padding:11px 22px;border-radius:999px;background:var(--paprika);color:#fff;text-decoration:none;font-weight:600;font-size:14px}
+  .sig{margin-top:30px;text-align:right}
+  .sig img{max-height:50px}
+  .loading,.errbox{text-align:center;padding:60px 20px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a href="../index.html"><img src="../assets/logo.png" alt="VISUTRA">VISUTRA</a>
+  </div>
+  <div id="content" class="loading">Loading invoice…</div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script>
+let currentInvoiceData = null;
+
+async function loadInvoice(){
+  const params = new URLSearchParams(window.location.search);
+  const id = params.get('id');
+  const content = document.getElementById('content');
+  if(!id){ content.innerHTML = '<div class="errbox">No invoice specified.</div>'; return; }
+
+  try{
+    const snap = await db.collection('public_invoices').doc(id).get();
+    if(!snap.exists){ content.innerHTML = '<div class="errbox">Invoice not found.</div>'; return; }
+    const inv = snap.data();
+    currentInvoiceData = inv;
+    render(inv);
+  }catch(err){
+    content.innerHTML = '<div class="errbox">Could not load this invoice.</div>';
+  }
+}
+
+function fmt(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function render(inv){
+  const sameState = inv.sameState;
+  const rows = (inv.items||[]).filter(li=>li.productId).map((li,i)=>{
+    const taxAmt = li.taxable * (li.gstRate||0)/100;
+    return `<tr><td>${i+1}</td><td>${esc(li.name)}<br><span style="color:#6B6255;font-size:11px">HSN ${esc(li.hsn)}</span></td>
+      <td>${li.qty} ${esc(li.unit)}</td><td>₹${fmt(li.rate)}</td><td>₹${fmt(li.taxable)}</td>
+      <td>${li.gstRate}%<br>₹${fmt(taxAmt)}</td><td>₹${fmt(li.taxable+taxAmt)}</td></tr>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    <div class="invoice-card">
+      <span class="badge">Tax Invoice</span>
+      <h1>Invoice ${esc(inv.invoiceNo)}</h1>
+      <p style="color:var(--muted);font-size:13px;margin:0">Dated ${esc(inv.date)}</p>
+
+      <div class="grid2">
+        <div class="box"><h3>From</h3>
+          <p><b>${esc(inv.business.businessName)}</b><br>${esc(inv.business.address)}<br>
+          GSTIN: ${esc(inv.business.gstin)}<br>${esc(inv.business.state)}</p>
+        </div>
+        <div class="box"><h3>Bill To</h3>
+          <p><b>${esc(inv.customer.name)}</b><br>${esc(inv.customer.address||'')}<br>
+          ${inv.customer.gstin ? 'GSTIN: '+esc(inv.customer.gstin)+'<br>' : ''}${esc(inv.customer.state||'')}</p>
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>#</th><th>Item</th><th>Qty</th><th>Rate</th><th>Taxable</th><th>${sameState?'CGST+SGST':'IGST'}</th><th>Total</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+
+      <div class="totals">
+        <div>Taxable Value: ₹${fmt(inv.subtotal)}</div>
+        ${sameState
+          ? `<div>CGST: ₹${fmt(inv.cgst)}</div><div>SGST: ₹${fmt(inv.sgst)}</div>`
+          : `<div>IGST: ₹${fmt(inv.igst)}</div>`}
+        <div class="grand">Grand Total: ₹${fmt(inv.grandTotal)}</div>
+      </div>
+
+      <div class="sig">
+        <p style="margin:0 0 4px;font-size:13px">For ${esc(inv.business.businessName)}</p>
+        ${inv.business.signature ? `<img src="${inv.business.signature}">` : ''}
+        <p style="margin:4px 0 0;font-size:12px;color:var(--muted)">Authorized Signatory</p>
+      </div>
+
+      <p style="font-size:11px;color:var(--muted);margin-top:24px">This is a computer-generated invoice. Tax payable on reverse charge basis: ${inv.reverseCharge ? 'Yes' : 'No'}.</p>
+
+      <button class="btn" onclick="downloadInvoicePdf()">Download PDF</button>
+    </div>
+  `;
+}
+
+function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+
+// Identical layout to the one the business owner downloads from their dashboard —
+// generated fresh from this page's saved data, so no file storage is needed
+// anywhere for buyers to get a PDF copy.
+function buildInvoicePDF(inv){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:'pt', format:'a4'});
+  const pageW = doc.internal.pageSize.getWidth();
+  let y = 40;
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(16);
+  doc.text('TAX INVOICE', pageW/2, y, {align:'center'});
+  y += 14;
+  doc.setFontSize(9); doc.setFont('helvetica','normal');
+  doc.text('Original for Recipient', pageW/2, y, {align:'center'});
+  y += 24;
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(11);
+  doc.text(inv.business.businessName || '', 40, y);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+  y += 14;
+  const bizAddrLines = doc.splitTextToSize(inv.business.address || '', 250);
+  doc.text(bizAddrLines, 40, y); y += bizAddrLines.length * 12;
+  doc.text(`GSTIN: ${inv.business.gstin || ''}`, 40, y); y += 12;
+  doc.text(`State: ${inv.business.state || ''} (${inv.business.stateCode || ''})`, 40, y);
+
+  let yR = 78;
+  doc.setFont('helvetica','bold'); doc.text('Invoice No:', 330, yR); doc.setFont('helvetica','normal'); doc.text(inv.invoiceNo, 410, yR); yR += 14;
+  doc.setFont('helvetica','bold'); doc.text('Invoice Date:', 330, yR); doc.setFont('helvetica','normal'); doc.text(inv.date, 410, yR); yR += 14;
+  doc.setFont('helvetica','bold'); doc.text('Reverse charge:', 330, yR); doc.setFont('helvetica','normal'); doc.text(inv.reverseCharge ? 'Yes' : 'No', 410, yR); yR += 14;
+  doc.setFont('helvetica','bold'); doc.text('Place of supply:', 330, yR); doc.setFont('helvetica','normal');
+  doc.text(`${inv.customer.state || ''} (${inv.customer.stateCode || ''})`, 410, yR);
+
+  y = Math.max(y, yR) + 26;
+  doc.setDrawColor(200); doc.line(40, y, pageW-40, y); y += 18;
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.text('Bill To:', 40, y); y += 14;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+  doc.text(inv.customer.name || '', 40, y); y += 12;
+  const custAddrLines = doc.splitTextToSize(inv.customer.address || '', 300);
+  doc.text(custAddrLines, 40, y); y += custAddrLines.length * 12;
+  if(inv.customer.gstin){ doc.text(`GSTIN: ${inv.customer.gstin}`, 40, y); y += 12; }
+  doc.text(`State: ${inv.customer.state || ''}`, 40, y);
+  y += 22;
+
+  const sameState = inv.sameState;
+  const head = sameState
+    ? [['#','Description','HSN','Qty','Unit','Rate','Taxable','CGST','SGST','Total']]
+    : [['#','Description','HSN','Qty','Unit','Rate','Taxable','IGST','Total']];
+
+  const body = inv.items.filter(li => li.productId).map((li, i) => {
+    const taxable = li.taxable;
+    const taxAmt = taxable * (li.gstRate||0) / 100;
+    if(sameState){
+      const half = taxAmt/2;
+      return [i+1, li.name, li.hsn, li.qty, li.unit, fmtMoney(li.rate), fmtMoney(taxable), fmtMoney(half), fmtMoney(half), fmtMoney(taxable+taxAmt)];
+    } else {
+      return [i+1, li.name, li.hsn, li.qty, li.unit, fmtMoney(li.rate), fmtMoney(taxable), fmtMoney(taxAmt), fmtMoney(taxable+taxAmt)];
+    }
+  });
+
+  doc.autoTable({ head, body, startY: y, styles:{fontSize:8.5, cellPadding:4}, headStyles:{fillColor:[46,67,116]}, margin:{left:40,right:40} });
+  y = doc.lastAutoTable.finalY + 20;
+
+  const totalsX = pageW - 220;
+  doc.setFontSize(9.5);
+  doc.text('Taxable Value:', totalsX, y); doc.text(fmtMoney(inv.subtotal), pageW-40, y, {align:'right'}); y += 14;
+  if(sameState){
+    doc.text('CGST:', totalsX, y); doc.text(fmtMoney(inv.cgst), pageW-40, y, {align:'right'}); y += 14;
+    doc.text('SGST:', totalsX, y); doc.text(fmtMoney(inv.sgst), pageW-40, y, {align:'right'}); y += 14;
+  } else {
+    doc.text('IGST:', totalsX, y); doc.text(fmtMoney(inv.igst), pageW-40, y, {align:'right'}); y += 14;
+  }
+  doc.setFont('helvetica','bold'); doc.setFontSize(11);
+  doc.text('Grand Total:', totalsX, y); doc.text('Rs. ' + fmtMoney(inv.grandTotal), pageW-40, y, {align:'right'});
+  y += 34;
+
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
+  doc.text('Tax is payable on reverse charge basis: ' + (inv.reverseCharge ? 'Yes' : 'No'), 40, y);
+  doc.text('This is a computer-generated invoice.', 40, y+12);
+
+  const sigY = y - 10;
+  doc.setFontSize(9);
+  doc.text(`For ${inv.business.businessName || ''}`, pageW-160, sigY, {align:'center'});
+  if(inv.business.signature){
+    try{ doc.addImage(inv.business.signature, 'PNG', pageW-210, sigY+8, 100, 40); }catch(e){}
+  }
+  doc.text('Authorized Signatory', pageW-160, sigY+56, {align:'center'});
+
+  return doc.output('blob');
+}
+
+function downloadInvoicePdf(){
+  if(!currentInvoiceData) return;
+  const blob = buildInvoicePDF(currentInvoiceData);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Invoice-${(currentInvoiceData.invoiceNo||'invoice').replace('/','-')}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+loadInvoice();
+</script>
+</body>
+</html>

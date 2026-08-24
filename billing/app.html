@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GST Billing | VISUTRA</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"><b>VISUTRA Billing</b></a>
+  <div id="userMenuMount"></div>
+</div>
+
+<div class="shell">
+  <div class="sidebar">
+    <a href="#profile" class="nav-link active" data-view="profile">Business Profile</a>
+    <a href="#products" class="nav-link" data-view="products">Products</a>
+    <a href="#customers" class="nav-link" data-view="customers">Customers</a>
+    <a href="#new-invoice" class="nav-link" data-view="new-invoice">New Invoice</a>
+    <a href="#invoices" class="nav-link" data-view="invoices">Invoice History</a>
+    <a href="#gstr1" class="nav-link" data-view="gstr1">GSTR-1 Filing</a>
+  </div>
+
+  <div class="main">
+
+    <!-- BUSINESS PROFILE -->
+    <div id="view-profile" class="view">
+      <div class="card">
+        <h2>Business Profile</h2>
+        <p class="sub">This information appears on every invoice you generate. Fill it in before creating your first invoice.</p>
+        <div class="grid2">
+          <div class="field"><label>Business name</label><input id="bizName"></div>
+          <div class="field"><label>GSTIN</label><input id="bizGstin" placeholder="e.g. 09BVHPP4321G1ZJ" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('bizGstin','bizGstinMsg','bizState')"><p class="msg" id="bizGstinMsg"></p></div>
+        </div>
+        <div class="field"><label>Address</label><textarea id="bizAddress"></textarea></div>
+        <div class="grid2">
+          <div class="field"><label>State</label><select id="bizState"></select></div>
+          <div class="field"><label>Phone</label><input id="bizPhone"></div>
+        </div>
+        <button class="btn primary" onclick="saveProfile()">Save Profile</button>
+        <p class="msg" id="profileMsg"></p>
+      </div>
+
+      <div class="card">
+        <h2>Signature</h2>
+        <p class="sub">Draw your signature below — it will be embedded on every invoice PDF as "Authorized Signatory".</p>
+        <canvas id="sigPad" class="sig-pad" width="400" height="150"></canvas>
+        <div style="margin-top:12px;display:flex;gap:10px">
+          <button class="btn" onclick="clearSignature()">Clear</button>
+          <button class="btn primary" onclick="saveSignature()">Save Signature</button>
+        </div>
+        <p class="msg" id="sigMsg"></p>
+        <div id="sigPreviewWrap" class="hidden" style="margin-top:14px">
+          <p class="sub" style="margin-bottom:6px">Currently saved:</p>
+          <img id="sigPreview" style="max-height:60px;border:1px solid var(--thread);border-radius:8px;background:#fff;padding:6px">
+        </div>
+      </div>
+    </div>
+
+    <!-- PRODUCTS -->
+    <div id="view-products" class="view hidden">
+      <div class="card">
+        <h2>Product Master</h2>
+        <p class="sub">Set up each product once with its HSN code and GST rate — you'll just pick from this list when billing.</p>
+        <div class="grid3">
+          <div class="field"><label>Product name</label><input id="pName"></div>
+          <div class="field"><label>HSN / SAC code</label><input id="pHsn"></div>
+          <div class="field"><label>Unit</label><input id="pUnit" placeholder="e.g. PCS, NOS, KG"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>Default price (₹)</label><input id="pPrice" type="number" step="0.01"></div>
+          <div class="field"><label>GST rate</label>
+            <select id="pGst">
+              <option value="0">0%</option><option value="5">5%</option>
+              <option value="12">12%</option><option value="18">18%</option>
+              <option value="28">28%</option>
+            </select>
+          </div>
+          <div class="field"><label>&nbsp;</label><button class="btn primary" style="width:100%" onclick="saveProduct()">Add Product</button></div>
+        </div>
+        <input type="hidden" id="pEditId">
+        <p class="msg" id="productMsg"></p>
+      </div>
+      <div class="card">
+        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price</th><th>GST</th><th></th></tr></thead>
+        <tbody id="productsTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- CUSTOMERS -->
+    <div id="view-customers" class="view hidden">
+      <div class="card">
+        <h2>Customers</h2>
+        <div class="grid2">
+          <div class="field"><label>Customer / business name</label><input id="cName"></div>
+          <div class="field"><label>GSTIN (leave blank if unregistered)</label><input id="cGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('cGstin','cGstinMsg','cState')"><p class="msg" id="cGstinMsg"></p></div>
+        </div>
+        <div class="field"><label>Address</label><textarea id="cAddress"></textarea></div>
+        <div class="grid3">
+          <div class="field"><label>State</label><select id="cState"></select></div>
+          <div class="field"><label>Email</label><input id="cEmail" type="email"></div>
+          <div class="field"><label>Phone</label><input id="cPhone"></div>
+        </div>
+        <input type="hidden" id="cEditId">
+        <button class="btn primary" onclick="saveCustomer()">Add Customer</button>
+        <p class="msg" id="customerMsg"></p>
+      </div>
+      <div class="card">
+        <table><thead><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Email</th><th></th></tr></thead>
+        <tbody id="customersTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- NEW INVOICE -->
+    <div id="view-new-invoice" class="view hidden">
+      <div class="card">
+        <h2>New Invoice</h2>
+        <div class="grid2">
+          <div class="field"><label>Customer</label><select id="invCustomer" onchange="recalcTotals()"></select></div>
+          <div class="field"><label>Invoice date</label><input id="invDate" type="date"></div>
+        </div>
+        <div class="field" style="max-width:260px">
+          <label><input type="checkbox" id="invReverseCharge" style="width:auto;display:inline-block;margin-right:6px">Tax payable on reverse charge</label>
+        </div>
+
+        <table class="line-items">
+          <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Rate (₹)</th><th>Disc %</th><th>Taxable</th><th>GST</th><th></th></tr></thead>
+          <tbody id="lineItemsTable"></tbody>
+        </table>
+        <button class="btn small" style="margin-top:10px" onclick="addLineItem()">+ Add line item</button>
+
+        <div class="totals-box" id="totalsBox"></div>
+
+        <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn primary" onclick="saveAndGenerate(false)">Save &amp; Download PDF</button>
+          <button class="btn primary" onclick="saveAndGenerate(true)">Save, Download &amp; Email Buyer</button>
+        </div>
+        <p class="msg" id="invoiceMsg"></p>
+      </div>
+    </div>
+
+    <!-- INVOICE HISTORY -->
+    <div id="view-invoices" class="view hidden">
+      <div class="card">
+        <h2>Invoice History</h2>
+        <table><thead><tr><th>Invoice #</th><th>Date</th><th>Customer</th><th>Total</th><th>Emailed</th><th></th></tr></thead>
+        <tbody id="invoicesTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- GSTR-1 FILING -->
+    <div id="view-gstr1" class="view hidden">
+      <div class="card">
+        <h2>GST Filing</h2>
+        <p class="sub">Every invoice you save is already stored with everything GSTR-1 needs. Pick a return period below to generate the B2B, B2CL, B2CS and HSN summary tables from your saved invoices, and download them in the same Excel format used by the GST offline tool.</p>
+        <div class="grid3">
+          <div class="field"><label>Financial Year</label><select id="gstrFY" onchange="onFYChange()"></select></div>
+          <div class="field"><label>Filing type</label>
+            <select id="gstrType" onchange="onFilingTypeChange()">
+              <option value="monthly">Monthly</option>
+              <option value="quarterly">Quarterly (QRMP)</option>
+            </select>
+          </div>
+          <div class="field" id="gstrMonthWrap"><label>Month</label><select id="gstrMonth"></select></div>
+          <div class="field hidden" id="gstrQuarterWrap"><label>Quarter</label><select id="gstrQuarter"></select></div>
+        </div>
+        <button class="btn primary" onclick="generateGstr1()">Generate Report</button>
+        <p class="msg" id="gstrMsg"></p>
+      </div>
+
+      <div class="card hidden" id="gstrSummaryCard">
+        <h2>Outward Supplies (GSTR-1) — <span id="gstrPeriodLabel"></span></h2>
+        <div class="grid3">
+          <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">B2B invoices</h3><p style="font-size:22px;font-weight:700;margin:0" id="gstrB2bCount">0</p></div>
+          <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">B2CL invoices</h3><p style="font-size:22px;font-weight:700;margin:0" id="gstrB2clCount">0</p></div>
+          <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">B2CS lines</h3><p style="font-size:22px;font-weight:700;margin:0" id="gstrB2csCount">0</p></div>
+        </div>
+        <p class="sub" style="margin-top:16px">B2CL = unregistered, inter-state, invoice value over ₹1,00,000 (current GST threshold). Everything else unregistered goes into B2CS, grouped by state and tax rate.</p>
+        <button class="btn primary" style="margin-top:10px" onclick="downloadGstr1Excel()">Download GSTR-1 Excel</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script src="assets/user-menu.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="assets/indian-states.js"></script>
+<script src="assets/billing-app.js"></script>
+</body>
+</html>

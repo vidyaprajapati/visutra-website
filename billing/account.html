@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>My Account | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"><b>VISUTRA Billing</b></a>
+  <div id="userMenuMount"></div>
+</div>
+
+<div style="max-width:640px;margin:0 auto;padding:32px 20px">
+
+  <div class="card">
+    <h2>My Account</h2>
+    <p class="sub">Your account details, used for signing in and identifying your business on this platform.</p>
+    <div class="grid2">
+      <div class="field"><label>Full name</label><input id="accName" disabled></div>
+      <div class="field"><label>Username</label><input id="accUsername" disabled></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Type of business</label><input id="accBusinessType" disabled></div>
+      <div class="field"><label>Mobile number</label><input id="accMobile" disabled></div>
+    </div>
+    <div class="field"><label>Location on signup</label><input id="accLocation" disabled></div>
+    <p class="sub" style="margin-top:4px">Name, username and business type aren't editable here yet — contact support if these need correcting.</p>
+  </div>
+
+  <div class="card">
+    <h2>Change Email Address</h2>
+    <p class="sub">Current: <b id="accCurrentEmail"></b>. After you submit a new address, we'll send a confirmation link to it — your login email only changes once you click that link.</p>
+    <div class="field"><label>New email address</label><input type="email" id="newEmail"></div>
+    <div class="field"><label>Current password (to confirm it's you)</label><input type="password" id="emailChangePw"></div>
+    <button class="btn primary" onclick="changeEmail()">Send Confirmation Link</button>
+    <p class="msg" id="emailMsg"></p>
+  </div>
+
+  <div class="card" id="passwordCard">
+    <h2>Change Password</h2>
+    <div class="field"><label>Current password</label><input type="password" id="currentPw"></div>
+    <div class="field"><label>New password</label><input type="password" id="newPw" placeholder="At least 6 characters"></div>
+    <div class="field"><label>Confirm new password</label><input type="password" id="newPwConfirm"></div>
+    <button class="btn primary" onclick="changePassword()">Update Password</button>
+    <p class="msg" id="pwMsg"></p>
+  </div>
+
+  <div class="card hidden" id="googleOnlyNotice">
+    <h2>Change Password</h2>
+    <p class="sub">Your account is signed in via Google, with no separate VISUTRA password. Manage your password through your Google Account settings instead.</p>
+  </div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script src="assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = 'login.html'; return; }
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true });
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  const data = snap.data() || {};
+  document.getElementById('accName').value = data.fullName || '';
+  document.getElementById('accUsername').value = data.username || '(not set)';
+  document.getElementById('accBusinessType').value = data.businessType || '';
+  document.getElementById('accMobile').value = data.mobileNumber || '';
+  document.getElementById('accCurrentEmail').textContent = user.email;
+  const loc = data.location;
+  document.getElementById('accLocation').value = loc ? [loc.city, loc.state, loc.country].filter(Boolean).join(', ') || `${loc.lat}, ${loc.lng}` : 'Not captured';
+
+  const hasPasswordProvider = user.providerData.some(p => p.providerId === 'password');
+  document.getElementById('passwordCard').classList.toggle('hidden', !hasPasswordProvider);
+  document.getElementById('googleOnlyNotice').classList.toggle('hidden', hasPasswordProvider);
+});
+
+function showMsg(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+
+async function reauth(password){
+  const cred = firebase.auth.EmailAuthProvider.credential(currentUser.email, password);
+  await currentUser.reauthenticateWithCredential(cred);
+}
+
+async function changeEmail(){
+  const newEmail = document.getElementById('newEmail').value.trim();
+  const pw = document.getElementById('emailChangePw').value;
+  if(!newEmail || !pw){ showMsg('emailMsg', 'Enter the new email and your current password.', false); return; }
+
+  try{
+    showMsg('emailMsg', 'Confirming your identity…', true);
+    await reauth(pw);
+    showMsg('emailMsg', 'Sending confirmation link to the new address…', true);
+    await currentUser.verifyBeforeUpdateEmail(newEmail);
+    showMsg('emailMsg', `Confirmation link sent to ${newEmail}. Your login email will update once you click it there.`, true);
+    document.getElementById('newEmail').value = '';
+    document.getElementById('emailChangePw').value = '';
+  }catch(err){
+    showMsg('emailMsg', err.message, false);
+  }
+}
+
+async function changePassword(){
+  const current = document.getElementById('currentPw').value;
+  const next = document.getElementById('newPw').value;
+  const confirm = document.getElementById('newPwConfirm').value;
+  if(!current || !next){ showMsg('pwMsg', 'Fill in both password fields.', false); return; }
+  if(next !== confirm){ showMsg('pwMsg', 'New passwords do not match.', false); return; }
+  if(next.length < 6){ showMsg('pwMsg', 'New password must be at least 6 characters.', false); return; }
+
+  try{
+    showMsg('pwMsg', 'Confirming your identity…', true);
+    await reauth(current);
+    await currentUser.updatePassword(next);
+    showMsg('pwMsg', 'Password updated.', true);
+    document.getElementById('currentPw').value = '';
+    document.getElementById('newPw').value = '';
+    document.getElementById('newPwConfirm').value = '';
+  }catch(err){
+    showMsg('pwMsg', err.message, false);
+  }
+}
+</script>
+</body>
+</html>
