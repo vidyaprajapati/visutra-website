@@ -92,6 +92,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 .vlc-btn.accent:hover{background:var(--teal-dark);}
 
 .vlc-help{font-family:var(--font-mono);font-size:11px;color:var(--ink-soft);line-height:1.6;margin-top:14px;padding:12px;background:var(--paper-2);border-radius:var(--radius);border-left:3px solid var(--teal);}
+.vlc-saved-note{font-family:var(--font-mono);font-size:11px;color:var(--teal);}
 
 /* preview stage */
 .vlc-stage{background:var(--paper-2);border:1.5px dashed var(--line);border-radius:6px;padding:20px;min-height:420px;display:flex;align-items:center;justify-content:center;position:relative;}
@@ -175,12 +176,13 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 
       <div class="vlc-field">
         <label>Output paper size</label>
-        <select id="vlcOutSize">
+        <select id="vlcOutSize" onchange="saveDefaultOutSize(this.value); showOutSizeSaved()">
           <option value="native">Keep cropped size (recommended)</option>
           <option value="4x6">Force 4 × 6 in</option>
           <option value="3x5">Force 3 × 5 in</option>
           <option value="4x4">Force 4 × 4 in</option>
         </select>
+        <p class="vlc-saved-note" id="vlcOutSizeSaved" style="opacity:0;transition:opacity .3s;margin-top:6px">Saved as your default.</p>
       </div>
 
       <button class="vlc-btn accent" id="vlcProcessBtn" onclick="processPdf()" disabled>Crop &amp; download PDF</button>
@@ -284,6 +286,22 @@ function loadStoredPreset(p){
 }
 function storePreset(p, vals){
   try{ localStorage.setItem('vlc_preset_' + p, JSON.stringify(vals)); }catch(e){}
+}
+
+// Output paper size is a personal preference independent of the platform
+// preset — once picked, it's remembered as the default for next time.
+function loadDefaultOutSize(){
+  try{ return localStorage.getItem('vlc_default_out_size') || 'native'; }catch(e){ return 'native'; }
+}
+function saveDefaultOutSize(val){
+  try{ localStorage.setItem('vlc_default_out_size', val); }catch(e){}
+}
+let outSizeSavedTimer = null;
+function showOutSizeSaved(){
+  const el = document.getElementById('vlcOutSizeSaved');
+  el.style.opacity = '1';
+  clearTimeout(outSizeSavedTimer);
+  outSizeSavedTimer = setTimeout(() => { el.style.opacity = '0'; }, 1800);
 }
 
 function applyPreset(p){
@@ -545,6 +563,7 @@ async function processPdf(courierFilter){
 
 /* init */
 applyPreset('amazon');
+document.getElementById('vlcOutSize').value = loadDefaultOutSize();
 </script>
 </body>
 </html>
