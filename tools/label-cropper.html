@@ -164,8 +164,10 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
       </div>
 
       <div id="vlcTopCropFields">
-        <div class="vlc-field"><label>Top margin cut <b id="valTop">6%</b></label><input type="range" id="rngTop" min="0" max="60" value="6" oninput="updatePreview()"></div>
-        <div class="vlc-field"><label>Bottom margin cut <b id="valBottom">48%</b></label><input type="range" id="rngBottom" min="0" max="80" value="48" oninput="updatePreview()"></div>
+        <div class="vlc-field" id="vlcTopBottomFields">
+          <div class="vlc-field"><label>Top margin cut <b id="valTop">6%</b></label><input type="range" id="rngTop" min="0" max="60" value="6" oninput="updatePreview()"></div>
+          <div class="vlc-field"><label>Bottom margin cut <b id="valBottom">48%</b></label><input type="range" id="rngBottom" min="0" max="80" value="48" oninput="updatePreview()"></div>
+        </div>
         <div class="vlc-field"><label>Left margin cut <b id="valLeft">3%</b></label><input type="range" id="rngLeft" min="0" max="40" value="3" oninput="updatePreview()"></div>
         <div class="vlc-field"><label>Right margin cut <b id="valRight">3%</b></label><input type="range" id="rngRight" min="0" max="40" value="3" oninput="updatePreview()"></div>
       </div>
@@ -176,13 +178,21 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 
       <div class="vlc-field">
         <label>Output paper size</label>
-        <select id="vlcOutSize" onchange="saveDefaultOutSize(this.value); showOutSizeSaved()">
+        <select id="vlcOutSize" onchange="saveDefaultOutSize(currentPlatform, this.value); showOutSizeSaved()">
           <option value="native">Keep cropped size (recommended)</option>
           <option value="4x6">Force 4 × 6 in</option>
           <option value="3x5">Force 3 × 5 in</option>
           <option value="4x4">Force 4 × 4 in</option>
         </select>
         <p class="vlc-saved-note" id="vlcOutSizeSaved" style="opacity:0;transition:opacity .3s;margin-top:6px">Saved as your default.</p>
+      </div>
+
+      <div class="vlc-field" id="vlcAmazonSkuField" style="display:none">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="vlcAmazonSkuMode" checked onchange="onAmazonSkuModeChange()" style="width:auto">
+          <span>Alternating label + invoice pages — add SKU to each label</span>
+        </label>
+        <p class="vlc-help" style="margin-top:8px">Amazon's bulk PDF puts each shipping label on an odd page and its matching tax invoice on the next (even) page. With this on, only the label pages are kept in the output, and the SKU is read from the invoice's Description column (the text in parentheses before "HSN:") and printed at the bottom of that label.</p>
       </div>
 
       <button class="vlc-btn accent" id="vlcProcessBtn" onclick="processPdf()" disabled>Crop &amp; download PDF</button>
@@ -277,6 +287,29 @@ function renderCourierPanel(counts){
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function escapeAttr(s){ return String(s).replace(/'/g, "\\'"); }
 
+/* ---------------- Amazon SKU extraction (alternating label/invoice pages) ---------------- */
+// 0-based label-page-index -> SKU string, e.g. amazonSkuByLabelIndex[0] = 'led-clr-55'
+let amazonSkuByLabelIndex = {};
+
+async function detectAmazonSkus(){
+  amazonSkuByLabelIndex = {};
+  // 0-based even indices (0,2,4,...) = odd printed page numbers (1,3,5,...) = labels.
+  // Each label's matching invoice is the very next page.
+  for(let i=0; i<pdfJsDoc.numPages; i+=2){
+    const invoicePageNum = i+2; // 1-indexed
+    if(invoicePageNum > pdfJsDoc.numPages) continue;
+    try{
+      const page = await pdfJsDoc.getPage(invoicePageNum);
+      const content = await page.getTextContent();
+      const text = content.items.map(it=>it.str).join(' ');
+      // SKU sits in parentheses right before "HSN:" in the invoice's Description column,
+      // e.g. "... Display Shield | B0G433K43L ( led-clr-55 ) HSN:63049291"
+      const m = text.match(/\(\s*([^()]+?)\s*\)\s*HSN\s*:/i);
+      if(m) amazonSkuByLabelIndex[i] = m[1].trim();
+    }catch(e){ /* skip pages that fail to read */ }
+  }
+}
+
 function loadStoredPreset(p){
   try{
     const raw = localStorage.getItem('vlc_preset_' + p);
@@ -288,13 +321,14 @@ function storePreset(p, vals){
   try{ localStorage.setItem('vlc_preset_' + p, JSON.stringify(vals)); }catch(e){}
 }
 
-// Output paper size is a personal preference independent of the platform
-// preset — once picked, it's remembered as the default for next time.
-function loadDefaultOutSize(){
-  try{ return localStorage.getItem('vlc_default_out_size') || 'native'; }catch(e){ return 'native'; }
+// Output paper size is a personal preference independent of the crop
+// sliders — but different platforms often use different label stock, so
+// it's remembered separately per platform.
+function loadDefaultOutSize(platform){
+  try{ return localStorage.getItem('vlc_default_out_size_' + platform) || 'native'; }catch(e){ return 'native'; }
 }
-function saveDefaultOutSize(val){
-  try{ localStorage.setItem('vlc_default_out_size', val); }catch(e){}
+function saveDefaultOutSize(platform, val){
+  try{ localStorage.setItem('vlc_default_out_size_' + platform, val); }catch(e){}
 }
 let outSizeSavedTimer = null;
 function showOutSizeSaved(){
@@ -313,6 +347,7 @@ function applyPreset(p){
   document.getElementById('rngRight').value = preset.right;
   document.getElementById('rngGap').value = preset.gap;
   document.getElementById('vlcHelpText').textContent = PRESETS[p].help;
+  document.getElementById('vlcOutSize').value = loadDefaultOutSize(p);
   setMode(preset.mode || 'single');
   updateLabels();
   updatePreview();
@@ -325,6 +360,8 @@ document.getElementById('vlcPlatforms').addEventListener('click', e=>{
   btn.classList.add('active');
   currentPlatform = btn.dataset.p;
   applyPreset(currentPlatform);
+  document.getElementById('vlcAmazonSkuField').style.display = currentPlatform === 'amazon' ? 'block' : 'none';
+  updateAmazonSkuUiState();
   if(currentPlatform === 'meesho' && pdfJsDoc && !pageCouriers.length){
     detectCouriers();
   } else if(currentPlatform !== 'meesho'){
@@ -332,7 +369,27 @@ document.getElementById('vlcPlatforms').addEventListener('click', e=>{
   } else {
     renderCourierPanel(pageCouriers.reduce((acc,c)=>{ acc[c]=(acc[c]||0)+1; return acc; }, {}));
   }
+  if(currentPlatform === 'amazon' && pdfJsDoc && document.getElementById('vlcAmazonSkuMode').checked && !Object.keys(amazonSkuByLabelIndex).length){
+    detectAmazonSkus();
+  }
 });
+
+function updateAmazonSkuUiState(){
+  const active = currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode').checked;
+  const tb = document.getElementById('vlcTopBottomFields');
+  tb.style.opacity = active ? '0.4' : '1';
+  tb.querySelectorAll('input').forEach(el => el.disabled = active);
+  if(active) tb.title = "Not used in this mode — the whole page is kept as the label.";
+  else tb.removeAttribute('title');
+}
+
+function onAmazonSkuModeChange(){
+  updateAmazonSkuUiState();
+  updatePreview();
+  if(document.getElementById('vlcAmazonSkuMode').checked && pdfJsDoc && currentPlatform === 'amazon'){
+    detectAmazonSkus();
+  }
+}
 
 function setMode(mode){
   currentMode = mode;
@@ -389,11 +446,17 @@ async function handleFile(file){
   pdfBytes = new Uint8Array(await file.arrayBuffer());
   document.getElementById('vlcProcessBtn').disabled = false;
   pageCouriers = []; courierOrder = [];
+  amazonSkuByLabelIndex = {};
   document.getElementById('vlcCourierPanel').style.display = 'none';
   await renderPreview();
   if(currentPlatform === 'meesho'){
     document.getElementById('vlcStatus').textContent = 'Detecting courier partners…';
     await detectCouriers();
+    document.getElementById('vlcStatus').textContent = '';
+  }
+  if(currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode').checked){
+    document.getElementById('vlcStatus').textContent = 'Reading SKUs from invoice pages…';
+    await detectAmazonSkus();
     document.getElementById('vlcStatus').textContent = '';
   }
 }
@@ -441,7 +504,10 @@ function drawCropOverlay(wrap, canvas){
     wrap.appendChild(el);
   }
 
-  if(v.mode === 'single'){
+  const amazonSkuMode = currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode') && document.getElementById('vlcAmazonSkuMode').checked;
+  if(amazonSkuMode){
+    box(0, 0, 'Full page (label)');
+  } else if(v.mode === 'single'){
     box(v.top, v.bottom, 'Label region');
   } else {
     const midGapHalf = v.gap/2;
@@ -484,6 +550,8 @@ async function processPdf(courierFilter){
     const embedded = await outDoc.embedPages(srcPages);
     const v = getCropValues();
     const outSizeKey = document.getElementById('vlcOutSize').value;
+    const amazonSkuMode = currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode').checked;
+    const skuFont = amazonSkuMode ? await outDoc.embedFont(PDFLib.StandardFonts.Helvetica) : null;
 
     // Meesho: process pages grouped by courier partner (or filtered to just one
     // courier when exporting a single partner's batch) instead of file order.
@@ -500,6 +568,12 @@ async function processPdf(courierFilter){
       }
     }
 
+    // Amazon (alternating pages): keep only the label pages (0-based even index =
+    // odd printed page number) and drop every invoice page from the output entirely.
+    if(amazonSkuMode){
+      pageIndexOrder = pageIndexOrder.filter(i => i % 2 === 0);
+    }
+
     status.textContent = `Cropping ${pageIndexOrder.length} page(s)…`;
 
     for(const i of pageIndexOrder){
@@ -507,7 +581,10 @@ async function processPdf(courierFilter){
       const pw = ep.width, ph = ep.height;
 
       const regions = [];
-      if(v.mode === 'single'){
+      if(amazonSkuMode){
+        // In this format the whole page IS the label — nothing to trim vertically.
+        regions.push({ topPct:0, bottomPct:0 });
+      } else if(v.mode === 'single'){
         regions.push({ topPct:v.top, bottomPct:v.bottom });
       } else {
         const midGapHalf = v.gap/2;
@@ -538,6 +615,16 @@ async function processPdf(courierFilter){
         const offsetY = -(ph*(r.bottomPct/100))*scaleY;
 
         newPage.drawPage(ep, { x: offsetX, y: offsetY, width: drawW, height: drawH });
+
+        if(amazonSkuMode){
+          const sku = amazonSkuByLabelIndex[i];
+          if(sku){
+            const fontSize = Math.max(7, Math.min(10, pageH * 0.018));
+            newPage.drawText(`SKU: ${sku}`, {
+              x: 8, y: 6, size: fontSize, font: skuFont, color: PDFLib.rgb(0,0,0)
+            });
+          }
+        }
       }
     }
 
@@ -563,7 +650,8 @@ async function processPdf(courierFilter){
 
 /* init */
 applyPreset('amazon');
-document.getElementById('vlcOutSize').value = loadDefaultOutSize();
+document.getElementById('vlcAmazonSkuField').style.display = currentPlatform === 'amazon' ? 'block' : 'none';
+updateAmazonSkuUiState();
 </script>
 </body>
 </html>
