@@ -620,8 +620,11 @@ async function processPdf(courierFilter){
           const sku = amazonSkuByLabelIndex[i];
           if(sku){
             const fontSize = Math.max(7, Math.min(10, pageH * 0.018));
-            newPage.drawText(`SKU: ${sku}`, {
-              x: 8, y: 6, size: fontSize, font: skuFont, color: PDFLib.rgb(0,0,0)
+            const label = `SKU: ${sku}`;
+            const textWidth = skuFont.widthOfTextAtSize(label, fontSize);
+            const x = Math.max(4, (pageW - textWidth) / 2);
+            newPage.drawText(label, {
+              x, y: 6, size: fontSize, font: skuFont, color: PDFLib.rgb(0,0,0)
             });
           }
         }
