@@ -1,1 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#092945"/><path d="M13 15h10l9 30 9-30h10L39 52H25z" fill="#ff5b0b"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 1200" role="img" aria-label="Visutra orange shopping cart icon" fill="none">
+  <title>Visutra Logo Icon</title>
+  <path fill="#FF5A00" fill-rule="evenodd" d="M79 63c-22 0-37 20-26 40l249 446c18 32 27 68 31 104l21 267c4 52 47 91 99 91h415c52 0 95-39 99-91l22-267c3-36 13-72 30-104L1269 103c11-20-4-40-26-40h-194c-13 0-25 7-32 18L622 565 225 81c-7-11-19-18-32-18H79zm357 648c-18 0-31 17-27 34l16 67c5 23 25 39 49 39h312c24 0 44-16 49-39l16-67c4-17-9-34-27-34H436z"/>
+  <circle cx="444" cy="1051" r="91" fill="#FF5A00"/>
+  <circle cx="800" cy="1051" r="91" fill="#FF5A00"/>
+</svg>
