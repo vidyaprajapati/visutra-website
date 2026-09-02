@@ -637,9 +637,10 @@ async function processPdf(courierFilter){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     const stamp = currentPlatform;
+    const dateStamp = new Date().toISOString().slice(0,10); // YYYY-MM-DD
     const courierSuffix = courierFilter ? '-' + courierFilter.toLowerCase().replace(/[^a-z0-9]+/g,'-') : (currentPlatform==='meesho' ? '-grouped-by-courier' : '');
     a.href = url;
-    a.download = `visutra-${stamp}${courierSuffix}-labels-cropped.pdf`;
+    a.download = `visutra-${stamp}${courierSuffix}-labels-${dateStamp}.pdf`;
     a.click();
     URL.revokeObjectURL(url);
     status.textContent = `Done — ${outDoc.getPageCount()} label(s) exported${courierFilter ? ' for ' + courierFilter : ''}.`;
