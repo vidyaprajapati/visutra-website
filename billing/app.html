@@ -69,25 +69,37 @@
         <p class="sub">Set up each product once with its HSN code and GST rate — you'll just pick from this list when billing.</p>
         <div class="grid3">
           <div class="field"><label>Product name</label><input id="pName"></div>
-          <div class="field"><label>HSN / SAC code</label><input id="pHsn"></div>
-          <div class="field"><label>Unit</label><input id="pUnit" placeholder="e.g. PCS, NOS, KG"></div>
+          <div class="field">
+            <label>HSN / SAC code</label>
+            <input id="pHsn" list="hsnList" placeholder="Type or pick a code" autocomplete="off" oninput="onHsnInput()">
+            <datalist id="hsnList"></datalist>
+            <p class="msg ok" id="pHsnNote"></p>
+          </div>
+          <div class="field"><label>Unit</label>
+            <select id="pUnit"></select>
+          </div>
         </div>
         <div class="grid3">
-          <div class="field"><label>Default price (₹)</label><input id="pPrice" type="number" step="0.01"></div>
           <div class="field"><label>GST rate</label>
-            <select id="pGst">
-              <option value="0">0%</option><option value="5">5%</option>
-              <option value="12">12%</option><option value="18">18%</option>
-              <option value="28">28%</option>
+            <select id="pGst" onchange="onProductPriceOrRateChange('rate')">
+              <option value="0">0%</option>
+              <option value="0.25">0.25%</option>
+              <option value="3">3%</option>
+              <option value="5">5%</option>
+              <option value="18">18%</option>
+              <option value="40">40%</option>
             </select>
           </div>
-          <div class="field"><label>&nbsp;</label><button class="btn primary" style="width:100%" onclick="saveProduct()">Add Product</button></div>
+          <div class="field"><label>Final price incl. GST (₹)</label><input id="pPriceIncl" type="number" step="0.01" oninput="onProductPriceOrRateChange('incl')"></div>
+          <div class="field"><label>Default price excl. GST (₹)</label><input id="pPrice" type="number" step="0.01" oninput="onProductPriceOrRateChange('excl')"></div>
         </div>
+        <p class="sub" style="margin-top:-8px;margin-bottom:16px">Enter either price — the other is calculated automatically from the GST rate above.</p>
+        <button class="btn primary" onclick="saveProduct()">Add Product</button>
         <input type="hidden" id="pEditId">
         <p class="msg" id="productMsg"></p>
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price</th><th>GST</th><th></th></tr></thead>
+        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price (excl.)</th><th>GST</th><th></th></tr></thead>
         <tbody id="productsTable"></tbody></table>
       </div>
     </div>
@@ -198,6 +210,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="assets/indian-states.js"></script>
+<script src="assets/hsn-gst-reference.js"></script>
 <script src="assets/billing-app.js"></script>
 </body>
 </html>
