@@ -90,7 +90,7 @@ function render(inv){
           GSTIN: ${esc(inv.business.gstin)}<br>${esc(inv.business.state)}</p>
         </div>
         <div class="box"><h3>Bill To</h3>
-          <p><b>${esc(inv.customer.name)}</b><br>${esc(inv.customer.address||'')}<br>
+          <p><b>${esc(inv.customer.name)}</b><br>${inv.customer.tradeName ? 'Trade Name: '+esc(inv.customer.tradeName)+'<br>' : ''}${esc(inv.customer.address||'')}<br>
           ${inv.customer.gstin ? 'GSTIN: '+esc(inv.customer.gstin)+'<br>' : ''}${esc(inv.customer.state||'')}</p>
         </div>
       </div>
@@ -161,6 +161,7 @@ function buildInvoicePDF(inv){
   doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.text('Bill To:', 40, y); y += 14;
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
   doc.text(inv.customer.name || '', 40, y); y += 12;
+  if(inv.customer.tradeName){ doc.text(`Trade Name: ${inv.customer.tradeName}`, 40, y); y += 12; }
   const custAddrLines = doc.splitTextToSize(inv.customer.address || '', 300);
   doc.text(custAddrLines, 40, y); y += custAddrLines.length * 12;
   if(inv.customer.gstin){ doc.text(`GSTIN: ${inv.customer.gstin}`, 40, y); y += 12; }

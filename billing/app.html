@@ -109,7 +109,10 @@
       <div class="card">
         <h2>Customers</h2>
         <div class="grid2">
-          <div class="field"><label>Customer / business name</label><input id="cName"></div>
+          <div class="field"><label>Legal Name of Business</label><input id="cName"></div>
+          <div class="field"><label>Trade Name (if any)</label><input id="cTradeName"></div>
+        </div>
+        <div class="grid2">
           <div class="field"><label>GSTIN (leave blank if unregistered)</label><input id="cGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('cGstin','cGstinMsg','cState')"><p class="msg" id="cGstinMsg"></p></div>
         </div>
         <div class="field"><label>Address</label><textarea id="cAddress"></textarea></div>
@@ -123,7 +126,7 @@
         <p class="msg" id="customerMsg"></p>
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Email</th><th></th></tr></thead>
+        <table><thead><tr><th>Legal Name</th><th>Trade Name</th><th>GSTIN</th><th>State</th><th>Email</th><th></th></tr></thead>
         <tbody id="customersTable"></tbody></table>
       </div>
     </div>
