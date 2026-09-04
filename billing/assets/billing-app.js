@@ -236,17 +236,18 @@ async function loadCustomers(){
 }
 function renderCustomers(){
   document.getElementById('customersTable').innerHTML = customersCache.map(c => `
-    <tr><td>${esc(c.name)}</td><td>${esc(c.gstin||'—')}</td><td>${esc(c.state||'')}</td><td>${esc(c.email||'')}</td>
+    <tr><td>${esc(c.name)}</td><td>${esc(c.tradeName||'—')}</td><td>${esc(c.gstin||'—')}</td><td>${esc(c.state||'')}</td><td>${esc(c.email||'')}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editCustomer('${c.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteCustomer('${c.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No customers yet.</td></tr>';
+    </td></tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No customers yet.</td></tr>';
 }
 async function saveCustomer(){
   const id = document.getElementById('cEditId').value;
   const stateCode = document.getElementById('cState').value;
   const data = {
     name: document.getElementById('cName').value.trim(),
+    tradeName: document.getElementById('cTradeName').value.trim(),
     gstin: document.getElementById('cGstin').value.trim(),
     address: document.getElementById('cAddress').value.trim(),
     stateCode: stateCode,
@@ -254,10 +255,10 @@ async function saveCustomer(){
     email: document.getElementById('cEmail').value.trim(),
     phone: document.getElementById('cPhone').value.trim()
   };
-  if(!data.name){ showMsg('customerMsg', 'Customer name is required.', false); return; }
+  if(!data.name){ showMsg('customerMsg', 'Legal Name of Business is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('customers');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['cName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
+  ['cName','cTradeName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('cState').value = '';
   showMsg('customerMsg', 'Saved.', true);
   loadCustomers();
@@ -266,6 +267,7 @@ function editCustomer(id){
   const c = customersCache.find(x => x.id === id);
   document.getElementById('cEditId').value = id;
   document.getElementById('cName').value = c.name;
+  document.getElementById('cTradeName').value = c.tradeName || '';
   document.getElementById('cGstin').value = c.gstin || '';
   document.getElementById('cAddress').value = c.address || '';
   document.getElementById('cState').value = c.stateCode || '';
@@ -280,7 +282,7 @@ async function deleteCustomer(id){
 function renderCustomerDropdown(){
   const sel = document.getElementById('invCustomer');
   sel.innerHTML = '<option value="">Select customer…</option>' +
-    customersCache.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    customersCache.map(c => `<option value="${c.id}">${esc(c.name)}${c.tradeName ? ' ('+esc(c.tradeName)+')' : ''}</option>`).join('');
 }
 
 /* ---------------- Invoice line items ---------------- */
@@ -402,7 +404,7 @@ async function saveAndGenerate(sendEmail){
   const invoiceData = {
     invoiceNo, date: dateVal, reverseCharge,
     business: { ...businessData },
-    customer: { name:customer.name, gstin:customer.gstin, address:customer.address, state:customer.state, stateCode:customer.stateCode, email:customer.email },
+    customer: { name:customer.name, tradeName:customer.tradeName||'', gstin:customer.gstin, address:customer.address, state:customer.state, stateCode:customer.stateCode, email:customer.email },
     items: lineItems.map(li => ({...li, taxable: lineTaxable(li)})),
     subtotal: totals.subtotal, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, grandTotal: totals.grand,
     sameState: totals.sameState,
@@ -477,6 +479,7 @@ function buildInvoicePDF(inv){
   doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.text('Bill To:', 40, y); y += 14;
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
   doc.text(inv.customer.name || '', 40, y); y += 12;
+  if(inv.customer.tradeName){ doc.text(`Trade Name: ${inv.customer.tradeName}`, 40, y); y += 12; }
   const custAddrLines = doc.splitTextToSize(inv.customer.address || '', 300);
   doc.text(custAddrLines, 40, y); y += custAddrLines.length * 12;
   if(inv.customer.gstin){ doc.text(`GSTIN: ${inv.customer.gstin}`, 40, y); y += 12; }
