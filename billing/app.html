@@ -47,6 +47,32 @@
       </div>
 
       <div class="card">
+        <h2>Bank Details</h2>
+        <p class="sub">This appears on every invoice under "Payment Details" so customers know where to pay.</p>
+        <div class="grid2">
+          <div class="field"><label>Bank Name</label><input id="bizBankName"></div>
+          <div class="field"><label>Account Number</label><input id="bizAccountNumber"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>IFSC Code</label><input id="bizIfsc" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"></div>
+          <div class="field"><label>UPI ID</label><input id="bizUpiId" placeholder="e.g. yourname@okhdfcbank"></div>
+        </div>
+        <button class="btn primary" onclick="saveProfile()">Save Bank Details</button>
+        <p class="msg" id="bankMsg"></p>
+      </div>
+
+      <div class="card">
+        <h2>UPI QR Code</h2>
+        <p class="sub">Upload your UPI QR code image (from PhonePe/GPay/bank app) — it will be printed on every invoice so customers can scan and pay.</p>
+        <input type="file" id="upiQrFile" accept="image/*" onchange="uploadUpiQr(event)">
+        <p class="msg" id="upiQrMsg"></p>
+        <div id="upiQrPreviewWrap" class="hidden" style="margin-top:14px">
+          <p class="sub" style="margin-bottom:6px">Currently saved:</p>
+          <img id="upiQrPreview" style="max-height:120px;border:1px solid var(--thread);border-radius:8px;background:#fff;padding:6px">
+        </div>
+      </div>
+
+      <div class="card">
         <h2>Signature</h2>
         <p class="sub">Draw your signature below — it will be embedded on every invoice PDF as "Authorized Signatory".</p>
         <canvas id="sigPad" class="sig-pad" width="400" height="150"></canvas>
@@ -71,8 +97,7 @@
           <div class="field"><label>Product name</label><input id="pName"></div>
           <div class="field">
             <label>HSN / SAC code</label>
-            <input id="pHsn" list="hsnList" placeholder="Type or pick a code" autocomplete="off" oninput="onHsnInput()">
-            <datalist id="hsnList"></datalist>
+            <input id="pHsn" placeholder="Enter HSN/SAC code" autocomplete="off" oninput="onHsnInput()">
             <p class="msg ok" id="pHsnNote"></p>
           </div>
           <div class="field"><label>Unit</label>

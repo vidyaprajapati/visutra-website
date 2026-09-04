@@ -114,6 +114,18 @@ function render(inv){
         <p style="margin:4px 0 0;font-size:12px;color:var(--muted)">Authorized Signatory</p>
       </div>
 
+      ${(inv.business.bankName || inv.business.accountNumber || inv.business.ifsc || inv.business.upiId || inv.business.upiQr) ? `
+      <div class="box" style="margin-top:20px;max-width:340px">
+        <h3>Payment Details</h3>
+        <p style="font-size:13px;line-height:1.6">
+          ${inv.business.bankName ? `Bank: ${esc(inv.business.bankName)}<br>` : ''}
+          ${inv.business.accountNumber ? `A/c No: ${esc(inv.business.accountNumber)}<br>` : ''}
+          ${inv.business.ifsc ? `IFSC: ${esc(inv.business.ifsc)}<br>` : ''}
+          ${inv.business.upiId ? `UPI ID: ${esc(inv.business.upiId)}` : ''}
+        </p>
+        ${inv.business.upiQr ? `<img src="${inv.business.upiQr}" style="max-width:120px;margin-top:8px;border:1px solid var(--thread);border-radius:6px;background:#fff;padding:4px">` : ''}
+      </div>` : ''}
+
       <p style="font-size:11px;color:var(--muted);margin-top:24px">This is a computer-generated invoice. Tax payable on reverse charge basis: ${inv.reverseCharge ? 'Yes' : 'No'}.</p>
 
       <button class="btn" onclick="downloadInvoicePdf()">Download PDF</button>
@@ -122,6 +134,13 @@ function render(inv){
 }
 
 function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function imgFormatFromDataUrl(dataUrl){
+  const m = /^data:image\/(png|jpe?g|webp)/i.exec(dataUrl||'');
+  if(!m) return 'PNG';
+  const t = m[1].toLowerCase();
+  if(t === 'jpg' || t === 'jpeg') return 'JPEG';
+  return t.toUpperCase();
+}
 
 // Identical layout to the one the business owner downloads from their dashboard —
 // generated fresh from this page's saved data, so no file storage is needed
@@ -203,6 +222,21 @@ function buildInvoicePDF(inv){
   doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
   doc.text('Tax is payable on reverse charge basis: ' + (inv.reverseCharge ? 'Yes' : 'No'), 40, y);
   doc.text('This is a computer-generated invoice.', 40, y+12);
+
+  // Payment details block (left side)
+  if(inv.business.bankName || inv.business.accountNumber || inv.business.ifsc || inv.business.upiId || inv.business.upiQr){
+    let py = y + 32;
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
+    doc.text('Payment Details:', 40, py); py += 14;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
+    if(inv.business.bankName){ doc.text(`Bank: ${inv.business.bankName}`, 40, py); py += 12; }
+    if(inv.business.accountNumber){ doc.text(`A/c No: ${inv.business.accountNumber}`, 40, py); py += 12; }
+    if(inv.business.ifsc){ doc.text(`IFSC: ${inv.business.ifsc}`, 40, py); py += 12; }
+    if(inv.business.upiId){ doc.text(`UPI ID: ${inv.business.upiId}`, 40, py); py += 12; }
+    if(inv.business.upiQr){
+      try{ doc.addImage(inv.business.upiQr, imgFormatFromDataUrl(inv.business.upiQr), 190, y+20, 75, 75); }catch(e){}
+    }
+  }
 
   const sigY = y - 10;
   doc.setFontSize(9);
