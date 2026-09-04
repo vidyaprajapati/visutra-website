@@ -24,6 +24,8 @@ auth.onAuthStateChanged(async user => {
   onFilingTypeChange();
   initSignaturePad();
   await loadProfile();
+  populateUnitSelect();
+  populateHsnDatalist();
   await loadProducts();
   await loadCustomers();
   addLineItem();
@@ -104,6 +106,69 @@ async function saveSignature(){
 }
 
 /* ---------------- Products ---------------- */
+
+// Standard GST UQC (Unit Quantity Code) list, used across GSTR filings.
+const UQC_UNITS = [
+  {code:'PCS', label:'PCS — Pieces'}, {code:'NOS', label:'NOS — Numbers'},
+  {code:'SET', label:'SET — Sets'}, {code:'PRS', label:'PRS — Pairs'},
+  {code:'KGS', label:'KGS — Kilograms'}, {code:'GMS', label:'GMS — Grammes'},
+  {code:'MTR', label:'MTR — Metres'}, {code:'CMS', label:'CMS — Centimetres'},
+  {code:'SQM', label:'SQM — Square Metres'}, {code:'SQF', label:'SQF — Square Feet'},
+  {code:'SQY', label:'SQY — Square Yards'}, {code:'YDS', label:'YDS — Yards'},
+  {code:'LTR', label:'LTR — Litres'}, {code:'MLT', label:'MLT — Millilitres'},
+  {code:'KLR', label:'KLR — Kilolitres'}, {code:'BOX', label:'BOX — Box'},
+  {code:'CTN', label:'CTN — Cartons'}, {code:'PAC', label:'PAC — Packs'},
+  {code:'BAG', label:'BAG — Bags'}, {code:'BDL', label:'BDL — Bundles'},
+  {code:'BTL', label:'BTL — Bottles'}, {code:'CAN', label:'CAN — Cans'},
+  {code:'DOZ', label:'DOZ — Dozens'}, {code:'DRM', label:'DRM — Drums'},
+  {code:'GRS', label:'GRS — Gross'}, {code:'ROL', label:'ROL — Rolls'},
+  {code:'TON', label:'TON — Tonnes'}, {code:'QTL', label:'QTL — Quintal'},
+  {code:'TUB', label:'TUB — Tubes'}, {code:'UNT', label:'UNT — Units'},
+  {code:'OTH', label:'OTH — Others'}
+];
+
+function populateUnitSelect(){
+  const sel = document.getElementById('pUnit');
+  sel.innerHTML = UQC_UNITS.map(u => `<option value="${u.code}">${u.label}</option>`).join('');
+  sel.value = (businessData.lastUsedUnit) || 'PCS';
+}
+
+function populateHsnDatalist(){
+  document.getElementById('hsnList').innerHTML = HSN_GST_REFERENCE
+    .map(h => `<option value="${h.hsn}">${esc(h.desc)}</option>`).join('');
+}
+
+function onHsnInput(){
+  const val = document.getElementById('pHsn').value.trim();
+  const match = HSN_GST_REFERENCE.find(h => h.hsn === val);
+  const note = document.getElementById('pHsnNote');
+  if(!match){ note.textContent = ''; note.className = 'msg'; return; }
+  if(match.rate == null){
+    note.textContent = match.note || 'This HSN has a variable rate — check the official rate schedule.';
+    note.className = 'msg error';
+  } else {
+    note.textContent = `${esc(match.desc)} — commonly ${match.rate}% GST (verify and select the rate yourself below).`;
+    note.className = 'msg ok';
+  }
+}
+
+// Two-way price calculation: entering either the GST-inclusive final price
+// or the excl.-GST base price fills in the other, using the selected rate.
+let lastProductPriceEdited = 'excl';
+function onProductPriceOrRateChange(source){
+  if(source !== 'rate') lastProductPriceEdited = source;
+  const rate = parseFloat(document.getElementById('pGst').value) || 0;
+  const inclEl = document.getElementById('pPriceIncl');
+  const exclEl = document.getElementById('pPrice');
+  if(lastProductPriceEdited === 'incl'){
+    const incl = parseFloat(inclEl.value);
+    if(!isNaN(incl)) exclEl.value = (incl / (1 + rate/100)).toFixed(2);
+  } else {
+    const excl = parseFloat(exclEl.value);
+    if(!isNaN(excl)) inclEl.value = (excl * (1 + rate/100)).toFixed(2);
+  }
+}
+
 async function loadProducts(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get();
   productsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
@@ -120,18 +185,27 @@ function renderProducts(){
 }
 async function saveProduct(){
   const id = document.getElementById('pEditId').value;
+  const unit = document.getElementById('pUnit').value || 'PCS';
   const data = {
     name: document.getElementById('pName').value.trim(),
     hsn: document.getElementById('pHsn').value.trim(),
-    unit: document.getElementById('pUnit').value.trim() || 'PCS',
+    unit,
     price: parseFloat(document.getElementById('pPrice').value) || 0,
     gstRate: parseFloat(document.getElementById('pGst').value)
   };
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['pName','pHsn','pUnit','pPrice','pEditId'].forEach(f => document.getElementById(f).value = '');
+
+  // Remember the unit just used as the default for next time.
+  businessData.lastUsedUnit = unit;
+  await db.collection('users').doc(currentUser.uid).set({lastUsedUnit: unit}, {merge:true});
+
+  ['pName','pHsn','pPrice','pPriceIncl','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
+  document.getElementById('pHsnNote').textContent = '';
+  populateUnitSelect();
+  lastProductPriceEdited = 'excl';
   showMsg('productMsg', 'Saved.', true);
   loadProducts();
 }
@@ -143,6 +217,9 @@ function editProduct(id){
   document.getElementById('pUnit').value = p.unit;
   document.getElementById('pPrice').value = p.price;
   document.getElementById('pGst').value = p.gstRate;
+  lastProductPriceEdited = 'excl';
+  onProductPriceOrRateChange('excl');
+  onHsnInput();
 }
 async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
