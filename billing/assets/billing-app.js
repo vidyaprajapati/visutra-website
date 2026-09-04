@@ -25,7 +25,6 @@ auth.onAuthStateChanged(async user => {
   initSignaturePad();
   await loadProfile();
   populateUnitSelect();
-  populateHsnDatalist();
   await loadProducts();
   await loadCustomers();
   addLineItem();
@@ -55,9 +54,17 @@ async function loadProfile(){
   document.getElementById('bizAddress').value = businessData.address || '';
   document.getElementById('bizState').value = businessData.stateCode || '';
   document.getElementById('bizPhone').value = businessData.phone || '';
+  document.getElementById('bizBankName').value = businessData.bankName || '';
+  document.getElementById('bizAccountNumber').value = businessData.accountNumber || '';
+  document.getElementById('bizIfsc').value = businessData.ifsc || '';
+  document.getElementById('bizUpiId').value = businessData.upiId || '';
   if(businessData.signature){
     document.getElementById('sigPreview').src = businessData.signature;
     document.getElementById('sigPreviewWrap').classList.remove('hidden');
+  }
+  if(businessData.upiQr){
+    document.getElementById('upiQrPreview').src = businessData.upiQr;
+    document.getElementById('upiQrPreviewWrap').classList.remove('hidden');
   }
 }
 
@@ -69,11 +76,32 @@ async function saveProfile(){
     address: document.getElementById('bizAddress').value.trim(),
     stateCode: stateCode,
     state: stateNameByCode(stateCode),
-    phone: document.getElementById('bizPhone').value.trim()
+    phone: document.getElementById('bizPhone').value.trim(),
+    bankName: document.getElementById('bizBankName').value.trim(),
+    accountNumber: document.getElementById('bizAccountNumber').value.trim(),
+    ifsc: document.getElementById('bizIfsc').value.trim(),
+    upiId: document.getElementById('bizUpiId').value.trim()
   };
   await db.collection('users').doc(currentUser.uid).set(data, {merge:true});
   Object.assign(businessData, data);
   showMsg('profileMsg', 'Saved.', true);
+  showMsg('bankMsg', 'Saved.', true);
+}
+
+async function uploadUpiQr(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  if(!file.type.startsWith('image/')){ showMsg('upiQrMsg', 'Please select an image file.', false); return; }
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const dataUrl = reader.result;
+    await db.collection('users').doc(currentUser.uid).set({upiQr: dataUrl}, {merge:true});
+    businessData.upiQr = dataUrl;
+    document.getElementById('upiQrPreview').src = dataUrl;
+    document.getElementById('upiQrPreviewWrap').classList.remove('hidden');
+    showMsg('upiQrMsg', 'UPI QR code saved.', true);
+  };
+  reader.readAsDataURL(file);
 }
 
 /* ---------------- Signature pad ---------------- */
@@ -131,11 +159,6 @@ function populateUnitSelect(){
   const sel = document.getElementById('pUnit');
   sel.innerHTML = UQC_UNITS.map(u => `<option value="${u.code}">${u.label}</option>`).join('');
   sel.value = (businessData.lastUsedUnit) || 'PCS';
-}
-
-function populateHsnDatalist(){
-  document.getElementById('hsnList').innerHTML = HSN_GST_REFERENCE
-    .map(h => `<option value="${h.hsn}">${esc(h.desc)}</option>`).join('');
 }
 
 function onHsnInput(){
@@ -522,6 +545,21 @@ function buildInvoicePDF(inv){
   doc.text('Tax is payable on reverse charge basis: ' + (inv.reverseCharge ? 'Yes' : 'No'), 40, y);
   doc.text('This is a computer-generated invoice.', 40, y+12);
 
+  // Payment details block (left side)
+  if(inv.business.bankName || inv.business.accountNumber || inv.business.ifsc || inv.business.upiId || inv.business.upiQr){
+    let py = y + 32;
+    doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
+    doc.text('Payment Details:', 40, py); py += 14;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
+    if(inv.business.bankName){ doc.text(`Bank: ${inv.business.bankName}`, 40, py); py += 12; }
+    if(inv.business.accountNumber){ doc.text(`A/c No: ${inv.business.accountNumber}`, 40, py); py += 12; }
+    if(inv.business.ifsc){ doc.text(`IFSC: ${inv.business.ifsc}`, 40, py); py += 12; }
+    if(inv.business.upiId){ doc.text(`UPI ID: ${inv.business.upiId}`, 40, py); py += 12; }
+    if(inv.business.upiQr){
+      try{ doc.addImage(inv.business.upiQr, imgFormatFromDataUrl(inv.business.upiQr), 190, y+20, 75, 75); }catch(e){}
+    }
+  }
+
   // Signature block, bottom right
   const sigY = y - 10;
   doc.setFontSize(9);
@@ -772,6 +810,13 @@ function downloadGstr1Excel(){
 
 /* ---------------- Utils ---------------- */
 function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function imgFormatFromDataUrl(dataUrl){
+  const m = /^data:image\/(png|jpe?g|webp)/i.exec(dataUrl||'');
+  if(!m) return 'PNG';
+  const t = m[1].toLowerCase();
+  if(t === 'jpg' || t === 'jpeg') return 'JPEG';
+  return t.toUpperCase();
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function showMsg(id, text, ok){
   const el = document.getElementById(id);
