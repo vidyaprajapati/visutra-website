@@ -61,23 +61,8 @@ async function loadInvoice(){
     const inv = snap.data();
     currentInvoiceData = inv;
     render(inv);
-    // Auto-download the PDF the moment the page opens, so the buyer gets the
-    // actual file without an extra click — no paid EmailJS attachment plan needed.
-    // The button stays too, in case a browser blocks the automatic download or
-    // they want to grab it again later.
-    try{ downloadInvoicePdf(); }catch(e){ console.error('Auto-download failed:', e); }
   }catch(err){
-    console.error('Invoice load error:', err);
-    // Almost always caused by Firestore security rules not allowing public read
-    // of /public_invoices/{id} — see BILLING-SETUP.md Part 2. Surfacing the real
-    // error code here (visible in browser console) makes that diagnosable instead
-    // of a dead-end message.
-    const isPermission = err && err.code === 'permission-denied';
-    content.innerHTML = `<div class="errbox">
-      ${isPermission
-        ? 'This invoice link is not publicly readable. The site owner needs to check the Firestore security rules for the <code>public_invoices</code> collection (Firebase Console → Firestore Database → Rules) and make sure it includes <code>allow read: if true;</code>.'
-        : 'Could not load this invoice. Please try the link again in a moment, or contact the sender for a fresh copy.'}
-    </div>`;
+    content.innerHTML = '<div class="errbox">Could not load this invoice.</div>';
   }
 }
 
@@ -131,8 +116,7 @@ function render(inv){
 
       <p style="font-size:11px;color:var(--muted);margin-top:24px">This is a computer-generated invoice. Tax payable on reverse charge basis: ${inv.reverseCharge ? 'Yes' : 'No'}.</p>
 
-      <p style="font-size:12px;color:var(--muted);margin-top:16px">A PDF copy of this invoice has been downloaded to your device automatically.</p>
-      <button class="btn" onclick="downloadInvoicePdf()">Download PDF again</button>
+      <button class="btn" onclick="downloadInvoicePdf()">Download PDF</button>
     </div>
   `;
 }

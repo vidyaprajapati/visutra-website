@@ -97,7 +97,7 @@ That's the entire Firebase side done — no billing card required for any of thi
    - `EMAILJS_SERVICE_ID` — from your Email Service
    - `EMAILJS_TEMPLATE_ID` — from your Email Template
 
-**Note on attachments:** the email sends a **link** to view the invoice online (`invoice-view.html`). Opening that link automatically triggers a PDF download of the invoice to the buyer's device — no click needed beyond opening the link — and the page also keeps a "Download PDF again" button in case a browser blocks the automatic download or they need another copy later. The PDF is generated fresh in the buyer's browser from the invoice data already in Firestore rather than being a literal file attached to the email itself, which is what lets this work on EmailJS's free plan — actual email attachments require EmailJS's paid Personal plan ($9/mo) or higher.
+**Note on attachments:** the email sends a **link** to view the invoice online (`invoice-view.html`), which has its own "Download PDF" button that generates the file on the spot — rather than a literal file attached to the email itself. In practice this works identically for the buyer — one click and they have the PDF — without needing a paid EmailJS plan or any file storage.
 
 ---
 
@@ -165,7 +165,7 @@ switches on automatically the moment real config values are in place.
 8. **They add Customers** — name, GSTIN (if registered), address, state, email.
 9. **They create an invoice** — pick a customer, add line items from the product list, adjust quantity/rate/discount if needed. The system automatically works out whether it's CGST+SGST (same state) or IGST (different state) based on the business's and customer's states, and computes an invoice number in the format `FY/0001` (e.g. `25-26/0007`).
 10. **Save & Download** generates a legally-formatted PDF with all required GST fields and the saved signature embedded, and downloads it to the business owner's device.
-11. **Save, Download & Email** does the same, plus emails the customer a link to view the invoice online (`invoice-view.html`) — opening that link auto-downloads the PDF to their device immediately, with a button to grab it again if needed — both without requiring the customer to log in anywhere.
+11. **Save, Download & Email** does the same, plus emails the customer a link to view the invoice online (`invoice-view.html`) and a direct PDF download link — both without requiring the customer to log in anywhere.
 12. **Invoice History** shows every invoice created, whether it was emailed, and lets the business re-open the PDF or the shareable link any time.
 13. **They can file GSTR-1 directly from this data** — no re-entry needed. The **GSTR-1 Filing** tab lets them pick a return period — either a specific month, or a full quarter for QRMP filers, chosen from the last 3 financial years — and the system reads every saved invoice from that period and automatically sorts it into:
     - **B2B** — one row per registered customer's invoice
@@ -185,6 +185,3 @@ switches on automatically the moment real config values are in place.
 - **Multi-user access per business** — right now each Firebase login is its own isolated business; there's no way yet for two people to share access to one business's data.
 
 These are all reasonable next steps if this proves useful — just flag it and we can build any of them in.
-
-## Purchase Management
-The Purchase Details section uses these authenticated subcollections under each user: `suppliers`, `purchaseProducts`, `purchases`, and `supplierPayments`. The existing wildcard user subcollection rule already covers them.
