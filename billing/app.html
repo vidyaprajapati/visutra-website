@@ -23,6 +23,8 @@
     <a href="#customers" class="nav-link" data-view="customers">Customers</a>
     <a href="#suppliers" class="nav-link" data-view="suppliers">Suppliers</a>
     <a href="#purchases" class="nav-link" data-view="purchases">Purchases</a>
+    <a href="#payment-entry" class="nav-link" data-view="payment-entry">Payment Entry</a>
+    <a href="#supplier-dashboard" class="nav-link" data-view="supplier-dashboard">Supplier Dashboard</a>
     <a href="#new-invoice" class="nav-link" data-view="new-invoice">New Invoice</a>
     <a href="#invoices" class="nav-link" data-view="invoices">Invoice History</a>
     <a href="#gstr1" class="nav-link" data-view="gstr1">GSTR-1 Filing</a>
@@ -203,6 +205,41 @@
       </div>
 
       <div class="card">
+        <h2>Purchase History</h2>
+        <p class="sub">Click a supplier's name to open their ledger — date-wise purchases, payments made, and balance due.</p>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Products</th><th>Total (incl. GST)</th><th></th></tr></thead>
+        <tbody id="purchasesTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- PAYMENT ENTRY -->
+    <div id="view-payment-entry" class="view hidden">
+      <div class="card">
+        <h2>Payment Entry</h2>
+        <p class="sub">Record a payment made to a supplier — for a specific purchase, an advance, or just catching up on an old balance. This is separate from purchase entry, so you can log a payment any time without buying anything new.</p>
+        <div class="grid2">
+          <div class="field"><label>Supplier</label><select id="payEntrySupplier"></select></div>
+          <div class="field"><label>Payment date</label><input id="payEntryDate" type="date"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Amount (₹)</label><input id="payEntryAmount" type="number" min="0" step="0.01"></div>
+          <div class="field"><label>Mode (Cash / UPI / Bank...)</label><input id="payEntryMode"></div>
+        </div>
+        <div class="field"><label>Note (optional)</label><input id="payEntryNote"></div>
+        <button class="btn primary" onclick="savePaymentEntry()">Save Payment</button>
+        <p class="msg" id="paymentEntryMsg"></p>
+      </div>
+      <div class="card">
+        <h2>Payment History</h2>
+        <p class="sub">Click a supplier's name to open their full dashboard.</p>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Mode</th><th>Note</th><th></th></tr></thead>
+        <tbody id="paymentsEntryTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- SUPPLIER DASHBOARD -->
+    <div id="view-supplier-dashboard" class="view hidden">
+      <div class="card">
         <h2>Supplier Dashboard</h2>
         <p class="sub">Pick a supplier to review everything at a glance — purchase entries, items purchased, amount paid, and balance still to pay.</p>
         <div class="field" style="max-width:320px"><label>Supplier</label><select id="dashSupplier" onchange="renderSupplierDashboard(this.value)"></select></div>
@@ -224,13 +261,6 @@
           </div>
         </div>
         <p class="sub hidden" id="dashEmptyMsg">No purchases or payments recorded for this supplier yet.</p>
-      </div>
-
-      <div class="card">
-        <h2>Purchase History</h2>
-        <p class="sub">Click a supplier's name to open their ledger — date-wise purchases, payments made, and balance due.</p>
-        <table><thead><tr><th>Date</th><th>Supplier</th><th>Products</th><th>Total (incl. GST)</th><th></th></tr></thead>
-        <tbody id="purchasesTable"></tbody></table>
       </div>
     </div>
 
