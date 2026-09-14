@@ -1,14 +1,8 @@
 let currentUser = null;
 let businessData = {};
 let productsCache = [];
-let purchaseProductsCache = [];
-let billingMode = 'invoice';
 let customersCache = [];
-let suppliersCache = [];
-let purchasesCache = [];
-let paymentsCache = [];
-let lineItems = []; // invoice items
-let purchaseRows = []; // purchase rows entered together on one supplier/date/bill
+let lineItems = []; // {productId, name, hsn, unit, qty, rate, discount, gstRate}
 
 /* ---------------- Auth guard ---------------- */
 auth.onAuthStateChanged(async user => {
@@ -24,53 +18,29 @@ auth.onAuthStateChanged(async user => {
   currentUser = user;
   mountUserMenu('userMenuMount', user, { showBillingLink: false });
   populateStateSelect(document.getElementById('bizState'));
-  populateStateSelect(document.getElementById('cState')); populateStateSelect(document.getElementById('sState'));
+  populateStateSelect(document.getElementById('cState'));
   document.getElementById('invDate').valueAsDate = new Date();
   populateGstrFY();
   onFilingTypeChange();
   initSignaturePad();
   await loadProfile();
   await loadProducts();
-  await loadPurchaseProducts();
   await loadCustomers();
-  await loadSuppliers();
-  await loadPurchases();
-  await loadSupplierPayments();
-  document.getElementById('purDate').valueAsDate = new Date();
-  initPurchaseRows();
-  document.getElementById('payDate').valueAsDate = new Date();
   addLineItem();
   loadInvoices();
 });
 
 function signOut(){ auth.signOut().then(()=> window.location.href = 'login.html'); }
 
-/* ---------------- Nav / billing modes ---------------- */
-function setBillingMode(mode){
-  billingMode = mode;
-  document.getElementById('modeInvoiceBtn').classList.toggle('active', mode === 'invoice');
-  document.getElementById('modePurchaseBtn').classList.toggle('active', mode === 'purchase');
-  document.querySelectorAll('[data-mode="invoice"]').forEach(el => el.classList.toggle('mode-hidden', mode !== 'invoice'));
-  document.querySelectorAll('[data-mode="purchase"]').forEach(el => el.classList.toggle('mode-hidden', mode !== 'purchase'));
-  const first = mode === 'invoice' ? 'products' : 'suppliers';
-  const link = document.querySelector('.nav-link[data-view="'+first+'"]');
-  if(link) link.click();
-}
-
+/* ---------------- Nav ---------------- */
 document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', e => {
     e.preventDefault();
-    if(link.dataset.mode && link.dataset.mode !== 'common' && link.dataset.mode !== billingMode) return;
     document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
     link.classList.add('active');
     document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
     document.getElementById('view-' + link.dataset.view).classList.remove('hidden');
     if(link.dataset.view === 'invoices') loadInvoices();
-    if(link.dataset.view === 'purchases') { loadPurchases(); fillPurchaseProduct(); }
-    if(link.dataset.view === 'payments') { loadSupplierPayments(); showSupplierBalance(); }
-    if(link.dataset.view === 'supplier-ledger') loadSupplierLedger();
-    if(link.dataset.view === 'suppliers') loadSuppliers();
-    if(link.dataset.view === 'purchase-products') loadPurchaseProducts();
   });
 });
 
@@ -193,11 +163,10 @@ async function loadProducts(){
   productsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
   renderProducts();
   renderProductDropdowns();
-  renderPurchaseProductDropdown();
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.sellingPrice || 0)}</td>
+    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${p.price}</td><td>${p.gstRate}%</td>
     <td class="row-actions">
       <button class="btn small" onclick="editProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button>
@@ -209,8 +178,8 @@ async function saveProduct(){
     name: document.getElementById('pName').value.trim(),
     hsn: document.getElementById('pHsn').value.trim(),
     unit: document.getElementById('pUnit').value.trim() || 'PCS',
-    gstRate: parseFloat(document.getElementById('pGst').value),
-    sellingPrice: parseFloat(document.getElementById('pPrice').value) || 0
+    price: parseFloat(document.getElementById('pPrice').value) || 0,
+    gstRate: parseFloat(document.getElementById('pGst').value)
   };
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
@@ -226,393 +195,13 @@ function editProduct(id){
   document.getElementById('pName').value = p.name;
   document.getElementById('pHsn').value = p.hsn;
   document.getElementById('pUnit').value = p.unit;
+  document.getElementById('pPrice').value = p.price;
   document.getElementById('pGst').value = p.gstRate;
-  document.getElementById('pPrice').value = p.sellingPrice ?? '';
 }
 async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
   await db.collection('users').doc(currentUser.uid).collection('products').doc(id).delete();
   loadProducts();
-}
-
-
-/* ---------------- Suppliers ---------------- */
-async function loadSuppliers(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
-  suppliersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
-  renderSuppliers();
-  renderSupplierDropdowns();
-}
-function renderSuppliers(){
-  const el = document.getElementById('suppliersTable');
-  if(!el) return;
-  el.innerHTML = suppliersCache.map(s => `<tr>
-    <td>${esc(s.name)}</td><td>${esc(s.gstin||'—')}</td><td>${esc(s.state||'')}</td><td>${esc(s.phone||'')}</td>
-    <td class="row-actions"><button class="btn small" onclick="editSupplier('${s.id}')">Edit</button>
-    <button class="btn small danger" onclick="deleteSupplier('${s.id}')">Delete</button></td></tr>`).join('') ||
-    '<tr><td colspan="5" style="color:var(--muted)">No suppliers yet.</td></tr>';
-}
-function supplierOptions(placeholder){
-  return `<option value="">${placeholder}</option>` + suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
-}
-function renderSupplierDropdowns(){
-  ['purSupplier','paySupplier','ledgerSupplier','purchaseHistorySupplier'].forEach(id=>{
-    const el=document.getElementById(id); if(!el) return;
-    const old=el.value;
-    const ph = id==='purchaseHistorySupplier' ? 'All suppliers' : 'Select supplier…';
-    el.innerHTML=supplierOptions(ph);
-    if(old && suppliersCache.some(s=>s.id===old)) el.value=old;
-  });
-  renderPurchaseProductDropdown();
-}
-async function saveSupplier(){
-  const id=document.getElementById('sEditId').value;
-  const stateCode=document.getElementById('sState').value;
-  const data={
-    name:document.getElementById('sName').value.trim(),
-    gstin:document.getElementById('sGstin').value.trim(),
-    address:document.getElementById('sAddress').value.trim(),
-    stateCode, state:stateNameByCode(stateCode),
-    phone:document.getElementById('sPhone').value.trim(),
-    email:document.getElementById('sEmail').value.trim()
-  };
-  if(!data.name){showMsg('supplierMsg','Supplier name is required.',false);return;}
-  const col=db.collection('users').doc(currentUser.uid).collection('suppliers');
-  if(id) await col.doc(id).set(data,{merge:true}); else await col.add(data);
-  ['sName','sGstin','sAddress','sPhone','sEmail','sEditId'].forEach(x=>document.getElementById(x).value='');
-  document.getElementById('sState').value='';
-  showMsg('supplierMsg','Supplier saved.',true);
-  await loadSuppliers();
-}
-function editSupplier(id){
-  const s=suppliersCache.find(x=>x.id===id); if(!s)return;
-  document.getElementById('sEditId').value=id;
-  document.getElementById('sName').value=s.name||'';
-  document.getElementById('sGstin').value=s.gstin||'';
-  document.getElementById('sAddress').value=s.address||'';
-  document.getElementById('sState').value=s.stateCode||'';
-  document.getElementById('sPhone').value=s.phone||'';
-  document.getElementById('sEmail').value=s.email||'';
-}
-async function deleteSupplier(id){
-  if(!confirm('Delete this supplier? Existing purchase/payment records will remain.'))return;
-  await db.collection('users').doc(currentUser.uid).collection('suppliers').doc(id).delete();
-  await loadSuppliers();
-}
-function renderPurchaseProductDropdown(){
-  const el=document.getElementById('purProduct'); if(!el)return;
-  const old=el.value;
-  el.innerHTML='<option value="">Select purchase product…</option>'+purchaseProductsCache.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
-  if(old && purchaseProductsCache.some(p=>p.id===old)) el.value=old;
-}
-async function loadPurchaseProducts(){
-  if(!currentUser)return;
-  const snap=await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').orderBy('name').get();
-  purchaseProductsCache=snap.docs.map(d=>({id:d.id,...d.data()}));
-  renderPurchaseProducts();
-  renderPurchaseProductDropdown();
-}
-function renderPurchaseProducts(){
-  const el=document.getElementById('purchaseProductsTable'); if(!el)return;
-  el.innerHTML=purchaseProductsCache.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.hsn||'')}</td><td>${esc(p.unit||'')}</td><td>${p.gstRate||0}%</td><td class="row-actions"><button class="btn small" onclick="editPurchaseProduct('${p.id}')">Edit</button><button class="btn small danger" onclick="deletePurchaseProduct('${p.id}')">Delete</button></td></tr>`).join('')||'<tr><td colspan="5" style="color:var(--muted)">No purchase products yet.</td></tr>';
-}
-async function savePurchaseProduct(){
-  const id=document.getElementById('ppEditId').value;
-  const data={name:document.getElementById('ppName').value.trim(),hsn:document.getElementById('ppHsn').value.trim(),unit:document.getElementById('ppUnit').value.trim()||'PCS',gstRate:parseFloat(document.getElementById('ppGst').value)||0};
-  if(!data.name){showMsg('purchaseProductMsg','Product name is required.',false);return;}
-  const col=db.collection('users').doc(currentUser.uid).collection('purchaseProducts');
-  if(id) await col.doc(id).set(data); else await col.add(data);
-  ['ppName','ppHsn','ppUnit','ppEditId'].forEach(x=>document.getElementById(x).value=''); document.getElementById('ppGst').value='0';
-  showMsg('purchaseProductMsg','Purchase product saved.',true); await loadPurchaseProducts();
-}
-function editPurchaseProduct(id){const p=purchaseProductsCache.find(x=>x.id===id);if(!p)return;document.getElementById('ppEditId').value=id;document.getElementById('ppName').value=p.name||'';document.getElementById('ppHsn').value=p.hsn||'';document.getElementById('ppUnit').value=p.unit||'';document.getElementById('ppGst').value=p.gstRate||0;}
-async function deletePurchaseProduct(id){if(!confirm('Delete this purchase product? Existing purchase records will remain.'))return;await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').doc(id).delete();await loadPurchaseProducts();}
-
-function initPurchaseRows(){
-  purchaseRows=[];
-  addPurchaseRow();
-}
-function addPurchaseRow(){
-  const id=Date.now()+Math.random();
-  purchaseRows.push({id,productId:'',qty:1,rate:'',gst:0,unit:'',lastPrice:''});
-  renderPurchaseEntryRows();
-}
-function removePurchaseRow(index){
-  if(purchaseRows.length===1){
-    purchaseRows[0]={...purchaseRows[0],productId:'',qty:1,rate:'',gst:0,unit:'',lastPrice:''};
-  } else purchaseRows.splice(index,1);
-  renderPurchaseEntryRows();
-  refreshPurchaseTotals();
-}
-function renderPurchaseEntryRows(){
-  const el=document.getElementById('purchaseItemsBody'); if(!el)return;
-  el.innerHTML=purchaseRows.map((r,i)=>`<tr>
-    <td><select class="pur-row-product" onchange="setPurchaseRowProduct(${i},this.value)"><option value="">Select product…</option>${purchaseProductsCache.map(p=>`<option value="${p.id}" ${p.id===r.productId?'selected':''}>${esc(p.name)}</option>`).join('')}</select><small id="pur-last-${i}" class="sub purchase-last-price">${r.lastPrice||''}</small></td>
-    <td><input type="number" min="0" step="0.001" value="${r.qty}" oninput="purchaseRowField(${i},'qty',this.value)"></td>
-    <td><input disabled value="${esc(r.unit||'')}"></td>
-    <td><input type="number" min="0" step="0.01" value="${r.rate}" oninput="purchaseRowField(${i},'rate',this.value)"></td>
-    <td><select onchange="purchaseRowField(${i},'gst',this.value)"><option value="0" ${Number(r.gst)===0?'selected':''}>0%</option><option value="5" ${Number(r.gst)===5?'selected':''}>5%</option><option value="12" ${Number(r.gst)===12?'selected':''}>12%</option><option value="18" ${Number(r.gst)===18?'selected':''}>18%</option><option value="28" ${Number(r.gst)===28?'selected':''}>28%</option></select></td>
-    <td id="pur-gst-${i}">₹0.00</td><td id="pur-total-${i}"><b>₹0.00</b></td>
-    <td><button class="btn small danger" type="button" onclick="removePurchaseRow(${i})">Remove</button></td>
-  </tr>`).join('');
-  purchaseRows.forEach((_,i)=>updatePurchaseRowTotal(i));
-}
-async function setPurchaseRowProduct(index,productId){
-  const row=purchaseRows[index]; if(!row)return;
-  row.productId=productId; row.lastPrice='';
-  const p=purchaseProductsCache.find(x=>x.id===productId);
-  if(!p){row.unit='';row.rate='';row.gst=0;renderPurchaseEntryRows();refreshPurchaseTotals();return;}
-  row.unit=p.unit||'PCS'; row.gst=(p.gstRate ?? 0);
-  const supplierId=document.getElementById('purSupplier').value;
-  if(supplierId){
-    try{
-      const key=supplierId+'__'+productId;
-      const snap=await db.collection('users').doc(currentUser.uid).collection('supplierProductPrices').doc(key).get();
-      if(snap.exists && snap.data().lastPurchaseRate != null){
-        const d=snap.data(); row.rate=d.lastPurchaseRate;
-        row.lastPrice='Last price: ₹'+fmtMoney(d.lastPurchaseRate)+(d.lastPurchaseDate?' on '+d.lastPurchaseDate:'');
-      } else row.lastPrice='No previous price for this supplier and product.';
-    }catch(e){console.error(e);}
-  }
-  renderPurchaseEntryRows(); refreshPurchaseTotals();
-}
-function purchaseRowField(index,field,value){
-  const row=purchaseRows[index]; if(!row)return;
-  row[field]=field==='qty'||field==='rate'||field==='gst' ? Number(value) : value;
-  updatePurchaseRowTotal(index); refreshPurchaseTotals();
-}
-function updatePurchaseRowTotal(index){
-  const r=purchaseRows[index]||{};
-  const qty=Number(r.qty)||0, rate=Number(r.rate)||0, gst=Number(r.gst)||0;
-  const taxable=qty*rate, gstAmt=taxable*gst/100, total=taxable+gstAmt;
-  const g=document.getElementById('pur-gst-'+index), t=document.getElementById('pur-total-'+index);
-  if(g)g.textContent='₹'+fmtMoney(gstAmt);
-  if(t)t.innerHTML='<b>₹'+fmtMoney(total)+'</b>';
-  return {qty,rate,gst,taxable,gstAmt,total,unitFinal:rate*(1+gst/100)};
-}
-function refreshPurchaseTotals(){
-  let taxable=0,gst=0,total=0;
-  purchaseRows.forEach((_,i)=>{const c=updatePurchaseRowTotal(i);taxable+=c.taxable;gst+=c.gstAmt;total+=c.total;});
-  const a=document.getElementById('purBatchTaxable'),b=document.getElementById('purBatchGst'),c=document.getElementById('purBatchGrand');
-  if(a)a.textContent='₹'+fmtMoney(taxable); if(b)b.textContent='₹'+fmtMoney(gst); if(c)c.textContent='₹'+fmtMoney(total);
-  return {taxable,gst,total};
-}
-async function refreshAllPurchaseRows(){
-  const supplierId=document.getElementById('purSupplier').value;
-  for(let i=0;i<purchaseRows.length;i++){
-    const r=purchaseRows[i]; if(!r.productId||!supplierId)continue;
-    try{
-      const key=supplierId+'__'+r.productId;
-      const snap=await db.collection('users').doc(currentUser.uid).collection('supplierProductPrices').doc(key).get();
-      if(snap.exists&&snap.data().lastPurchaseRate!=null){const d=snap.data();r.rate=d.lastPurchaseRate;r.lastPrice='Last price: ₹'+fmtMoney(d.lastPurchaseRate)+(d.lastPurchaseDate?' on '+d.lastPurchaseDate:'');}
-      else {r.rate='';r.lastPrice='No previous price for this supplier and product.';}
-    }catch(e){console.error(e);}
-  }
-  renderPurchaseEntryRows(); refreshPurchaseTotals();
-}
-async function savePurchaseBatch(){
-  const supplierId=document.getElementById('purSupplier').value;
-  const supplier=suppliersCache.find(s=>s.id===supplierId);
-  if(!supplier){showMsg('purchaseMsg','Select a supplier.',false);return;}
-  const valid=purchaseRows.filter(r=>r.productId);
-  if(!valid.length){showMsg('purchaseMsg','Add at least one product.',false);return;}
-  const date=document.getElementById('purDate').value||new Date().toISOString().slice(0,10);
-  const billNo=document.getElementById('purBillNo').value.trim();
-  const notes=document.getElementById('purNotes').value.trim();
-  const batchId='PUR-'+Date.now();
-  const batchTotals=refreshPurchaseTotals();
-  const batchItems=[];
-  try{
-    for(let i=0;i<valid.length;i++){
-      const r=valid[i], product=purchaseProductsCache.find(p=>p.id===r.productId), c=updatePurchaseRowTotal(purchaseRows.indexOf(r));
-      if(!product||c.qty<=0||c.rate<0)throw new Error('Enter valid quantity and price for '+(product?.name||'product'));
-      const data={date,supplierId,supplierName:supplier.name,productId:product.id,productName:product.name,unit:r.unit||product.unit||'PCS',qty:c.qty,unitPrice:c.rate,gstRate:c.gst,taxable:c.taxable,gstAmount:c.gstAmt,total:c.total,unitPriceInclGst:c.unitFinal,billNo,notes,batchId,batchItem:i+1,batchItemCount:valid.length,createdAt:firebase.firestore.FieldValue.serverTimestamp()};
-      await db.collection('users').doc(currentUser.uid).collection('purchases').add(data); batchItems.push(data);
-      const priceKey=supplierId+'__'+product.id;
-      await db.collection('users').doc(currentUser.uid).collection('supplierProductPrices').doc(priceKey).set({supplierId,supplierName:supplier.name,productId:product.id,productName:product.name,lastPurchaseRate:c.rate,lastPurchaseDate:date,lastPurchaseGstRate:c.gst,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
-    }
-    showMsg('purchaseMsg',`${valid.length} purchase item${valid.length>1?'s':''} saved together. Total including GST: ₹${fmtMoney(batchTotals.total)}`,true);
-    document.getElementById('purBillNo').value=''; document.getElementById('purNotes').value='';
-    purchaseRows=[]; addPurchaseRow(); await loadPurchases();
-  }catch(e){console.error(e);showMsg('purchaseMsg','Purchase could not be saved: '+e.message,false);}
-}
-function clearPurchaseForm(){
-  document.getElementById('purBillNo').value='';document.getElementById('purNotes').value='';
-  purchaseRows=[];addPurchaseRow();
-}
-
-async function loadPurchases(){
-  if(!currentUser)return;
-  const snap=await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').limit(500).get();
-  purchasesCache=snap.docs.map(d=>({id:d.id,...d.data()}));
-  renderPurchaseHistory();
-  if(document.getElementById('ledgerSupplier')) loadSupplierLedger();
-}
-function inDateRange(item,from,to){
-  if(from && item.date<from)return false;
-  if(to && item.date>to)return false;
-  return true;
-}
-function renderPurchaseHistory(){
-  const el=document.getElementById('purchasesTable'); if(!el)return;
-  const sid=document.getElementById('purchaseHistorySupplier')?.value||'';
-  const from=document.getElementById('purchaseHistoryFrom')?.value||'', to=document.getElementById('purchaseHistoryTo')?.value||'';
-  const rows=purchasesCache.filter(p=>(!sid||p.supplierId===sid)&&inDateRange(p,from,to)).map(p=>
-    `<tr><td>${esc(p.date||'')}</td><td>${esc(p.supplierName||'')}</td><td>${esc(p.productName||'')}</td>
-    <td>${p.qty}</td><td>₹${fmtMoney(p.unitPriceInclGst||0)}</td><td>₹${fmtMoney(p.gstAmount||0)} (${p.gstRate||0}%)</td>
-    <td><b>₹${fmtMoney(p.total||0)}</b></td><td>${esc(p.billNo||'—')}</td><td><button class="btn small" onclick="downloadPurchaseVoucher('${p.id}')">PDF</button></td></tr>`).join('');
-  el.innerHTML=rows||'<tr><td colspan="9" style="color:var(--muted)">No purchases found.</td></tr>';
-}
-async function loadSupplierPayments(){
-  if(!currentUser)return;
-  const snap=await db.collection('users').doc(currentUser.uid).collection('supplierPayments').orderBy('date','desc').limit(500).get();
-  paymentsCache=snap.docs.map(d=>({id:d.id,...d.data()}));
-  renderPayments();
-  showSupplierBalance();
-}
-function renderPayments(){
-  const el=document.getElementById('paymentsTable'); if(!el)return;
-  const rows=paymentsCache.map(p=>`<tr><td>${esc(p.date||'')}</td><td>${esc(p.supplierName||'')}</td>
-    <td><b>₹${fmtMoney(p.amount||0)}</b></td><td>${esc(p.method||'')}</td><td>${esc(p.reference||'—')}</td><td>${esc(p.notes||'')}</td></tr>`).join('');
-  el.innerHTML=rows||'<tr><td colspan="6" style="color:var(--muted)">No payments yet.</td></tr>';
-}
-function supplierTotals(supplierId,from='',to=''){
-  const purchases=purchasesCache.filter(p=>p.supplierId===supplierId&&inDateRange(p,from,to));
-  const pays=paymentsCache.filter(p=>p.supplierId===supplierId&&inDateRange(p,from,to));
-  const purchaseTotal=purchases.reduce((a,p)=>a+(Number(p.total)||0),0);
-  const paymentTotal=pays.reduce((a,p)=>a+(Number(p.amount)||0),0);
-  return {purchases,pays,purchaseTotal,paymentTotal,balance:purchaseTotal-paymentTotal};
-}
-function showSupplierBalance(){
-  const id=document.getElementById('paySupplier')?.value;
-  const el=document.getElementById('paymentBalanceBox'); if(!el)return;
-  if(!id){el.textContent='Supplier balance: ₹0.00';return;}
-  const t=supplierTotals(id);
-  el.textContent='Current supplier balance: ₹'+fmtMoney(t.balance)+'  |  Total purchases: ₹'+fmtMoney(t.purchaseTotal)+'  |  Total payments: ₹'+fmtMoney(t.paymentTotal);
-}
-async function saveSupplierPayment(){
-  const id=document.getElementById('paySupplier').value, s=suppliersCache.find(x=>x.id===id);
-  const amount=parseFloat(document.getElementById('payAmount').value)||0;
-  if(!s){showMsg('paymentMsg','Select a supplier.',false);return;}
-  if(amount<=0){showMsg('paymentMsg','Enter a payment amount greater than zero.',false);return;}
-  const data={
-    date:document.getElementById('payDate').value||new Date().toISOString().slice(0,10),
-    supplierId:id,supplierName:s.name,amount,
-    method:document.getElementById('payMethod').value,
-    reference:document.getElementById('payReference').value.trim(),
-    notes:document.getElementById('payNotes').value.trim(),
-    createdAt:firebase.firestore.FieldValue.serverTimestamp()
-  };
-  await db.collection('users').doc(currentUser.uid).collection('supplierPayments').add(data);
-  document.getElementById('payAmount').value='';document.getElementById('payReference').value='';document.getElementById('payNotes').value='';
-  showMsg('paymentMsg','Payment saved: ₹'+fmtMoney(amount),true);
-  await loadSupplierPayments();
-}
-async function loadSupplierLedger(){
-  const id=document.getElementById('ledgerSupplier')?.value;
-  if(!id){
-    ['ledgerPurchaseTotal','ledgerPaymentTotal','ledgerBalance'].forEach(x=>document.getElementById(x).textContent='₹0.00');
-    document.getElementById('ledgerPurchasesTable').innerHTML='<tr><td colspan="8" style="color:var(--muted)">Select a supplier.</td></tr>';
-    document.getElementById('ledgerPaymentsTable').innerHTML='<tr><td colspan="5" style="color:var(--muted)">Select a supplier.</td></tr>';
-    return;
-  }
-  const from=document.getElementById('ledgerFrom').value||'',to=document.getElementById('ledgerTo').value||'';
-  const t=supplierTotals(id,from,to);
-  document.getElementById('ledgerPurchaseTotal').textContent='₹'+fmtMoney(t.purchaseTotal);
-  document.getElementById('ledgerPaymentTotal').textContent='₹'+fmtMoney(t.paymentTotal);
-  document.getElementById('ledgerBalance').textContent='₹'+fmtMoney(t.balance);
-  document.getElementById('ledgerPurchasesTable').innerHTML=t.purchases.map(p=>`<tr>
-    <td>${esc(p.date||'')}</td><td>${esc(p.productName||'')}</td><td>${p.qty}</td><td>${esc(p.unit||'')}</td>
-    <td>₹${fmtMoney(p.unitPriceInclGst||0)}</td><td>${p.gstRate||0}% / ₹${fmtMoney(p.gstAmount||0)}</td>
-    <td><b>₹${fmtMoney(p.total||0)}</b></td><td>${esc(p.billNo||'—')}</td></tr>`).join('')||
-    '<tr><td colspan="8" style="color:var(--muted)">No purchases for this selection.</td></tr>';
-  document.getElementById('ledgerPaymentsTable').innerHTML=t.pays.map(p=>`<tr>
-    <td>${esc(p.date||'')}</td><td><b>₹${fmtMoney(p.amount||0)}</b></td><td>${esc(p.method||'')}</td>
-    <td>${esc(p.reference||'—')}</td><td>${esc(p.notes||'')}</td></tr>`).join('')||
-    '<tr><td colspan="5" style="color:var(--muted)">No payments for this selection.</td></tr>';
-}
-
-
-/* ---------------- Purchase / supplier exports ---------------- */
-function pdfDoc(title, subtitle){
-  const {jsPDF}=window.jspdf;
-  const doc=new jsPDF({unit:'mm',format:'a4'});
-  doc.setFontSize(18); doc.text(title,14,18);
-  doc.setFontSize(9); doc.setTextColor(100); doc.text(subtitle||'',14,25);
-  doc.setTextColor(20); return doc;
-}
-function downloadPurchaseVoucher(id){
-  const p=purchasesCache.find(x=>x.id===id); if(!p)return;
-  const s=suppliersCache.find(x=>x.id===p.supplierId)||{};
-  const doc=pdfDoc('Purchase Voucher', `${p.date||''}  |  ${p.billNo ? 'Bill: '+p.billNo : 'Purchase entry'}`);
-  doc.setFontSize(11); doc.text('Supplier: '+(p.supplierName||s.name||''),14,34);
-  if(s.gstin) doc.text('GSTIN: '+s.gstin,14,40);
-  if(s.address) doc.text('Address: '+s.address,14,46,{maxWidth:180});
-  doc.autoTable({startY:53,head:[['Product','Qty','Unit','Unit Price','GST','GST Amount','Final Amount']],body:[[
-    p.productName||'', String(p.qty||0), p.unit||'', '₹'+fmtMoney(p.unitPrice||0),
-    (p.gstRate||0)+'%', '₹'+fmtMoney(p.gstAmount||0), '₹'+fmtMoney(p.total||0)
-  ]]});
-  let y=doc.lastAutoTable.finalY+10;
-  doc.setFontSize(10); doc.text('Taxable value: ₹'+fmtMoney(p.taxable||0),14,y); y+=6;
-  doc.text('GST amount: ₹'+fmtMoney(p.gstAmount||0),14,y); y+=6;
-  doc.setFontSize(12); doc.text('Total purchase including GST: ₹'+fmtMoney(p.total||0),14,y);
-  if(p.notes){y+=10;doc.setFontSize(9);doc.text('Notes: '+p.notes,14,y,{maxWidth:180});}
-  doc.setFontSize(8); doc.setTextColor(100); doc.text('Generated from VISUTRA Billing',14,287);
-  doc.save('purchase-voucher-'+(p.date||'purchase')+'.pdf');
-}
-function selectedLedgerData(){
-  const id=document.getElementById('ledgerSupplier')?.value;
-  if(!id)return null;
-  const from=document.getElementById('ledgerFrom')?.value||'',to=document.getElementById('ledgerTo')?.value||'';
-  const supplier=suppliersCache.find(s=>s.id===id)||{};
-  return {id,supplier,from,to,...supplierTotals(id,from,to)};
-}
-function downloadSupplierStatement(){
-  const d=selectedLedgerData(); if(!d){alert('Select a supplier first.');return;}
-  const doc=pdfDoc('Supplier Statement', `${d.supplier.name||''}  |  ${d.from||'All dates'} to ${d.to||'All dates'}`);
-  doc.setFontSize(10); doc.text('Supplier: '+(d.supplier.name||''),14,34);
-  if(d.supplier.gstin) doc.text('GSTIN: '+d.supplier.gstin,14,40);
-  doc.autoTable({startY:47,head:[['Date','Product','Qty','Unit','Unit Price','GST','Total','Bill No.']],body:d.purchases.map(p=>[
-    p.date||'',p.productName||'',String(p.qty||0),p.unit||'', '₹'+fmtMoney(p.unitPriceInclGst||0),
-    (p.gstRate||0)+'% / ₹'+fmtMoney(p.gstAmount||0),'₹'+fmtMoney(p.total||0),p.billNo||'—'
-  ])});
-  let y=(doc.lastAutoTable?.finalY||47)+8;
-  doc.autoTable({startY:y,head:[['Payment Date','Amount','Method','Reference','Notes']],body:d.pays.map(p=>[
-    p.date||'','₹'+fmtMoney(p.amount||0),p.method||'',p.reference||'—',p.notes||''
-  ])});
-  y=(doc.lastAutoTable?.finalY||y)+10;
-  doc.setFontSize(10); doc.text('Total purchases: ₹'+fmtMoney(d.purchaseTotal),14,y); y+=6;
-  doc.text('Total payments: ₹'+fmtMoney(d.paymentTotal),14,y); y+=7;
-  doc.setFontSize(13); doc.text('Balance payable: ₹'+fmtMoney(d.balance),14,y);
-  doc.setFontSize(8); doc.setTextColor(100); doc.text('Generated from VISUTRA Billing',14,287);
-  doc.save('supplier-statement-'+((d.supplier.name||'supplier').replace(/[^a-z0-9]+/gi,'-'))+'.pdf');
-}
-function downloadXlsx(filename, sheets){
-  if(typeof XLSX==='undefined'){alert('Excel export library could not be loaded. Please refresh the page and try again.');return;}
-  const wb=XLSX.utils.book_new();
-  Object.entries(sheets).forEach(([name,rows])=>XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),name.slice(0,31)));
-  XLSX.writeFile(wb,filename);
-}
-function exportPurchasesExcel(){
-  const sid=document.getElementById('purchaseHistorySupplier')?.value||'',from=document.getElementById('purchaseHistoryFrom')?.value||'',to=document.getElementById('purchaseHistoryTo')?.value||'';
-  const rows=purchasesCache.filter(p=>(!sid||p.supplierId===sid)&&inDateRange(p,from,to)).map(p=>({
-    Date:p.date||'',Supplier:p.supplierName||'',Product:p.productName||'',Quantity:Number(p.qty)||0,Unit:p.unit||'',
-    'Unit Price Before GST':Number(p.unitPrice)||0,'GST Rate %':Number(p.gstRate)||0,'Taxable Value':Number(p.taxable)||0,
-    'GST Amount':Number(p.gstAmount)||0,'Unit Price Including GST':Number(p.unitPriceInclGst)||0,'Final Purchase Price':Number(p.total)||0,'Bill No.':p.billNo||'',Notes:p.notes||''
-  }));
-  downloadXlsx('VISUTRA-Purchase-Register.xlsx',{Purchases:rows});
-}
-function exportPaymentsExcel(){
-  const rows=paymentsCache.map(p=>({Date:p.date||'',Supplier:p.supplierName||'',Amount:Number(p.amount)||0,Method:p.method||'',Reference:p.reference||'',Notes:p.notes||''}));
-  downloadXlsx('VISUTRA-Supplier-Payments.xlsx',{Payments:rows});
-}
-function exportSupplierLedgerExcel(){
-  const d=selectedLedgerData(); if(!d){alert('Select a supplier first.');return;}
-  const purchases=d.purchases.map(p=>({Date:p.date||'',Supplier:p.supplierName||d.supplier.name||'',Product:p.productName||'',Quantity:Number(p.qty)||0,Unit:p.unit||'',
-    'Unit Price Including GST':Number(p.unitPriceInclGst)||0,'GST Rate %':Number(p.gstRate)||0,'GST Amount':Number(p.gstAmount)||0,'Final Purchase':Number(p.total)||0,'Bill No.':p.billNo||''}));
-  const payments=d.pays.map(p=>({Date:p.date||'',Supplier:p.supplierName||d.supplier.name||'',Payment:Number(p.amount)||0,Method:p.method||'',Reference:p.reference||'',Notes:p.notes||''}));
-  const summary=[{Supplier:d.supplier.name||'',From:d.from||'All',To:d.to||'All','Total Purchases':d.purchaseTotal,'Total Payments':d.paymentTotal,'Balance Payable':d.balance}];
-  downloadXlsx('VISUTRA-'+((d.supplier.name||'Supplier').replace(/[^a-z0-9]+/gi,'-'))+'-Ledger.xlsx',{Summary:summary,Purchases:purchases,Payments:payments});
 }
 
 /* ---------------- Customers ---------------- */
@@ -710,7 +299,7 @@ function renderLineItems(){
 function onProductPick(idx, productId){
   const p = productsCache.find(x => x.id === productId);
   if(!p) return;
-  lineItems[idx] = { productId, name:p.name, hsn:p.hsn, unit:p.unit, qty:lineItems[idx].qty||1, rate:Number(p.sellingPrice)||0, discount:0, gstRate:p.gstRate };
+  lineItems[idx] = { productId, name:p.name, hsn:p.hsn, unit:p.unit, qty:lineItems[idx].qty||1, rate:p.price, discount:0, gstRate:p.gstRate };
   renderLineItems();
 }
 function updateLine(idx, field, value){

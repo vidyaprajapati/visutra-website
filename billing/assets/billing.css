@@ -51,24 +51,3 @@ th{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacin
 .sig-pad{border:1.5px dashed var(--thread);border-radius:var(--radius-sm);background:#fff;cursor:crosshair;touch-action:none}
 .line-items th, .line-items td{font-size:13px}
 .line-items input{padding:6px 8px;font-size:13px}
-
-/* Supplier / purchase management */
-.purchase-entry-row{display:grid;grid-template-columns:1.4fr .7fr .6fr 1fr .7fr;gap:12px;align-items:end}
-@media(max-width:900px){.purchase-entry-row{grid-template-columns:1fr 1fr}.purchase-entry-row .field:first-child{grid-column:1/-1}}
-.purchase-total-box{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0;padding:16px;border:1px solid var(--thread);border-radius:var(--radius-sm);background:var(--ivory)}
-.purchase-total-box div{padding:10px 12px;border:1px solid var(--thread);background:#fff;border-radius:8px}
-.purchase-total-box span{display:block;font-size:11px;color:var(--muted);font-family:var(--mono);text-transform:uppercase}
-.purchase-total-box b{display:block;margin-top:5px;font-size:17px}
-.purchase-total-box .grand{border:2px solid var(--ink)}
-.purchase-total-box .grand b{font-size:21px}
-@media(max-width:800px){.purchase-total-box{grid-template-columns:1fr 1fr}}
-.filter-row{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}.filter-row select,.filter-row input{min-width:170px}
-.balance-strip{padding:13px 15px;margin:10px 0 16px;background:var(--ivory);border:1px solid var(--thread);border-radius:8px;font-weight:600}
-.stat-card span{font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted)}
-.stat-card b{display:block;font-size:24px;margin-top:6px}
-.billing-mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:10px;margin-bottom:10px;background:rgba(0,0,0,.03);border-radius:12px}
-.mode-btn{border:1px solid var(--thread);background:transparent;padding:10px 8px;border-radius:9px;font-weight:700;cursor:pointer;color:var(--ink)}
-.mode-btn.active{background:var(--ink);color:#fff}
-.nav-section{font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--muted);padding:14px 12px 6px}
-.mode-hidden{display:none!important}
-.purchase-items-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:18px 0 10px}.purchase-items-head h3{margin:0}.purchase-table-wrap{overflow-x:auto}.purchase-entry-table{min-width:1050px}.purchase-entry-table input,.purchase-entry-table select{width:100%;box-sizing:border-box}.purchase-entry-table th,.purchase-entry-table td{vertical-align:top}.purchase-last-price{display:block;min-width:170px;margin-top:4px}.purchase-entry-table .danger{white-space:nowrap}
