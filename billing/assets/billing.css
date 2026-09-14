@@ -13,6 +13,8 @@ a{color:var(--indigo)}
 .topbar .brand img{height:32px;width:32px;border-radius:6px}
 .topbar .brand b{font-family:var(--display)}
 .topbar .user{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--muted)}
+.topbar-switch{display:flex;gap:10px}
+@media(max-width:700px){.topbar-switch{display:none}}
 .btn{font-family:var(--mono);font-size:13px;letter-spacing:.02em;border-radius:999px;padding:9px 18px;border:1.5px solid var(--ink);background:transparent;color:var(--ink);cursor:pointer;text-decoration:none;display:inline-block}
 .btn:hover{background:var(--ink);color:#fff}
 .btn.primary{background:var(--paprika);border-color:var(--paprika);color:#fff}

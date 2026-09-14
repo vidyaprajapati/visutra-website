@@ -72,6 +72,14 @@ function activateView(viewName){
     l.classList.toggle('hidden', l.dataset.group !== group);
   });
 
+  // Keep the always-visible topbar switch buttons in sync so whichever mode
+  // is active is visually marked, and either can be clicked to jump modes
+  // from anywhere without going back to Business Profile.
+  const billingBtn = document.getElementById('topbarBillingBtn');
+  const purchaseBtn = document.getElementById('topbarPurchaseBtn');
+  if(billingBtn) billingBtn.classList.toggle('primary', group === 'billing');
+  if(purchaseBtn) purchaseBtn.classList.toggle('primary', group === 'purchase');
+
   if(viewName === 'invoices') loadInvoices();
   if(viewName === 'purchases') loadPurchases();
 }
