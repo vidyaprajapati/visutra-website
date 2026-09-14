@@ -348,10 +348,14 @@ async function deleteSupplier(id){
   loadSuppliers();
 }
 function renderSupplierDropdown(){
-  const sel = document.getElementById('purSupplier');
-  if(!sel) return;
-  sel.innerHTML = '<option value="">Select supplier…</option>' +
-    suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  ['purSupplier','dashSupplier'].forEach(id => {
+    const sel = document.getElementById(id);
+    if(!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">Select supplier…</option>' +
+      suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    if(prev && suppliersCache.some(s => s.id === prev)) sel.value = prev;
+  });
 }
 
 /* ---------------- Purchase Product Master (separate from the GST billing Products list — purchase price differs from selling price) ---------------- */
@@ -414,6 +418,68 @@ function getLastPriceForSupplierProduct(supplierId, productId){
   return null;
 }
 
+/* Total purchased minus total paid, across every purchase/payment on record for this supplier. */
+function getSupplierBalance(supplierId){
+  const totalPurchase = purchasesCache.filter(p => p.supplierId === supplierId).reduce((s,p) => s + (p.grandTotal||0), 0);
+  const totalPaid = paymentsCache.filter(p => p.supplierId === supplierId).reduce((s,p) => s + (p.amount||0), 0);
+  return totalPurchase - totalPaid;
+}
+
+/* ---------------- Supplier Dashboard (pick a supplier, see everything at a glance) ---------------- */
+function renderSupplierDashboard(supplierId){
+  const wrap = document.getElementById('dashSummaryWrap');
+  const emptyMsg = document.getElementById('dashEmptyMsg');
+  if(!supplierId){ wrap.classList.add('hidden'); emptyMsg.classList.add('hidden'); return; }
+
+  const purchases = purchasesCache.filter(p => p.supplierId === supplierId); // newest first
+  const payments = paymentsCache.filter(p => p.supplierId === supplierId);
+
+  if(!purchases.length && !payments.length){
+    wrap.classList.add('hidden');
+    emptyMsg.classList.remove('hidden');
+    return;
+  }
+  emptyMsg.classList.add('hidden');
+  wrap.classList.remove('hidden');
+
+  let totalItems = 0;
+  const rows = [];
+  purchases.forEach(p => (p.items||[]).forEach(li => {
+    totalItems += (li.qty||0);
+    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} (${li.gstRate}% GST)`, debit:li.total, credit:0 });
+  }));
+  payments.forEach(pay => {
+    const label = pay.note ? `Payment (${pay.mode || '—'}) — ${pay.note}` : `Payment (${pay.mode || '—'})`;
+    rows.push({ date:pay.date, type:'payment', desc:label, debit:0, credit:pay.amount });
+  });
+  rows.sort((a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+
+  let totalPurchase = 0, totalPaid = 0, running = 0;
+  document.getElementById('dashTable').innerHTML = rows.map(r => {
+    running += r.debit - r.credit;
+    totalPurchase += r.debit; totalPaid += r.credit;
+    return `<tr>
+      <td>${esc(r.date)}</td>
+      <td><span class="badge">${r.type === 'purchase' ? 'Purchase' : 'Payment'}</span></td>
+      <td>${esc(r.desc)}</td>
+      <td>${r.debit ? '₹'+fmtMoney(r.debit) : ''}</td>
+      <td>${r.credit ? '₹'+fmtMoney(r.credit) : ''}</td>
+      <td>₹${fmtMoney(running)}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('dashEntries').textContent = purchases.length;
+  document.getElementById('dashItems').textContent = totalItems;
+  document.getElementById('dashTotalPurchase').textContent = '₹' + fmtMoney(totalPurchase);
+  document.getElementById('dashTotalPaid').textContent = '₹' + fmtMoney(totalPaid);
+  document.getElementById('dashBalance').textContent = '₹' + fmtMoney(totalPurchase - totalPaid);
+  document.getElementById('dashLastPurchase').textContent = purchases.length ? `${purchases[0].date} — ₹${fmtMoney(purchases[0].grandTotal)}` : '—';
+}
+function refreshOpenDashboard(){
+  const sel = document.getElementById('dashSupplier');
+  if(sel && sel.value) renderSupplierDashboard(sel.value);
+}
+
 /* ---------------- Purchases (line items pick from the Purchase Product master above, not the billing Products list) ---------------- */
 function addPurchaseLineItem(){
   purchaseLineItems.push({productId:'', name:'', unit:'PCS', qty:1, rate:0, gstRate:0});
@@ -468,13 +534,14 @@ function onPurchaseProductPick(idx, productId){
 }
 function onPurchaseSupplierChange(){
   const supplierId = document.getElementById('purSupplier').value;
-  if(!supplierId) return;
-  purchaseLineItems.forEach(li => {
-    if(!li.productId) return;
-    const last = getLastPriceForSupplierProduct(supplierId, li.productId);
-    if(last){ li.rate = last.rate; li.gstRate = last.gstRate; }
-  });
-  renderPurchaseLineItems();
+  if(supplierId){
+    purchaseLineItems.forEach(li => {
+      if(!li.productId) return;
+      const last = getLastPriceForSupplierProduct(supplierId, li.productId);
+      if(last){ li.rate = last.rate; li.gstRate = last.gstRate; }
+    });
+  }
+  renderPurchaseLineItems(); // also refreshes the totals box + balance preview
 }
 function updatePurchaseLine(idx, field, value){
   purchaseLineItems[idx][field] = parseFloat(value) || 0;
@@ -495,6 +562,13 @@ function recalcPurchaseTotals(){
       <div class="totals-row"><span>GST</span><span>${fmtMoney(gstTotal)}</span></div>
       <div class="totals-row grand"><span>Purchase price incl. GST</span><span>${fmtMoney(grand)}</span></div>`;
   }
+  const previewEl = document.getElementById('purBalancePreview');
+  if(previewEl){
+    const supplierId = document.getElementById('purSupplier').value;
+    const priorBalance = supplierId ? getSupplierBalance(supplierId) : 0;
+    const paidNow = parseFloat(document.getElementById('purPaidNow').value) || 0;
+    previewEl.value = supplierId ? '₹' + fmtMoney(priorBalance + grand - paidNow) : '';
+  }
   return {subtotal, gstTotal, grand};
 }
 async function savePurchase(){
@@ -506,6 +580,7 @@ async function savePurchase(){
 
   const dateVal = document.getElementById('purDate').value || new Date().toISOString().slice(0,10);
   const totals = recalcPurchaseTotals();
+  const paidNow = parseFloat(document.getElementById('purPaidNow').value) || 0;
   const items = validItems.map(li => {
     const taxable = (li.qty||0) * (li.rate||0);
     const gstAmt = taxable * (li.gstRate||0) / 100;
@@ -517,18 +592,36 @@ async function savePurchase(){
     items, subtotal: totals.subtotal, gstTotal: totals.gstTotal, grandTotal: totals.grand,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
+  const ref = await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
 
-  showMsg('purchaseMsg', 'Purchase saved.', true);
+  const priorBalance = getSupplierBalance(supId);
+
+  if(paidNow > 0){
+    await db.collection('users').doc(currentUser.uid).collection('payments').add({
+      supplierId: supId, supplierName: supplier.name, date: dateVal, amount: paidNow,
+      mode: 'On purchase', note: `Paid against purchase dated ${dateVal}`, purchaseId: ref.id,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await loadPayments();
+  }
+
+  const newBalance = priorBalance + totals.grand - paidNow;
+  showMsg('purchaseMsg', paidNow > 0
+    ? `Purchase saved and ₹${fmtMoney(paidNow)} recorded as paid to ${supplier.name}. Balance now ₹${fmtMoney(newBalance)}.`
+    : `Purchase saved. Balance now ₹${fmtMoney(newBalance)}.`, true);
+
   purchaseLineItems = [];
   addPurchaseLineItem();
   document.getElementById('purSupplier').value = '';
-  loadPurchases();
+  document.getElementById('purPaidNow').value = '0';
+  await loadPurchases();
 }
 async function loadPurchases(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').get();
   purchasesCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
   renderPurchases();
+  recalcPurchaseTotals();
+  refreshOpenDashboard();
 }
 function renderPurchases(){
   const tbody = document.getElementById('purchasesTable');
@@ -554,6 +647,7 @@ async function deletePurchase(id){
 async function loadPayments(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('payments').orderBy('date','desc').get();
   paymentsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  refreshOpenDashboard();
 }
 async function deletePayment(id){
   if(!confirm('Delete this payment record?')) return;
