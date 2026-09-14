@@ -7,7 +7,8 @@ let customersCache = [];
 let suppliersCache = [];
 let purchasesCache = [];
 let paymentsCache = [];
-let lineItems = []; // {productId, name, hsn, unit, qty, rate, discount, gstRate}
+let lineItems = []; // invoice items
+let purchaseRows = []; // purchase rows entered together on one supplier/date/bill
 
 /* ---------------- Auth guard ---------------- */
 auth.onAuthStateChanged(async user => {
@@ -36,6 +37,7 @@ auth.onAuthStateChanged(async user => {
   await loadPurchases();
   await loadSupplierPayments();
   document.getElementById('purDate').valueAsDate = new Date();
+  initPurchaseRows();
   document.getElementById('payDate').valueAsDate = new Date();
   addLineItem();
   loadInvoices();
@@ -326,49 +328,119 @@ async function savePurchaseProduct(){
 function editPurchaseProduct(id){const p=purchaseProductsCache.find(x=>x.id===id);if(!p)return;document.getElementById('ppEditId').value=id;document.getElementById('ppName').value=p.name||'';document.getElementById('ppHsn').value=p.hsn||'';document.getElementById('ppUnit').value=p.unit||'';document.getElementById('ppGst').value=p.gstRate||0;}
 async function deletePurchaseProduct(id){if(!confirm('Delete this purchase product? Existing purchase records will remain.'))return;await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').doc(id).delete();await loadPurchaseProducts();}
 
-function fillPurchaseProduct(){
-  const p=purchaseProductsCache.find(x=>x.id===document.getElementById('purProduct').value);
-  if(!p){document.getElementById('purUnit').value=''; document.getElementById('purRate').value=''; return;}
-  document.getElementById('purUnit').value=p.unit||'PCS';
-  document.getElementById('purRate').value='';
-  document.getElementById('purGst').value=(p.gstRate ?? 0);
-  recalcPurchase();
+function initPurchaseRows(){
+  purchaseRows=[];
+  addPurchaseRow();
 }
-function recalcPurchase(){
-  const qty=parseFloat(document.getElementById('purQty').value)||0;
-  const rate=parseFloat(document.getElementById('purRate').value)||0;
-  const gst=parseFloat(document.getElementById('purGst').value)||0;
-  const taxable=qty*rate, gstAmt=taxable*gst/100, grand=taxable+gstAmt;
-  document.getElementById('purTaxable').textContent='₹'+fmtMoney(taxable);
-  document.getElementById('purGstAmount').textContent='₹'+fmtMoney(gstAmt);
-  document.getElementById('purUnitFinal').textContent='₹'+fmtMoney(rate*(1+gst/100));
-  document.getElementById('purGrand').textContent='₹'+fmtMoney(grand);
-  return {qty,rate,gst,taxable,gstAmt,grand,unitFinal:rate*(1+gst/100)};
+function addPurchaseRow(){
+  const id=Date.now()+Math.random();
+  purchaseRows.push({id,productId:'',qty:1,rate:'',gst:0,unit:'',lastPrice:''});
+  renderPurchaseEntryRows();
 }
-async function savePurchase(){
+function removePurchaseRow(index){
+  if(purchaseRows.length===1){
+    purchaseRows[0]={...purchaseRows[0],productId:'',qty:1,rate:'',gst:0,unit:'',lastPrice:''};
+  } else purchaseRows.splice(index,1);
+  renderPurchaseEntryRows();
+  refreshPurchaseTotals();
+}
+function renderPurchaseEntryRows(){
+  const el=document.getElementById('purchaseItemsBody'); if(!el)return;
+  el.innerHTML=purchaseRows.map((r,i)=>`<tr>
+    <td><select class="pur-row-product" onchange="setPurchaseRowProduct(${i},this.value)"><option value="">Select product…</option>${purchaseProductsCache.map(p=>`<option value="${p.id}" ${p.id===r.productId?'selected':''}>${esc(p.name)}</option>`).join('')}</select><small id="pur-last-${i}" class="sub purchase-last-price">${r.lastPrice||''}</small></td>
+    <td><input type="number" min="0" step="0.001" value="${r.qty}" oninput="purchaseRowField(${i},'qty',this.value)"></td>
+    <td><input disabled value="${esc(r.unit||'')}"></td>
+    <td><input type="number" min="0" step="0.01" value="${r.rate}" oninput="purchaseRowField(${i},'rate',this.value)"></td>
+    <td><select onchange="purchaseRowField(${i},'gst',this.value)"><option value="0" ${Number(r.gst)===0?'selected':''}>0%</option><option value="5" ${Number(r.gst)===5?'selected':''}>5%</option><option value="12" ${Number(r.gst)===12?'selected':''}>12%</option><option value="18" ${Number(r.gst)===18?'selected':''}>18%</option><option value="28" ${Number(r.gst)===28?'selected':''}>28%</option></select></td>
+    <td id="pur-gst-${i}">₹0.00</td><td id="pur-total-${i}"><b>₹0.00</b></td>
+    <td><button class="btn small danger" type="button" onclick="removePurchaseRow(${i})">Remove</button></td>
+  </tr>`).join('');
+  purchaseRows.forEach((_,i)=>updatePurchaseRowTotal(i));
+}
+async function setPurchaseRowProduct(index,productId){
+  const row=purchaseRows[index]; if(!row)return;
+  row.productId=productId; row.lastPrice='';
+  const p=purchaseProductsCache.find(x=>x.id===productId);
+  if(!p){row.unit='';row.rate='';row.gst=0;renderPurchaseEntryRows();refreshPurchaseTotals();return;}
+  row.unit=p.unit||'PCS'; row.gst=(p.gstRate ?? 0);
   const supplierId=document.getElementById('purSupplier').value;
-  const productId=document.getElementById('purProduct').value;
-  const supplier=suppliersCache.find(s=>s.id===supplierId);
-  const product=purchaseProductsCache.find(p=>p.id===productId);
-  if(!supplier){showMsg('purchaseMsg','Select a supplier.',false);return;}
-  if(!product){showMsg('purchaseMsg','Select a product.',false);return;}
-  const c=recalcPurchase();
-  if(c.qty<=0||c.rate<0){showMsg('purchaseMsg','Enter a valid quantity and unit price.',false);return;}
-  const date=document.getElementById('purDate').value||new Date().toISOString().slice(0,10);
-  const data={
-    date,supplierId, supplierName:supplier.name, productId, productName:product.name,
-    unit:document.getElementById('purUnit').value||product.unit||'PCS',
-    qty:c.qty, unitPrice:c.rate, gstRate:c.gst, taxable:c.taxable, gstAmount:c.gstAmt,
-    total:c.grand, unitPriceInclGst:c.unitFinal,
-    billNo:document.getElementById('purBillNo').value.trim(),
-    notes:document.getElementById('purNotes').value.trim(),
-    createdAt:firebase.firestore.FieldValue.serverTimestamp()
-  };
-  await db.collection('users').doc(currentUser.uid).collection('purchases').add(data);
-  document.getElementById('purBillNo').value=''; document.getElementById('purNotes').value='';
-  showMsg('purchaseMsg','Purchase saved. Final price including GST: ₹'+fmtMoney(c.grand),true);
-  await loadPurchases();
+  if(supplierId){
+    try{
+      const key=supplierId+'__'+productId;
+      const snap=await db.collection('users').doc(currentUser.uid).collection('supplierProductPrices').doc(key).get();
+      if(snap.exists && snap.data().lastPurchaseRate != null){
+        const d=snap.data(); row.rate=d.lastPurchaseRate;
+        row.lastPrice='Last price: ₹'+fmtMoney(d.lastPurchaseRate)+(d.lastPurchaseDate?' on '+d.lastPurchaseDate:'');
+      } else row.lastPrice='No previous price for this supplier and product.';
+    }catch(e){console.error(e);}
+  }
+  renderPurchaseEntryRows(); refreshPurchaseTotals();
 }
+function purchaseRowField(index,field,value){
+  const row=purchaseRows[index]; if(!row)return;
+  row[field]=field==='qty'||field==='rate'||field==='gst' ? Number(value) : value;
+  updatePurchaseRowTotal(index); refreshPurchaseTotals();
+}
+function updatePurchaseRowTotal(index){
+  const r=purchaseRows[index]||{};
+  const qty=Number(r.qty)||0, rate=Number(r.rate)||0, gst=Number(r.gst)||0;
+  const taxable=qty*rate, gstAmt=taxable*gst/100, total=taxable+gstAmt;
+  const g=document.getElementById('pur-gst-'+index), t=document.getElementById('pur-total-'+index);
+  if(g)g.textContent='₹'+fmtMoney(gstAmt);
+  if(t)t.innerHTML='<b>₹'+fmtMoney(total)+'</b>';
+  return {qty,rate,gst,taxable,gstAmt,total,unitFinal:rate*(1+gst/100)};
+}
+function refreshPurchaseTotals(){
+  let taxable=0,gst=0,total=0;
+  purchaseRows.forEach((_,i)=>{const c=updatePurchaseRowTotal(i);taxable+=c.taxable;gst+=c.gstAmt;total+=c.total;});
+  const a=document.getElementById('purBatchTaxable'),b=document.getElementById('purBatchGst'),c=document.getElementById('purBatchGrand');
+  if(a)a.textContent='₹'+fmtMoney(taxable); if(b)b.textContent='₹'+fmtMoney(gst); if(c)c.textContent='₹'+fmtMoney(total);
+  return {taxable,gst,total};
+}
+async function refreshAllPurchaseRows(){
+  const supplierId=document.getElementById('purSupplier').value;
+  for(let i=0;i<purchaseRows.length;i++){
+    const r=purchaseRows[i]; if(!r.productId||!supplierId)continue;
+    try{
+      const key=supplierId+'__'+r.productId;
+      const snap=await db.collection('users').doc(currentUser.uid).collection('supplierProductPrices').doc(key).get();
+      if(snap.exists&&snap.data().lastPurchaseRate!=null){const d=snap.data();r.rate=d.lastPurchaseRate;r.lastPrice='Last price: ₹'+fmtMoney(d.lastPurchaseRate)+(d.lastPurchaseDate?' on '+d.lastPurchaseDate:'');}
+      else {r.rate='';r.lastPrice='No previous price for this supplier and product.';}
+    }catch(e){console.error(e);}
+  }
+  renderPurchaseEntryRows(); refreshPurchaseTotals();
+}
+async function savePurchaseBatch(){
+  const supplierId=document.getElementById('purSupplier').value;
+  const supplier=suppliersCache.find(s=>s.id===supplierId);
+  if(!supplier){showMsg('purchaseMsg','Select a supplier.',false);return;}
+  const valid=purchaseRows.filter(r=>r.productId);
+  if(!valid.length){showMsg('purchaseMsg','Add at least one product.',false);return;}
+  const date=document.getElementById('purDate').value||new Date().toISOString().slice(0,10);
+  const billNo=document.getElementById('purBillNo').value.trim();
+  const notes=document.getElementById('purNotes').value.trim();
+  const batchId='PUR-'+Date.now();
+  const batchTotals=refreshPurchaseTotals();
+  const batchItems=[];
+  try{
+    for(let i=0;i<valid.length;i++){
+      const r=valid[i], product=purchaseProductsCache.find(p=>p.id===r.productId), c=updatePurchaseRowTotal(purchaseRows.indexOf(r));
+      if(!product||c.qty<=0||c.rate<0)throw new Error('Enter valid quantity and price for '+(product?.name||'product'));
+      const data={date,supplierId,supplierName:supplier.name,productId:product.id,productName:product.name,unit:r.unit||product.unit||'PCS',qty:c.qty,unitPrice:c.rate,gstRate:c.gst,taxable:c.taxable,gstAmount:c.gstAmt,total:c.total,unitPriceInclGst:c.unitFinal,billNo,notes,batchId,batchItem:i+1,batchItemCount:valid.length,createdAt:firebase.firestore.FieldValue.serverTimestamp()};
+      await db.collection('users').doc(currentUser.uid).collection('purchases').add(data); batchItems.push(data);
+      const priceKey=supplierId+'__'+product.id;
+      await db.collection('users').doc(currentUser.uid).collection('supplierProductPrices').doc(priceKey).set({supplierId,supplierName:supplier.name,productId:product.id,productName:product.name,lastPurchaseRate:c.rate,lastPurchaseDate:date,lastPurchaseGstRate:c.gst,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
+    }
+    showMsg('purchaseMsg',`${valid.length} purchase item${valid.length>1?'s':''} saved together. Total including GST: ₹${fmtMoney(batchTotals.total)}`,true);
+    document.getElementById('purBillNo').value=''; document.getElementById('purNotes').value='';
+    purchaseRows=[]; addPurchaseRow(); await loadPurchases();
+  }catch(e){console.error(e);showMsg('purchaseMsg','Purchase could not be saved: '+e.message,false);}
+}
+function clearPurchaseForm(){
+  document.getElementById('purBillNo').value='';document.getElementById('purNotes').value='';
+  purchaseRows=[];addPurchaseRow();
+}
+
 async function loadPurchases(){
   if(!currentUser)return;
   const snap=await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').limit(500).get();

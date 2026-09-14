@@ -71,3 +71,4 @@ th{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacin
 .mode-btn.active{background:var(--ink);color:#fff}
 .nav-section{font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--muted);padding:14px 12px 6px}
 .mode-hidden{display:none!important}
+.purchase-items-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:18px 0 10px}.purchase-items-head h3{margin:0}.purchase-table-wrap{overflow-x:auto}.purchase-entry-table{min-width:1050px}.purchase-entry-table input,.purchase-entry-table select{width:100%;box-sizing:border-box}.purchase-entry-table th,.purchase-entry-table td{vertical-align:top}.purchase-last-price{display:block;min-width:170px;margin-top:4px}.purchase-entry-table .danger{white-space:nowrap}
