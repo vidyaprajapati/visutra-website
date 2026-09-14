@@ -3,6 +3,12 @@ let businessData = {};
 let productsCache = [];
 let customersCache = [];
 let lineItems = []; // {productId, name, hsn, unit, qty, rate, discount, gstRate}
+let suppliersCache = [];
+let purchaseProductsCache = [];
+let purchasesCache = [];
+let paymentsCache = [];
+let purchaseLineItems = []; // {productId, name, unit, qty, rate, gstRate} -- productId refers to purchaseProductsCache, NOT the billing Products list
+let currentLedgerSupplierId = null;
 
 /* ---------------- Auth guard ---------------- */
 auth.onAuthStateChanged(async user => {
@@ -19,15 +25,22 @@ auth.onAuthStateChanged(async user => {
   mountUserMenu('userMenuMount', user, { showBillingLink: false });
   populateStateSelect(document.getElementById('bizState'));
   populateStateSelect(document.getElementById('cState'));
+  populateStateSelect(document.getElementById('sState'));
   document.getElementById('invDate').valueAsDate = new Date();
+  document.getElementById('purDate').valueAsDate = new Date();
   populateGstrFY();
   onFilingTypeChange();
   initSignaturePad();
   await loadProfile();
   await loadProducts();
   await loadCustomers();
+  await loadSuppliers();
+  await loadPurchaseProducts();
+  await loadPayments();
   addLineItem();
+  addPurchaseLineItem();
   loadInvoices();
+  loadPurchases();
 });
 
 function signOut(){ auth.signOut().then(()=> window.location.href = 'login.html'); }
@@ -41,6 +54,7 @@ document.querySelectorAll('.nav-link').forEach(link => {
     document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
     document.getElementById('view-' + link.dataset.view).classList.remove('hidden');
     if(link.dataset.view === 'invoices') loadInvoices();
+    if(link.dataset.view === 'purchases') loadPurchases();
   });
 });
 
@@ -166,11 +180,16 @@ async function loadProducts(){
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${p.price}</td><td>${p.gstRate}%</td>
+    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No products yet.</td></tr>';
+    </td></tr>`).join('') || '<tr><td colspan="7" style="color:var(--muted)">No products yet.</td></tr>';
+}
+function updateProductInclusivePreview(){
+  const price = parseFloat(document.getElementById('pPrice').value) || 0;
+  const gstRate = parseFloat(document.getElementById('pGst').value) || 0;
+  document.getElementById('pPriceIncl').value = fmtMoney(price * (1 + gstRate/100));
 }
 async function saveProduct(){
   const id = document.getElementById('pEditId').value;
@@ -186,6 +205,7 @@ async function saveProduct(){
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
   ['pName','pHsn','pUnit','pPrice','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
+  updateProductInclusivePreview();
   showMsg('productMsg', 'Saved.', true);
   loadProducts();
 }
@@ -197,6 +217,7 @@ function editProduct(id){
   document.getElementById('pUnit').value = p.unit;
   document.getElementById('pPrice').value = p.price;
   document.getElementById('pGst').value = p.gstRate;
+  updateProductInclusivePreview();
 }
 async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
@@ -260,6 +281,314 @@ function renderCustomerDropdown(){
     customersCache.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
 }
 
+/* ---------------- Suppliers (purchase side, separate master from Customers) ---------------- */
+async function loadSuppliers(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  suppliersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderSuppliers();
+  renderSupplierDropdown();
+}
+function renderSuppliers(){
+  document.getElementById('suppliersTable').innerHTML = suppliersCache.map(s => `
+    <tr><td>${esc(s.name)}</td><td>${esc(s.gstin||'—')}</td><td>${esc(s.state||'')}</td><td>${esc(s.phone||'')}</td>
+    <td class="row-actions">
+      <button class="btn small" onclick="openSupplierLedger('${s.id}')">Ledger</button>
+      <button class="btn small" onclick="editSupplier('${s.id}')">Edit</button>
+      <button class="btn small danger" onclick="deleteSupplier('${s.id}')">Delete</button>
+    </td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No suppliers yet.</td></tr>';
+}
+async function saveSupplier(){
+  const id = document.getElementById('sEditId').value;
+  const stateCode = document.getElementById('sState').value;
+  const data = {
+    name: document.getElementById('sName').value.trim(),
+    gstin: document.getElementById('sGstin').value.trim(),
+    address: document.getElementById('sAddress').value.trim(),
+    stateCode: stateCode,
+    state: stateNameByCode(stateCode),
+    email: document.getElementById('sEmail').value.trim(),
+    phone: document.getElementById('sPhone').value.trim()
+  };
+  if(!data.name){ showMsg('supplierMsg', 'Supplier name is required.', false); return; }
+  const col = db.collection('users').doc(currentUser.uid).collection('suppliers');
+  if(id){ await col.doc(id).set(data); } else { await col.add(data); }
+  ['sName','sGstin','sAddress','sEmail','sPhone','sEditId'].forEach(f => document.getElementById(f).value = '');
+  document.getElementById('sState').value = '';
+  showMsg('supplierMsg', 'Saved.', true);
+  loadSuppliers();
+}
+function editSupplier(id){
+  const s = suppliersCache.find(x => x.id === id);
+  document.getElementById('sEditId').value = id;
+  document.getElementById('sName').value = s.name;
+  document.getElementById('sGstin').value = s.gstin || '';
+  document.getElementById('sAddress').value = s.address || '';
+  document.getElementById('sState').value = s.stateCode || '';
+  document.getElementById('sEmail').value = s.email || '';
+  document.getElementById('sPhone').value = s.phone || '';
+}
+async function deleteSupplier(id){
+  if(!confirm('Delete this supplier? Their past purchase and payment records are kept.')) return;
+  await db.collection('users').doc(currentUser.uid).collection('suppliers').doc(id).delete();
+  loadSuppliers();
+}
+function renderSupplierDropdown(){
+  const sel = document.getElementById('purSupplier');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">Select supplier…</option>' +
+    suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+}
+
+/* ---------------- Purchase Product Master (separate from the GST billing Products list — purchase price differs from selling price) ---------------- */
+async function loadPurchaseProducts(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').orderBy('name').get();
+  purchaseProductsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderPurchaseProducts();
+  renderPurchaseProductDropdowns();
+}
+function renderPurchaseProducts(){
+  document.getElementById('purchaseProductsTable').innerHTML = purchaseProductsCache.map(p => `
+    <tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td>
+    <td class="row-actions">
+      <button class="btn small" onclick="editPurchaseProduct('${p.id}')">Edit</button>
+      <button class="btn small danger" onclick="deletePurchaseProduct('${p.id}')">Delete</button>
+    </td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No purchase products yet.</td></tr>';
+}
+async function savePurchaseProduct(){
+  const id = document.getElementById('ppEditId').value;
+  const data = {
+    name: document.getElementById('ppName').value.trim(),
+    unit: document.getElementById('ppUnit').value.trim() || 'PCS',
+    price: parseFloat(document.getElementById('ppPrice').value) || 0,
+    gstRate: parseFloat(document.getElementById('ppGst').value)
+  };
+  if(!data.name){ showMsg('purchaseProductMsg', 'Product name is required.', false); return; }
+  const col = db.collection('users').doc(currentUser.uid).collection('purchaseProducts');
+  if(id){ await col.doc(id).set(data); } else { await col.add(data); }
+  ['ppName','ppUnit','ppPrice','ppEditId'].forEach(f => document.getElementById(f).value = '');
+  document.getElementById('ppGst').value = '0';
+  showMsg('purchaseProductMsg', 'Saved.', true);
+  loadPurchaseProducts();
+}
+function editPurchaseProduct(id){
+  const p = purchaseProductsCache.find(x => x.id === id);
+  document.getElementById('ppEditId').value = id;
+  document.getElementById('ppName').value = p.name;
+  document.getElementById('ppUnit').value = p.unit;
+  document.getElementById('ppPrice').value = p.price;
+  document.getElementById('ppGst').value = p.gstRate;
+}
+async function deletePurchaseProduct(id){
+  if(!confirm('Delete this purchase product?')) return;
+  await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').doc(id).delete();
+  loadPurchaseProducts();
+}
+function renderPurchaseProductDropdowns(){
+  document.querySelectorAll('.pur-line-product').forEach(sel => fillPurchaseProductOptions(sel));
+}
+function fillPurchaseProductOptions(sel){
+  sel.innerHTML = '<option value="">Select product…</option>' +
+    purchaseProductsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+}
+
+/* ---------------- Purchases (line items pick from the Purchase Product master above, not the billing Products list) ---------------- */
+function addPurchaseLineItem(){
+  purchaseLineItems.push({productId:'', name:'', unit:'PCS', qty:1, rate:0, gstRate:0});
+  renderPurchaseLineItems();
+}
+function removePurchaseLineItem(idx){
+  purchaseLineItems.splice(idx, 1);
+  renderPurchaseLineItems();
+}
+function renderPurchaseLineItems(){
+  const tbody = document.getElementById('purchaseLineItemsTable');
+  tbody.innerHTML = purchaseLineItems.map((li, i) => {
+    const taxable = (li.qty||0) * (li.rate||0);
+    const gstAmt = taxable * (li.gstRate||0) / 100;
+    return `<tr>
+      <td><select class="pur-line-product" onchange="onPurchaseProductPick(${i}, this.value)"></select></td>
+      <td><input type="number" min="0" step="1" value="${li.qty}" style="width:60px" onchange="updatePurchaseLine(${i},'qty',this.value)"></td>
+      <td>${esc(li.unit)}</td>
+      <td><input type="number" min="0" step="0.01" value="${li.rate}" style="width:90px" onchange="updatePurchaseLine(${i},'rate',this.value)"></td>
+      <td><select style="width:80px" onchange="updatePurchaseLine(${i},'gstRate',this.value)">
+        ${[0,5,12,18,28].map(r => `<option value="${r}" ${Number(li.gstRate)===r ? 'selected' : ''}>${r}%</option>`).join('')}
+      </select></td>
+      <td>${fmtMoney(taxable)}</td>
+      <td>${fmtMoney(gstAmt)}</td>
+      <td>${fmtMoney(taxable + gstAmt)}</td>
+      <td><button class="btn small danger" onclick="removePurchaseLineItem(${i})">✕</button></td>
+    </tr>`;
+  }).join('');
+  tbody.querySelectorAll('.pur-line-product').forEach((sel, i) => {
+    fillPurchaseProductOptions(sel);
+    sel.value = purchaseLineItems[i].productId;
+  });
+  recalcPurchaseTotals();
+}
+function onPurchaseProductPick(idx, productId){
+  const p = purchaseProductsCache.find(x => x.id === productId);
+  if(!p) return;
+  purchaseLineItems[idx] = { productId, name:p.name, unit:p.unit, qty:purchaseLineItems[idx].qty||1, rate:p.price, gstRate:p.gstRate };
+  renderPurchaseLineItems();
+}
+function updatePurchaseLine(idx, field, value){
+  purchaseLineItems[idx][field] = parseFloat(value) || 0;
+  renderPurchaseLineItems();
+}
+function recalcPurchaseTotals(){
+  let subtotal = 0, gstTotal = 0;
+  purchaseLineItems.forEach(li => {
+    const taxable = (li.qty||0) * (li.rate||0);
+    subtotal += taxable;
+    gstTotal += taxable * (li.gstRate||0) / 100;
+  });
+  const grand = subtotal + gstTotal;
+  const box = document.getElementById('purchaseTotalsBox');
+  if(box){
+    box.innerHTML = `
+      <div class="totals-row"><span>Taxable value</span><span>${fmtMoney(subtotal)}</span></div>
+      <div class="totals-row"><span>GST</span><span>${fmtMoney(gstTotal)}</span></div>
+      <div class="totals-row grand"><span>Purchase price incl. GST</span><span>${fmtMoney(grand)}</span></div>`;
+  }
+  return {subtotal, gstTotal, grand};
+}
+async function savePurchase(){
+  const supId = document.getElementById('purSupplier').value;
+  const supplier = suppliersCache.find(s => s.id === supId);
+  if(!supplier){ showMsg('purchaseMsg', 'Select a supplier first.', false); return; }
+  const validItems = purchaseLineItems.filter(li => li.productId);
+  if(!validItems.length){ showMsg('purchaseMsg', 'Add at least one product line.', false); return; }
+
+  const dateVal = document.getElementById('purDate').value || new Date().toISOString().slice(0,10);
+  const totals = recalcPurchaseTotals();
+  const items = validItems.map(li => {
+    const taxable = (li.qty||0) * (li.rate||0);
+    const gstAmt = taxable * (li.gstRate||0) / 100;
+    return { ...li, taxable, gstAmt, total: taxable + gstAmt };
+  });
+
+  const purchaseData = {
+    supplierId: supId, supplierName: supplier.name, date: dateVal,
+    items, subtotal: totals.subtotal, gstTotal: totals.gstTotal, grandTotal: totals.grand,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
+
+  showMsg('purchaseMsg', 'Purchase saved.', true);
+  purchaseLineItems = [];
+  addPurchaseLineItem();
+  document.getElementById('purSupplier').value = '';
+  loadPurchases();
+}
+async function loadPurchases(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').get();
+  purchasesCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderPurchases();
+}
+function renderPurchases(){
+  const tbody = document.getElementById('purchasesTable');
+  if(!tbody) return;
+  tbody.innerHTML = purchasesCache.map(p => {
+    const itemsSummary = (p.items||[]).map(li => `${esc(li.name)} (${li.qty} ${esc(li.unit)})`).join(', ');
+    return `<tr>
+      <td>${esc(p.date)}</td>
+      <td><a href="#" onclick="openSupplierLedger('${p.supplierId}');return false;">${esc(p.supplierName)}</a></td>
+      <td>${itemsSummary}</td>
+      <td>₹${fmtMoney(p.grandTotal)}</td>
+      <td class="row-actions"><button class="btn small danger" onclick="deletePurchase('${p.id}')">Delete</button></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" style="color:var(--muted)">No purchases recorded yet.</td></tr>';
+}
+async function deletePurchase(id){
+  if(!confirm('Delete this purchase entry?')) return;
+  await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).delete();
+  loadPurchases();
+}
+
+/* ---------------- Payments made to suppliers ---------------- */
+async function loadPayments(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('payments').orderBy('date','desc').get();
+  paymentsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+}
+async function deletePayment(id){
+  if(!confirm('Delete this payment record?')) return;
+  await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).delete();
+  await loadPayments();
+  if(currentLedgerSupplierId) renderSupplierLedger(currentLedgerSupplierId);
+}
+
+/* ---------------- Supplier ledger (product-wise, date-wise purchases + payments) ---------------- */
+function openSupplierLedger(supplierId){
+  currentLedgerSupplierId = supplierId;
+  document.getElementById('ledgerModal').classList.remove('hidden');
+  document.getElementById('ledgerPayDate').valueAsDate = new Date();
+  document.getElementById('ledgerPayAmount').value = '';
+  document.getElementById('ledgerPayMode').value = '';
+  document.getElementById('ledgerPayNote').value = '';
+  renderSupplierLedger(supplierId);
+}
+function closeSupplierLedger(){
+  document.getElementById('ledgerModal').classList.add('hidden');
+  currentLedgerSupplierId = null;
+}
+function renderSupplierLedger(supplierId){
+  const supplier = suppliersCache.find(s => s.id === supplierId);
+  if(!supplier) return;
+  document.getElementById('ledgerSupplierName').textContent = supplier.name;
+
+  const purchases = purchasesCache.filter(p => p.supplierId === supplierId);
+  const payments = paymentsCache.filter(p => p.supplierId === supplierId);
+
+  const rows = [];
+  purchases.forEach(p => (p.items||[]).forEach(li => {
+    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} (${li.gstRate}% GST)`, debit:li.total, credit:0 });
+  }));
+  payments.forEach(pay => {
+    const label = pay.note ? `Payment (${pay.mode || '—'}) — ${pay.note}` : `Payment (${pay.mode || '—'})`;
+    rows.push({ date:pay.date, type:'payment', desc:label, debit:0, credit:pay.amount, paymentId:pay.id });
+  });
+  rows.sort((a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+
+  let totalPurchase = 0, totalPaid = 0, running = 0;
+  const tbody = document.getElementById('ledgerTable');
+  tbody.innerHTML = rows.map(r => {
+    running += r.debit - r.credit;
+    totalPurchase += r.debit; totalPaid += r.credit;
+    return `<tr>
+      <td>${esc(r.date)}</td>
+      <td><span class="badge">${r.type === 'purchase' ? 'Purchase' : 'Payment'}</span></td>
+      <td>${esc(r.desc)}</td>
+      <td>${r.debit ? '₹'+fmtMoney(r.debit) : ''}</td>
+      <td>${r.credit ? '₹'+fmtMoney(r.credit) : ''}</td>
+      <td>₹${fmtMoney(running)}</td>
+      <td class="row-actions">${r.paymentId ? `<button class="btn small danger" onclick="deletePayment('${r.paymentId}')">Delete</button>` : ''}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No purchases or payments recorded for this supplier yet.</td></tr>';
+
+  document.getElementById('ledgerTotalPurchase').textContent = '₹' + fmtMoney(totalPurchase);
+  document.getElementById('ledgerTotalPaid').textContent = '₹' + fmtMoney(totalPaid);
+  document.getElementById('ledgerBalance').textContent = '₹' + fmtMoney(totalPurchase - totalPaid);
+}
+async function recordSupplierPayment(){
+  if(!currentLedgerSupplierId) return;
+  const supplier = suppliersCache.find(s => s.id === currentLedgerSupplierId);
+  const amount = parseFloat(document.getElementById('ledgerPayAmount').value) || 0;
+  const dateVal = document.getElementById('ledgerPayDate').value || new Date().toISOString().slice(0,10);
+  const mode = document.getElementById('ledgerPayMode').value.trim();
+  const note = document.getElementById('ledgerPayNote').value.trim();
+  if(amount <= 0){ showMsg('ledgerPayMsg', 'Enter a payment amount greater than zero.', false); return; }
+
+  const data = { supplierId: currentLedgerSupplierId, supplierName: supplier.name, date: dateVal, amount, mode, note, createdAt: firebase.firestore.FieldValue.serverTimestamp() };
+  await db.collection('users').doc(currentUser.uid).collection('payments').add(data);
+
+  document.getElementById('ledgerPayAmount').value = '';
+  document.getElementById('ledgerPayMode').value = '';
+  document.getElementById('ledgerPayNote').value = '';
+  showMsg('ledgerPayMsg', 'Payment recorded.', true);
+  await loadPayments();
+  renderSupplierLedger(currentLedgerSupplierId);
+}
+
 /* ---------------- Invoice line items ---------------- */
 function renderProductDropdowns(){
   document.querySelectorAll('.line-product').forEach(sel => fillProductOptions(sel));
@@ -279,17 +608,23 @@ function removeLineItem(idx){
 }
 function renderLineItems(){
   const tbody = document.getElementById('lineItemsTable');
-  tbody.innerHTML = lineItems.map((li, i) => `
+  tbody.innerHTML = lineItems.map((li, i) => {
+    const taxable = lineTaxable(li);
+    const gstAmt = taxable * (li.gstRate||0) / 100;
+    return `
     <tr>
       <td><select class="line-product" onchange="onProductPick(${i}, this.value)">${''}</select></td>
       <td><input type="number" min="0" step="1" value="${li.qty}" style="width:60px" onchange="updateLine(${i},'qty',this.value)"></td>
       <td>${esc(li.unit)}</td>
       <td><input type="number" min="0" step="0.01" value="${li.rate}" style="width:80px" onchange="updateLine(${i},'rate',this.value)"></td>
       <td><input type="number" min="0" max="100" step="0.01" value="${li.discount}" style="width:60px" onchange="updateLine(${i},'discount',this.value)"></td>
-      <td>${fmtMoney(lineTaxable(li))}</td>
+      <td>${fmtMoney(taxable)}</td>
       <td>${li.gstRate}%</td>
+      <td>${fmtMoney(gstAmt)}</td>
+      <td>${fmtMoney(taxable + gstAmt)}</td>
       <td><button class="btn small danger" onclick="removeLineItem(${i})">✕</button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   tbody.querySelectorAll('.line-product').forEach((sel, i) => {
     fillProductOptions(sel);
     sel.value = lineItems[i].productId;

@@ -51,3 +51,6 @@ th{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacin
 .sig-pad{border:1.5px dashed var(--thread);border-radius:var(--radius-sm);background:#fff;cursor:crosshair;touch-action:none}
 .line-items th, .line-items td{font-size:13px}
 .line-items input{padding:6px 8px;font-size:13px}
+.box{background:var(--ivory);border:1px solid var(--thread);border-radius:var(--radius-sm);padding:14px}
+.modal-overlay{position:fixed;inset:0;background:rgba(31,27,22,.55);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50}
+.modal-box{background:var(--canvas);border-radius:var(--radius);padding:26px;max-width:820px;width:100%;max-height:90vh;overflow-y:auto;border:1px solid var(--thread)}
