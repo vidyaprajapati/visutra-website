@@ -19,21 +19,33 @@
 <div class="shell">
   <div class="sidebar">
     <a href="#profile" class="nav-link active" data-view="profile">Business Profile</a>
-    <a href="#products" class="nav-link" data-view="products">Products</a>
-    <a href="#customers" class="nav-link" data-view="customers">Customers</a>
-    <a href="#suppliers" class="nav-link" data-view="suppliers">Suppliers</a>
-    <a href="#purchases" class="nav-link" data-view="purchases">Purchases</a>
-    <a href="#payment-entry" class="nav-link" data-view="payment-entry">Payment Entry</a>
-    <a href="#supplier-dashboard" class="nav-link" data-view="supplier-dashboard">Supplier Dashboard</a>
-    <a href="#new-invoice" class="nav-link" data-view="new-invoice">New Invoice</a>
-    <a href="#invoices" class="nav-link" data-view="invoices">Invoice History</a>
-    <a href="#gstr1" class="nav-link" data-view="gstr1">GSTR-1 Filing</a>
+    <a href="#products" class="nav-link" data-view="products" data-group="billing">Products</a>
+    <a href="#customers" class="nav-link" data-view="customers" data-group="billing">Customers</a>
+    <a href="#suppliers" class="nav-link" data-view="suppliers" data-group="purchase">Suppliers</a>
+    <a href="#purchases" class="nav-link" data-view="purchases" data-group="purchase">Purchases</a>
+    <a href="#payment-entry" class="nav-link" data-view="payment-entry" data-group="purchase">Payment Entry</a>
+    <a href="#supplier-dashboard" class="nav-link" data-view="supplier-dashboard" data-group="purchase">Supplier Dashboard</a>
+    <a href="#new-invoice" class="nav-link" data-view="new-invoice" data-group="billing">New Invoice</a>
+    <a href="#invoices" class="nav-link" data-view="invoices" data-group="billing">Invoice History</a>
+    <a href="#gstr1" class="nav-link" data-view="gstr1" data-group="billing">GSTR-1 Filing</a>
   </div>
 
   <div class="main">
 
     <!-- BUSINESS PROFILE -->
     <div id="view-profile" class="view">
+      <div class="card">
+        <h2>GST Billing</h2>
+        <p class="sub">Create GST-compliant tax invoices for your customers — CGST/SGST or IGST calculated automatically, sequential invoice numbering, PDF download, and email delivery straight to the buyer. File your GSTR-1 directly from saved invoices.</p>
+        <button class="btn primary" onclick="activateView('new-invoice')">Go to GST Billing</button>
+      </div>
+
+      <div class="card">
+        <h2>Purchase Entry</h2>
+        <p class="sub">Record what you buy from suppliers — purchase price, GST, and payments made — and always know the balance you still owe. Track everything supplier-wise on the Supplier Dashboard.</p>
+        <button class="btn primary" onclick="activateView('purchases')">Go to Purchase Entry</button>
+      </div>
+
       <div class="card">
         <h2>Business Profile</h2>
         <p class="sub">This information appears on every invoice you generate. Fill it in before creating your first invoice.</p>
