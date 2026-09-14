@@ -9,6 +9,10 @@ let purchasesCache = [];
 let paymentsCache = [];
 let purchaseLineItems = []; // {productId, name, unit, qty, rate, gstRate} -- productId refers to purchaseProductsCache, NOT the billing Products list
 let currentLedgerSupplierId = null;
+let stockMovementsCache = [];
+let skuMappingsCache = [];
+let stockUploadSheets = []; // {fileName, sheetName, headers, rows} — rows is an array of arrays, header row excluded
+let stockAggregation = []; // {rawKey, displayKey, totalQty} built from stockUploadSheets after column mapping
 
 /* ---------------- Auth guard ---------------- */
 auth.onAuthStateChanged(async user => {
@@ -38,6 +42,8 @@ auth.onAuthStateChanged(async user => {
   await loadSuppliers();
   await loadPurchaseProducts();
   await loadPayments();
+  await loadSkuMappings();
+  await loadStockMovements();
   addLineItem();
   addPurchaseLineItem();
   loadInvoices();
@@ -215,14 +221,16 @@ async function loadProducts(){
   productsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
   renderProducts();
   renderProductDropdowns();
+  renderStockDropdowns();
+  renderStockTable();
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td>
+    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="7" style="color:var(--muted)">No products yet.</td></tr>';
+    </td></tr>`).join('') || '<tr><td colspan="8" style="color:var(--muted)">No products yet.</td></tr>';
 }
 function updateProductExclusivePreview(){
   const incl = parseFloat(document.getElementById('pPriceIncl').value) || 0;
@@ -235,12 +243,14 @@ async function saveProduct(){
   const inclPrice = parseFloat(document.getElementById('pPriceIncl').value) || 0;
   const gstRate = parseFloat(document.getElementById('pGst').value);
   const exclPrice = Math.round((gstRate ? inclPrice / (1 + gstRate/100) : inclPrice) * 100) / 100;
+  const existing = id ? productsCache.find(p => p.id === id) : null;
   const data = {
     name: document.getElementById('pName').value.trim(),
     hsn: document.getElementById('pHsn').value.trim(),
     unit: document.getElementById('pUnit').value.trim() || 'PCS',
     price: exclPrice, // stored as the excl.-GST taxable value, used as-is everywhere downstream (invoicing, GSTR-1)
-    gstRate
+    gstRate,
+    stock: existing ? (existing.stock || 0) : 0 // stock is only ever changed via purchases, monthly uploads, or Adjust Stock — never reset by editing product details
   };
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
@@ -264,6 +274,202 @@ async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
   await db.collection('users').doc(currentUser.uid).collection('products').doc(id).delete();
   loadProducts();
+}
+
+/* ---------------- Stock Management ---------------- */
+function renderStockDropdowns(){
+  const sel = document.getElementById('adjProduct');
+  if(sel){
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">Select product…</option>' +
+      productsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    if(prev && productsCache.some(p => p.id === prev)) sel.value = prev;
+  }
+  const ppSel = document.getElementById('ppLinkedProduct');
+  if(ppSel){
+    const prev = ppSel.value;
+    ppSel.innerHTML = '<option value="">Not linked — doesn\'t affect stock</option>' +
+      productsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    if(prev && productsCache.some(p => p.id === prev)) ppSel.value = prev;
+  }
+}
+function renderStockTable(){
+  const tbody = document.getElementById('stockTable');
+  if(!tbody) return;
+  tbody.innerHTML = productsCache.map(p => `
+    <tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td>${p.stock || 0}</td></tr>
+  `).join('') || '<tr><td colspan="3" style="color:var(--muted)">No products yet.</td></tr>';
+}
+function renderStockMovementsTable(){
+  const tbody = document.getElementById('stockMovementsTable');
+  if(!tbody) return;
+  tbody.innerHTML = stockMovementsCache.map(m => `
+    <tr><td>${esc(m.date)}</td><td><span class="badge">${esc(m.type)}</span></td><td>${esc(m.productName)}</td><td>${m.qty > 0 ? '+' : ''}${m.qty}</td><td>${esc(m.note||'')}</td></tr>
+  `).join('') || '<tr><td colspan="5" style="color:var(--muted)">No stock movements yet.</td></tr>';
+}
+async function loadSkuMappings(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('skuMappings').get();
+  skuMappingsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+}
+async function loadStockMovements(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('stockMovements').orderBy('createdAt','desc').limit(200).get();
+  stockMovementsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderStockMovementsTable();
+}
+/* Shared by purchase stock-in and manual adjustment: bumps a product's stock
+   by qty (can be negative) and logs the movement for the history table. */
+async function addStockMovement(type, productId, qty, date, note){
+  const product = productsCache.find(p => p.id === productId);
+  if(!product || !qty) return;
+  await db.collection('users').doc(currentUser.uid).collection('products').doc(productId).update({
+    stock: firebase.firestore.FieldValue.increment(qty)
+  });
+  await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
+    type, productId, productName: product.name, qty, date, note: note || '',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+async function adjustStock(){
+  const productId = document.getElementById('adjProduct').value;
+  const qty = parseFloat(document.getElementById('adjQty').value);
+  const note = document.getElementById('adjNote').value.trim();
+  if(!productId){ showMsg('adjMsg', 'Select a product first.', false); return; }
+  if(!qty){ showMsg('adjMsg', 'Enter a non-zero quantity change.', false); return; }
+  await addStockMovement('adjustment', productId, qty, new Date().toISOString().slice(0,10), note);
+  await loadProducts();
+  await loadStockMovements();
+  document.getElementById('adjQty').value = '';
+  document.getElementById('adjNote').value = '';
+  showMsg('adjMsg', 'Stock adjusted.', true);
+}
+
+/* --- Monthly marketplace sales upload: read files -> map columns -> aggregate -> match products -> apply --- */
+const STOCK_PRODUCT_COL_GUESSES = ['sku','product name','item description','product title/description','description','product'];
+const STOCK_QTY_COL_GUESSES = ['quantity','qty','item quantity'];
+function guessStockColumn(headers, candidates){
+  const lower = headers.map(h => String(h).toLowerCase());
+  for(const c of candidates){ const i = lower.findIndex(h => h === c); if(i !== -1) return i; }
+  for(const c of candidates){ const i = lower.findIndex(h => h.includes(c)); if(i !== -1) return i; }
+  return 0;
+}
+async function parseStockFiles(){
+  const input = document.getElementById('stockFiles');
+  const files = input.files;
+  if(!files || !files.length){ showMsg('stockUploadMsg', 'Choose at least one file first.', false); return; }
+  stockUploadSheets = [];
+  for(const file of files){
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array'});
+    wb.SheetNames.forEach(sheetName => {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {header:1, raw:true, defval:''});
+      if(!rows.length) return;
+      const headers = rows[0].map(h => String(h||'').trim());
+      const dataRows = rows.slice(1).filter(r => r.some(c => c !== '' && c !== undefined && c !== null));
+      if(!headers.length || !dataRows.length) return;
+      stockUploadSheets.push({ fileName: file.name, sheetName, headers, rows: dataRows });
+    });
+  }
+  if(!stockUploadSheets.length){ showMsg('stockUploadMsg', 'Could not find any readable rows in the selected files.', false); return; }
+  renderStockColumnMapUI();
+  showMsg('stockUploadMsg', `Read ${stockUploadSheets.length} sheet(s) from ${files.length} file(s). Pick the product and quantity column for each below.`, true);
+}
+function renderStockColumnMapUI(){
+  document.getElementById('stockColumnMapWrap').classList.remove('hidden');
+  document.getElementById('stockAggWrap').classList.add('hidden');
+  document.getElementById('stockColumnMapList').innerHTML = stockUploadSheets.map((s, i) => {
+    const opts = s.headers.map((h, ci) => `<option value="${ci}">${esc(h || ('(column ' + (ci+1) + ')'))}</option>`).join('');
+    return `<div class="box" style="margin-bottom:10px">
+      <p style="margin:0 0 8px;font-size:13px;color:var(--muted)">${esc(s.fileName)} — ${esc(s.sheetName)} (${s.rows.length} rows)</p>
+      <div class="grid2">
+        <div class="field"><label>Product / SKU column</label><select id="stockColProd${i}">${opts}</select></div>
+        <div class="field"><label>Quantity column</label><select id="stockColQty${i}">${opts}</select></div>
+      </div>
+    </div>`;
+  }).join('');
+  stockUploadSheets.forEach((s, i) => {
+    document.getElementById('stockColProd'+i).value = guessStockColumn(s.headers, STOCK_PRODUCT_COL_GUESSES);
+    document.getElementById('stockColQty'+i).value = guessStockColumn(s.headers, STOCK_QTY_COL_GUESSES);
+  });
+}
+function aggregateStockUpload(){
+  const agg = new Map(); // normalized key -> {displayKey, totalQty}
+  stockUploadSheets.forEach((s, i) => {
+    const prodIdx = parseInt(document.getElementById('stockColProd'+i).value, 10);
+    const qtyIdx = parseInt(document.getElementById('stockColQty'+i).value, 10);
+    s.rows.forEach(row => {
+      const raw = String(row[prodIdx] ?? '').trim();
+      if(!raw) return;
+      const qty = parseFloat(row[qtyIdx]) || 0;
+      const key = raw.toLowerCase();
+      if(!agg.has(key)) agg.set(key, { displayKey: raw, totalQty: 0 });
+      agg.get(key).totalQty += qty;
+    });
+  });
+  stockAggregation = Array.from(agg.entries())
+    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, totalQty: v.totalQty }))
+    .filter(r => r.totalQty !== 0)
+    .sort((a,b) => b.totalQty - a.totalQty);
+  renderStockAggregationTable();
+}
+function renderStockAggregationTable(){
+  const wrap = document.getElementById('stockAggWrap');
+  if(!stockAggregation.length){
+    wrap.classList.add('hidden');
+    showMsg('stockUploadMsg', 'No quantities found with the columns you picked — check the column selection above.', false);
+    return;
+  }
+  wrap.classList.remove('hidden');
+  document.getElementById('stockAggTable').innerHTML = stockAggregation.map((r, i) => {
+    const known = skuMappingsCache.find(m => m.rawKey === r.rawKey);
+    const options = ['<option value="">Skip — not a stock item</option>']
+      .concat(productsCache.map(p => `<option value="${p.id}" ${known && known.productId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`));
+    return `<tr>
+      <td>${esc(r.displayKey)}</td>
+      <td>${r.totalQty}</td>
+      <td><select id="stockAggMap${i}">${options.join('')}</select></td>
+    </tr>`;
+  }).join('');
+}
+async function applyStockUpload(){
+  const period = document.getElementById('stockPeriod').value.trim() || new Date().toISOString().slice(0,7);
+  const dateVal = new Date().toISOString().slice(0,10);
+  let applied = 0;
+
+  for(let i = 0; i < stockAggregation.length; i++){
+    const row = stockAggregation[i];
+    const sel = document.getElementById('stockAggMap'+i);
+    const productId = sel ? sel.value : '';
+    if(!productId) continue;
+    const product = productsCache.find(p => p.id === productId);
+    if(!product) continue;
+
+    // Remember this product/SKU -> product mapping for future months.
+    const existingMap = skuMappingsCache.find(m => m.rawKey === row.rawKey);
+    if(existingMap){
+      if(existingMap.productId !== productId){
+        await db.collection('users').doc(currentUser.uid).collection('skuMappings').doc(existingMap.id)
+          .set({ rawKey: row.rawKey, productId, productName: product.name });
+      }
+    } else {
+      await db.collection('users').doc(currentUser.uid).collection('skuMappings').add({
+        rawKey: row.rawKey, productId, productName: product.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+
+    await addStockMovement('sale-out', productId, -row.totalQty, dateVal, `${period} — ${row.displayKey}`);
+    applied++;
+  }
+
+  await loadProducts();
+  await loadSkuMappings();
+  await loadStockMovements();
+
+  document.getElementById('stockColumnMapWrap').classList.add('hidden');
+  document.getElementById('stockAggWrap').classList.add('hidden');
+  document.getElementById('stockFiles').value = '';
+  stockUploadSheets = [];
+  stockAggregation = [];
+  showMsg('stockUploadMsg', `Stock updated for ${applied} product(s).`, true);
 }
 
 /* ---------------- Customers ---------------- */
@@ -392,23 +598,27 @@ async function loadPurchaseProducts(){
   renderPurchaseProductDropdowns();
 }
 function renderPurchaseProducts(){
-  document.getElementById('purchaseProductsTable').innerHTML = purchaseProductsCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td>
+  document.getElementById('purchaseProductsTable').innerHTML = purchaseProductsCache.map(p => {
+    const linked = p.linkedProductId ? productsCache.find(x => x.id === p.linkedProductId) : null;
+    return `<tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td>${linked ? esc(linked.name) : '—'}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editPurchaseProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deletePurchaseProduct('${p.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="3" style="color:var(--muted)">No purchase products yet.</td></tr>';
+    </td></tr>`;
+  }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No purchase products yet.</td></tr>';
 }
 async function savePurchaseProduct(){
   const id = document.getElementById('ppEditId').value;
   const data = {
     name: document.getElementById('ppName').value.trim(),
-    unit: document.getElementById('ppUnit').value.trim() || 'PCS'
+    unit: document.getElementById('ppUnit').value.trim() || 'PCS',
+    linkedProductId: document.getElementById('ppLinkedProduct').value || null
   };
   if(!data.name){ showMsg('purchaseProductMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('purchaseProducts');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
   ['ppName','ppUnit','ppEditId'].forEach(f => document.getElementById(f).value = '');
+  document.getElementById('ppLinkedProduct').value = '';
   showMsg('purchaseProductMsg', 'Saved.', true);
   loadPurchaseProducts();
 }
@@ -417,6 +627,7 @@ function editPurchaseProduct(id){
   document.getElementById('ppEditId').value = id;
   document.getElementById('ppName').value = p.name;
   document.getElementById('ppUnit').value = p.unit;
+  document.getElementById('ppLinkedProduct').value = p.linkedProductId || '';
 }
 async function deletePurchaseProduct(id){
   if(!confirm('Delete this purchase product?')) return;
@@ -619,6 +830,18 @@ async function savePurchase(){
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   const ref = await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
+
+  // Stock IN: any purchase line whose Purchase Product is linked to a billing
+  // Product automatically adds the purchased quantity to that product's stock.
+  let stockedItems = 0;
+  for(const li of items){
+    const purchaseProduct = purchaseProductsCache.find(p => p.id === li.productId);
+    if(purchaseProduct && purchaseProduct.linkedProductId){
+      await addStockMovement('purchase-in', purchaseProduct.linkedProductId, li.qty, dateVal, `Purchase from ${supplier.name}`);
+      stockedItems++;
+    }
+  }
+  if(stockedItems > 0){ await loadProducts(); await loadStockMovements(); }
 
   const priorBalance = getSupplierBalance(supId);
 
