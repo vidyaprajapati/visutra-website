@@ -18,16 +18,23 @@
 
 <div class="shell">
   <div class="sidebar">
-    <a href="#profile" class="nav-link active" data-view="profile">Business Profile</a>
-    <a href="#products" class="nav-link" data-view="products">Products</a>
-    <a href="#customers" class="nav-link" data-view="customers">Customers</a>
-    <a href="#suppliers" class="nav-link" data-view="suppliers">Suppliers</a>
-    <a href="#purchases" class="nav-link" data-view="purchases">Purchases</a>
-    <a href="#payments" class="nav-link" data-view="payments">Supplier Payments</a>
-    <a href="#supplier-ledger" class="nav-link" data-view="supplier-ledger">Supplier Ledger</a>
-    <a href="#new-invoice" class="nav-link" data-view="new-invoice">New Invoice</a>
-    <a href="#invoices" class="nav-link" data-view="invoices">Invoice History</a>
-    <a href="#gstr1" class="nav-link" data-view="gstr1">GSTR-1 Filing</a>
+    <div class="billing-mode-switch">
+      <button type="button" id="modeInvoiceBtn" class="mode-btn active" onclick="setBillingMode('invoice')">GST Invoice</button>
+      <button type="button" id="modePurchaseBtn" class="mode-btn" onclick="setBillingMode('purchase')">Purchase Details</button>
+    </div>
+    <a href="#profile" class="nav-link active" data-view="profile" data-mode="common">Business Profile</a>
+    <div class="nav-section" data-mode="invoice">GST INVOICE</div>
+    <a href="#products" class="nav-link" data-view="products" data-mode="invoice">Sales Product Master</a>
+    <a href="#customers" class="nav-link" data-view="customers" data-mode="invoice">Customers</a>
+    <a href="#new-invoice" class="nav-link" data-view="new-invoice" data-mode="invoice">New GST Invoice</a>
+    <a href="#invoices" class="nav-link" data-view="invoices" data-mode="invoice">Invoice History</a>
+    <a href="#gstr1" class="nav-link" data-view="gstr1" data-mode="invoice">GSTR-1 Filing</a>
+    <div class="nav-section" data-mode="purchase">PURCHASE DETAILS</div>
+    <a href="#suppliers" class="nav-link purchase-nav" data-view="suppliers" data-mode="purchase">Supplier Master</a>
+    <a href="#purchase-products" class="nav-link purchase-nav" data-view="purchase-products" data-mode="purchase">Purchase Product Master</a>
+    <a href="#purchases" class="nav-link purchase-nav" data-view="purchases" data-mode="purchase">Purchase Entry</a>
+    <a href="#payments" class="nav-link purchase-nav" data-view="payments" data-mode="purchase">Supplier Payments</a>
+    <a href="#supplier-ledger" class="nav-link purchase-nav" data-view="supplier-ledger" data-mode="purchase">Supplier Ledger</a>
   </div>
 
   <div class="main">
@@ -83,14 +90,13 @@
     <div id="view-products" class="view hidden">
       <div class="card">
         <h2>Product Master</h2>
-        <p class="sub">Set up each product once with its HSN code and GST rate — you'll just pick from this list when billing.</p>
+        <p class="sub">Maintain product name, HSN/SAC, unit, GST rate and the current selling price. The price is automatically used in new GST invoices, and you can change it here whenever the selling price changes.</p>
         <div class="grid3">
           <div class="field"><label>Product name</label><input id="pName"></div>
           <div class="field"><label>HSN / SAC code</label><input id="pHsn"></div>
           <div class="field"><label>Unit</label><input id="pUnit" placeholder="e.g. PCS, NOS, KG"></div>
         </div>
         <div class="grid3">
-          <div class="field"><label>Default price (₹)</label><input id="pPrice" type="number" step="0.01"></div>
           <div class="field"><label>GST rate</label>
             <select id="pGst">
               <option value="0">0%</option><option value="5">5%</option>
@@ -98,14 +104,40 @@
               <option value="28">28%</option>
             </select>
           </div>
+          <div class="field"><label>Selling price (₹)</label><input id="pPrice" type="number" min="0" step="0.01" placeholder="Current selling price"></div>
           <div class="field"><label>&nbsp;</label><button class="btn primary" style="width:100%" onclick="saveProduct()">Add Product</button></div>
         </div>
         <input type="hidden" id="pEditId">
         <p class="msg" id="productMsg"></p>
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price</th><th>GST</th><th></th></tr></thead>
+        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>GST</th><th>Selling Price</th><th></th></tr></thead>
         <tbody id="productsTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- PURCHASE PRODUCT MASTER -->
+    <div id="view-purchase-products" class="view hidden">
+      <div class="card">
+        <h2>Purchase Product Master</h2>
+        <p class="sub">Maintain purchase product name, HSN/SAC, unit and GST rate. <b>Purchase price is entered manually in each purchase entry</b> because supplier prices may fluctuate.</p>
+        <div class="grid3">
+          <div class="field"><label>Product name</label><input id="ppName"></div>
+          <div class="field"><label>HSN / SAC code</label><input id="ppHsn"></div>
+          <div class="field"><label>Unit</label><input id="ppUnit" placeholder="e.g. PCS, NOS, KG"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>Purchase GST rate</label>
+            <select id="ppGst"><option value="0">0%</option><option value="5">5%</option><option value="12">12%</option><option value="18">18%</option><option value="28">28%</option></select>
+          </div>
+          <div class="field"><label>&nbsp;</label><button class="btn primary" style="width:100%" onclick="savePurchaseProduct()">Add Purchase Product</button></div>
+        </div>
+        <input type="hidden" id="ppEditId">
+        <p class="msg" id="purchaseProductMsg"></p>
+      </div>
+      <div class="card">
+        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>GST</th><th></th></tr></thead>
+        <tbody id="purchaseProductsTable"></tbody></table>
       </div>
     </div>
 
