@@ -33,26 +33,15 @@ auth.onAuthStateChanged(async user => {
 function signOut(){ auth.signOut().then(()=> window.location.href = 'login.html'); }
 
 /* ---------------- Nav ---------------- */
-function showBillingView(view){
-  const target=document.getElementById('view-' + view);
-  if(!target) return;
-  document.querySelectorAll('.nav-link').forEach(l => l.classList.toggle('active', l.dataset.view === view));
-  document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
-  target.classList.remove('hidden');
-  if(view === 'invoices') loadInvoices();
-}
-
-document.addEventListener('click', e => {
-  const link=e.target.closest('.nav-link');
-  if(!link) return;
-  e.preventDefault();
-  showBillingView(link.dataset.view);
-  history.replaceState(null,'','#'+link.dataset.view);
-});
-
-window.addEventListener('DOMContentLoaded', () => {
-  const requested=(location.hash||'').replace('#','');
-  showBillingView(document.getElementById('view-'+requested) ? requested : 'billing-home');
+document.querySelectorAll('.nav-link').forEach(link => {
+  link.addEventListener('click', e => {
+    e.preventDefault();
+    document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+    link.classList.add('active');
+    document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+    document.getElementById('view-' + link.dataset.view).classList.remove('hidden');
+    if(link.dataset.view === 'invoices') loadInvoices();
+  });
 });
 
 /* ---------------- Business profile ---------------- */
@@ -177,17 +166,11 @@ async function loadProducts(){
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${Number(p.priceInclGst ?? (p.price * (1 + (Number(p.gstRate)||0)/100))).toFixed(2)}</td><td>₹${Number(p.price || 0).toFixed(2)}</td><td>${p.gstRate}%</td>
+    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${p.price}</td><td>${p.gstRate}%</td>
     <td class="row-actions">
       <button class="btn small" onclick="editProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="7" style="color:var(--muted)">No products yet.</td></tr>';
-}
-function updateProductExGst(){
-  const incl = parseFloat(document.getElementById('pPriceIncl').value) || 0;
-  const gst = parseFloat(document.getElementById('pGst').value) || 0;
-  const excl = gst ? incl / (1 + gst/100) : incl;
-  document.getElementById('pPriceExcl').value = excl ? excl.toFixed(2) : '';
+    </td></tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No products yet.</td></tr>';
 }
 async function saveProduct(){
   const id = document.getElementById('pEditId').value;
@@ -195,16 +178,13 @@ async function saveProduct(){
     name: document.getElementById('pName').value.trim(),
     hsn: document.getElementById('pHsn').value.trim(),
     unit: document.getElementById('pUnit').value.trim() || 'PCS',
-    priceInclGst: parseFloat(document.getElementById('pPriceIncl').value) || 0,
-    price: 0,
+    price: parseFloat(document.getElementById('pPrice').value) || 0,
     gstRate: parseFloat(document.getElementById('pGst').value)
   };
-  if(data.priceInclGst <= 0){ showMsg('productMsg', 'Price including GST is required.', false); return; }
-  data.price = data.gstRate ? +(data.priceInclGst / (1 + data.gstRate/100)).toFixed(2) : data.priceInclGst;
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['pName','pHsn','pUnit','pPriceIncl','pPriceExcl','pEditId'].forEach(f => document.getElementById(f).value = '');
+  ['pName','pHsn','pUnit','pPrice','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
   showMsg('productMsg', 'Saved.', true);
   loadProducts();
@@ -215,9 +195,7 @@ function editProduct(id){
   document.getElementById('pName').value = p.name;
   document.getElementById('pHsn').value = p.hsn;
   document.getElementById('pUnit').value = p.unit;
-  const incl = Number(p.priceInclGst ?? (Number(p.price||0) * (1 + (Number(p.gstRate)||0)/100)));
-  document.getElementById('pPriceIncl').value = incl.toFixed(2);
-  document.getElementById('pPriceExcl').value = Number(p.price||0).toFixed(2);
+  document.getElementById('pPrice').value = p.price;
   document.getElementById('pGst').value = p.gstRate;
 }
 async function deleteProduct(id){
