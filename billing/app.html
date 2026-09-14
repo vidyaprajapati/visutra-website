@@ -21,6 +21,10 @@
     <a href="#profile" class="nav-link active" data-view="profile">Business Profile</a>
     <a href="#products" class="nav-link" data-view="products">Products</a>
     <a href="#customers" class="nav-link" data-view="customers">Customers</a>
+    <a href="#suppliers" class="nav-link" data-view="suppliers">Suppliers</a>
+    <a href="#purchases" class="nav-link" data-view="purchases">Purchases</a>
+    <a href="#payments" class="nav-link" data-view="payments">Supplier Payments</a>
+    <a href="#supplier-ledger" class="nav-link" data-view="supplier-ledger">Supplier Ledger</a>
     <a href="#new-invoice" class="nav-link" data-view="new-invoice">New Invoice</a>
     <a href="#invoices" class="nav-link" data-view="invoices">Invoice History</a>
     <a href="#gstr1" class="nav-link" data-view="gstr1">GSTR-1 Filing</a>
@@ -126,6 +130,130 @@
       <div class="card">
         <table><thead><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Email</th><th></th></tr></thead>
         <tbody id="customersTable"></tbody></table>
+      </div>
+    </div>
+
+
+    <!-- SUPPLIERS -->
+    <div id="view-suppliers" class="view hidden">
+      <div class="card">
+        <h2>Supplier Master</h2>
+        <p class="sub">Add suppliers once. Their purchase history and payment balance will be tracked automatically.</p>
+        <div class="grid2">
+          <div class="field"><label>Supplier / business name</label><input id="sName"></div>
+          <div class="field"><label>GSTIN</label><input id="sGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"></div>
+        </div>
+        <div class="field"><label>Address</label><textarea id="sAddress"></textarea></div>
+        <div class="grid3">
+          <div class="field"><label>State</label><select id="sState"></select></div>
+          <div class="field"><label>Phone</label><input id="sPhone"></div>
+          <div class="field"><label>Email</label><input id="sEmail" type="email"></div>
+        </div>
+        <input type="hidden" id="sEditId">
+        <button class="btn primary" onclick="saveSupplier()">Add Supplier</button>
+        <p class="msg" id="supplierMsg"></p>
+      </div>
+      <div class="card">
+        <table><thead><tr><th>Supplier</th><th>GSTIN</th><th>State</th><th>Phone</th><th></th></tr></thead>
+        <tbody id="suppliersTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- PURCHASES -->
+    <div id="view-purchases" class="view hidden">
+      <div class="card">
+        <h2>New Purchase</h2>
+        <p class="sub">Select a supplier and product, enter the purchase quantity, unit price and GST. The GST-inclusive purchase value is calculated automatically.</p>
+        <div class="grid3">
+          <div class="field"><label>Purchase date</label><input id="purDate" type="date"></div>
+          <div class="field"><label>Supplier</label><select id="purSupplier"></select></div>
+          <div class="field"><label>Invoice / bill no. (optional)</label><input id="purBillNo"></div>
+        </div>
+        <div class="purchase-entry-row">
+          <div class="field"><label>Product</label><select id="purProduct" onchange="fillPurchaseProduct()"></select></div>
+          <div class="field"><label>Quantity</label><input id="purQty" type="number" min="0" step="0.001" value="1" oninput="recalcPurchase()"></div>
+          <div class="field"><label>Unit</label><input id="purUnit" disabled></div>
+          <div class="field"><label>Unit price before GST (₹)</label><input id="purRate" type="number" min="0" step="0.01" oninput="recalcPurchase()"></div>
+          <div class="field"><label>GST rate</label>
+            <select id="purGst" onchange="recalcPurchase()">
+              <option value="0">0%</option><option value="5">5%</option><option value="12">12%</option>
+              <option value="18">18%</option><option value="28">28%</option>
+            </select>
+          </div>
+        </div>
+        <div class="purchase-total-box" id="purchaseTotalBox">
+          <div><span>Taxable value</span><b id="purTaxable">₹0.00</b></div>
+          <div><span>GST amount</span><b id="purGstAmount">₹0.00</b></div>
+          <div><span>Unit price incl. GST</span><b id="purUnitFinal">₹0.00</b></div>
+          <div class="grand"><span>Final purchase price incl. GST</span><b id="purGrand">₹0.00</b></div>
+        </div>
+        <div class="field"><label>Notes (optional)</label><textarea id="purNotes" rows="2"></textarea></div>
+        <button class="btn primary" onclick="savePurchase()">Save Purchase</button>
+        <p class="msg" id="purchaseMsg"></p>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2>Purchase History</h2><button class="btn small" onclick="exportPurchasesExcel()">Export Excel</button></div>
+        <div class="filter-row">
+          <select id="purchaseHistorySupplier" onchange="loadPurchases()"></select>
+          <input id="purchaseHistoryFrom" type="date" onchange="loadPurchases()">
+          <input id="purchaseHistoryTo" type="date" onchange="loadPurchases()">
+        </div>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Product</th><th>Qty</th><th>Unit price incl. GST</th><th>GST</th><th>Total</th><th>Bill No.</th><th></th></tr></thead>
+        <tbody id="purchasesTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- SUPPLIER PAYMENTS -->
+    <div id="view-payments" class="view hidden">
+      <div class="card">
+        <h2>Make Supplier Payment</h2>
+        <div class="grid3">
+          <div class="field"><label>Payment date</label><input id="payDate" type="date"></div>
+          <div class="field"><label>Supplier</label><select id="paySupplier" onchange="showSupplierBalance()"></select></div>
+          <div class="field"><label>Payment amount (₹)</label><input id="payAmount" type="number" min="0" step="0.01" oninput="showSupplierBalance()"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>Payment method</label>
+            <select id="payMethod"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option><option>Other</option></select>
+          </div>
+          <div class="field"><label>Reference / transaction no.</label><input id="payReference"></div>
+          <div class="field"><label>Notes</label><input id="payNotes"></div>
+        </div>
+        <div class="balance-strip" id="paymentBalanceBox">Supplier balance: ₹0.00</div>
+        <button class="btn primary" onclick="saveSupplierPayment()">Save Payment</button>
+        <p class="msg" id="paymentMsg"></p>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2>Payment History</h2><button class="btn small" onclick="exportPaymentsExcel()">Export Excel</button></div>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead>
+        <tbody id="paymentsTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- SUPPLIER LEDGER -->
+    <div id="view-supplier-ledger" class="view hidden">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2>Supplier Ledger</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn small" onclick="downloadSupplierStatement()">Supplier Statement PDF</button><button class="btn small" onclick="exportSupplierLedgerExcel()">Export Excel</button></div></div>
+        <p class="sub">Open a supplier to see product-wise and date-wise purchases, all payments, total purchases, total payments and balance payable.</p>
+        <div class="grid2">
+          <div class="field"><label>Supplier</label><select id="ledgerSupplier" onchange="loadSupplierLedger()"></select></div>
+          <div class="field"><label>Date range</label><div style="display:flex;gap:8px"><input id="ledgerFrom" type="date" onchange="loadSupplierLedger()"><input id="ledgerTo" type="date" onchange="loadSupplierLedger()"></div></div>
+        </div>
+      </div>
+      <div class="grid3">
+        <div class="card stat-card"><span>Total Purchase</span><b id="ledgerPurchaseTotal">₹0.00</b></div>
+        <div class="card stat-card"><span>Total Payment</span><b id="ledgerPaymentTotal">₹0.00</b></div>
+        <div class="card stat-card"><span>Balance Payable</span><b id="ledgerBalance">₹0.00</b></div>
+      </div>
+      <div class="card">
+        <h3>Purchase Details</h3>
+        <table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Unit</th><th>Unit price</th><th>GST</th><th>Final price</th><th>Bill No.</th></tr></thead>
+        <tbody id="ledgerPurchasesTable"></tbody></table>
+      </div>
+      <div class="card">
+        <h3>Payment Details</h3>
+        <table><thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead>
+        <tbody id="ledgerPaymentsTable"></tbody></table>
       </div>
     </div>
 
