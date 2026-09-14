@@ -92,6 +92,7 @@ function activateView(viewName){
 
   if(viewName === 'invoices') loadInvoices();
   if(viewName === 'purchases') loadPurchases();
+  if(viewName === 'trash') loadTrash();
 }
 document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', e => {
@@ -226,11 +227,11 @@ async function loadProducts(){
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td>
+    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="8" style="color:var(--muted)">No products yet.</td></tr>';
+    </td></tr>`).join('') || '<tr><td colspan="9" style="color:var(--muted)">No products yet.</td></tr>';
 }
 function updateProductExclusivePreview(){
   const incl = parseFloat(document.getElementById('pPriceIncl').value) || 0;
@@ -250,12 +251,13 @@ async function saveProduct(){
     unit: document.getElementById('pUnit').value.trim() || 'PCS',
     price: exclPrice, // stored as the excl.-GST taxable value, used as-is everywhere downstream (invoicing, GSTR-1)
     gstRate,
+    reorderLevel: parseFloat(document.getElementById('pReorderLevel').value) || 0,
     stock: existing ? (existing.stock || 0) : 0 // stock is only ever changed via purchases, monthly uploads, or Adjust Stock — never reset by editing product details
   };
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['pName','pHsn','pUnit','pPriceIncl','pPrice','pEditId'].forEach(f => document.getElementById(f).value = '');
+  ['pName','pHsn','pUnit','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
   showMsg('productMsg', 'Saved.', true);
   loadProducts();
@@ -268,6 +270,7 @@ function editProduct(id){
   document.getElementById('pUnit').value = p.unit;
   document.getElementById('pPriceIncl').value = (p.price * (1 + (p.gstRate||0)/100)).toFixed(2);
   document.getElementById('pGst').value = p.gstRate;
+  document.getElementById('pReorderLevel').value = p.reorderLevel || 0;
   updateProductExclusivePreview();
 }
 async function deleteProduct(id){
@@ -297,13 +300,24 @@ function renderStockTable(){
   const tbody = document.getElementById('stockTable');
   if(!tbody) return;
   tbody.innerHTML = productsCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td>${p.stock || 0}</td></tr>
-  `).join('') || '<tr><td colspan="3" style="color:var(--muted)">No products yet.</td></tr>';
+    <tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td>${p.stock || 0}</td><td>${p.reorderLevel || 0}</td></tr>
+  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No products yet.</td></tr>';
+  renderReorderTable();
+}
+function renderReorderTable(){
+  const tbody = document.getElementById('reorderTable');
+  if(!tbody) return;
+  const low = productsCache
+    .filter(p => (p.reorderLevel || 0) > 0 && (p.stock || 0) <= p.reorderLevel)
+    .sort((a,b) => ((a.stock||0) - a.reorderLevel) - ((b.stock||0) - b.reorderLevel));
+  tbody.innerHTML = low.map(p => `
+    <tr><td>${esc(p.name)}</td><td>${p.stock || 0}</td><td>${p.reorderLevel}</td><td>${Math.max(0, p.reorderLevel - (p.stock||0))}</td></tr>
+  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">Nothing needs reordering right now.</td></tr>';
 }
 function renderStockMovementsTable(){
   const tbody = document.getElementById('stockMovementsTable');
   if(!tbody) return;
-  tbody.innerHTML = stockMovementsCache.map(m => `
+  tbody.innerHTML = stockMovementsCache.filter(m => dateInRange(m.date, 'stockMoveFrom', 'stockMoveTo')).map(m => `
     <tr><td>${esc(m.date)}</td><td><span class="badge">${esc(m.type)}</span></td><td>${esc(m.productName)}</td><td>${m.qty > 0 ? '+' : ''}${m.qty}</td><td>${esc(m.note||'')}</td></tr>
   `).join('') || '<tr><td colspan="5" style="color:var(--muted)">No stock movements yet.</td></tr>';
 }
@@ -534,6 +548,7 @@ async function loadSuppliers(){
   suppliersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
   renderSuppliers();
   renderSupplierDropdown();
+  renderPayablesOverview();
 }
 function renderSuppliers(){
   document.getElementById('suppliersTable').innerHTML = suppliersCache.map(s => `
@@ -719,6 +734,25 @@ function renderSupplierDashboard(supplierId){
 function refreshOpenDashboard(){
   const sel = document.getElementById('dashSupplier');
   if(sel && sel.value) renderSupplierDashboard(sel.value);
+  renderPayablesOverview();
+}
+function renderPayablesOverview(){
+  const tbody = document.getElementById('payablesTable');
+  if(!tbody) return;
+  const rows = suppliersCache.map(s => {
+    const totalPurchase = purchasesCache.filter(p => p.supplierId === s.id).reduce((sum,p) => sum + (p.grandTotal||0), 0);
+    const totalPaid = paymentsCache.filter(p => p.supplierId === s.id).reduce((sum,p) => sum + (p.amount||0), 0);
+    return { id: s.id, name: s.name, totalPurchase, totalPaid, balance: totalPurchase - totalPaid };
+  }).filter(r => r.totalPurchase > 0 || r.totalPaid > 0)
+    .sort((a,b) => b.balance - a.balance);
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td><a href="#" onclick="goToSupplierDashboard('${r.id}');return false;">${esc(r.name)}</a></td>
+      <td>₹${fmtMoney(r.totalPurchase)}</td>
+      <td>₹${fmtMoney(r.totalPaid)}</td>
+      <td>₹${fmtMoney(r.balance)}</td>
+      <td class="row-actions"><button class="btn small" onclick="goToSupplierDashboard('${r.id}')">View</button></td>
+    </tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No supplier activity yet.</td></tr>';
 }
 
 /* ---------------- Purchases (line items pick from the Purchase Product master above, not the billing Products list) ---------------- */
@@ -912,7 +946,7 @@ async function savePurchase(){
 }
 async function loadPurchases(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').get();
-  purchasesCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  purchasesCache = snap.docs.map(d => ({id:d.id, ...d.data()})).filter(p => !p.deleted);
   renderPurchases();
   recalcPurchaseTotals();
   refreshOpenDashboard();
@@ -920,7 +954,7 @@ async function loadPurchases(){
 function renderPurchases(){
   const tbody = document.getElementById('purchasesTable');
   if(!tbody) return;
-  tbody.innerHTML = purchasesCache.map(p => {
+  tbody.innerHTML = purchasesCache.filter(p => dateInRange(p.date, 'purchaseHistFrom', 'purchaseHistTo')).map(p => {
     const itemsSummary = (p.items||[]).map(li => `${esc(li.name)} (${li.qty} ${esc(li.unit)})`).join(', ');
     return `<tr>
       <td>${esc(p.date)}</td>
@@ -932,12 +966,14 @@ function renderPurchases(){
   }).join('') || '<tr><td colspan="5" style="color:var(--muted)">No purchases recorded yet.</td></tr>';
 }
 async function deletePurchase(id){
-  if(!confirm('Delete this purchase entry? Any stock it added will be reversed.')) return;
+  if(!confirm('Move this purchase to the Recycle Bin? Any stock it added will be reversed. You can restore it within 30 days.')) return;
   const purchase = purchasesCache.find(p => p.id === id);
   if(purchase){
     await reverseStockForPurchaseItems(purchase.items || [], new Date().toISOString().slice(0,10), `Reversed: deleted purchase dated ${purchase.date}`);
   }
-  await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).delete();
+  await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).update({
+    deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
   await loadProducts();
   await loadStockMovements();
   loadPurchases();
@@ -953,6 +989,87 @@ async function reverseStockForPurchaseItems(items, date, note){
     }
   }
 }
+
+/* ---------------- Recycle Bin (soft-deleted purchases & payments, 30-day auto-purge) ---------------- */
+const TRASH_RETENTION_DAYS = 30;
+let trashedPurchasesCache = [];
+let trashedPaymentsCache = [];
+function trashDeletedAtMs(doc){
+  // deletedAt is a Firestore server timestamp once it round-trips back from
+  // Firestore; fall back to "now" only if it's somehow still missing.
+  return doc.deletedAt && doc.deletedAt.toDate ? doc.deletedAt.toDate().getTime() : Date.now();
+}
+async function loadTrash(){
+  const [purchSnap, paySnap] = await Promise.all([
+    db.collection('users').doc(currentUser.uid).collection('purchases').where('deleted','==',true).get(),
+    db.collection('users').doc(currentUser.uid).collection('payments').where('deleted','==',true).get()
+  ]);
+  trashedPurchasesCache = purchSnap.docs.map(d => ({id:d.id, ...d.data()}));
+  trashedPaymentsCache = paySnap.docs.map(d => ({id:d.id, ...d.data()}));
+
+  // Auto-purge anything past the retention window before rendering, so the
+  // bin never grows forever and the person never has to remember to empty it.
+  const cutoff = Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const purchasesToPurge = trashedPurchasesCache.filter(p => trashDeletedAtMs(p) < cutoff);
+  const paymentsToPurge = trashedPaymentsCache.filter(p => trashDeletedAtMs(p) < cutoff);
+  for(const p of purchasesToPurge){
+    await db.collection('users').doc(currentUser.uid).collection('purchases').doc(p.id).delete();
+  }
+  for(const p of paymentsToPurge){
+    await db.collection('users').doc(currentUser.uid).collection('payments').doc(p.id).delete();
+  }
+  if(purchasesToPurge.length) trashedPurchasesCache = trashedPurchasesCache.filter(p => !purchasesToPurge.includes(p));
+  if(paymentsToPurge.length) trashedPaymentsCache = trashedPaymentsCache.filter(p => !paymentsToPurge.includes(p));
+
+  trashedPurchasesCache.sort((a,b) => trashDeletedAtMs(b) - trashDeletedAtMs(a));
+  trashedPaymentsCache.sort((a,b) => trashDeletedAtMs(b) - trashDeletedAtMs(a));
+  renderTrash();
+}
+function renderTrash(){
+  const purchTbody = document.getElementById('trashPurchasesTable');
+  if(purchTbody){
+    purchTbody.innerHTML = trashedPurchasesCache.map(p => {
+      const itemsSummary = (p.items||[]).map(li => `${esc(li.name)} (${li.qty} ${esc(li.unit)})`).join(', ');
+      const deletedOn = p.deletedAt && p.deletedAt.toDate ? p.deletedAt.toDate().toISOString().slice(0,10) : '';
+      return `<tr>
+        <td>${esc(p.date)}</td><td>${esc(p.supplierName)}</td><td>${itemsSummary}</td><td>₹${fmtMoney(p.grandTotal)}</td><td>${esc(deletedOn)}</td>
+        <td class="row-actions"><button class="btn small" onclick="restorePurchase('${p.id}')">Restore</button></td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="6" style="color:var(--muted)">Nothing here.</td></tr>';
+  }
+  const payTbody = document.getElementById('trashPaymentsTable');
+  if(payTbody){
+    payTbody.innerHTML = trashedPaymentsCache.map(p => {
+      const deletedOn = p.deletedAt && p.deletedAt.toDate ? p.deletedAt.toDate().toISOString().slice(0,10) : '';
+      return `<tr>
+        <td>${esc(p.date)}</td><td>${esc(p.supplierName)}</td><td>₹${fmtMoney(p.amount)}</td><td>${esc(deletedOn)}</td>
+        <td class="row-actions"><button class="btn small" onclick="restorePayment('${p.id}')">Restore</button></td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="5" style="color:var(--muted)">Nothing here.</td></tr>';
+  }
+}
+async function restorePurchase(id){
+  const purchase = trashedPurchasesCache.find(p => p.id === id);
+  if(!purchase) return;
+  await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).update({ deleted: false, deletedAt: null });
+  // Re-apply the stock-in effect that was reversed when this was deleted.
+  for(const li of (purchase.items || [])){
+    const purchaseProduct = purchaseProductsCache.find(p => p.id === li.productId);
+    if(purchaseProduct && purchaseProduct.linkedProductId){
+      await addStockMovement('purchase-in', purchaseProduct.linkedProductId, li.qty, new Date().toISOString().slice(0,10), `Restored purchase dated ${purchase.date}`);
+    }
+  }
+  await loadProducts();
+  await loadStockMovements();
+  await loadPurchases();
+  await loadTrash();
+}
+async function restorePayment(id){
+  await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).update({ deleted: false, deletedAt: null });
+  await loadPayments();
+  await loadTrash();
+}
+
 function editPurchase(id){
   const purchase = purchasesCache.find(p => p.id === id);
   if(!purchase) return;
@@ -984,13 +1101,15 @@ function cancelEditPurchase(){
 /* ---------------- Payments made to suppliers ---------------- */
 async function loadPayments(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('payments').orderBy('date','desc').get();
-  paymentsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  paymentsCache = snap.docs.map(d => ({id:d.id, ...d.data()})).filter(p => !p.deleted);
   refreshOpenDashboard();
   renderPaymentsTable();
 }
 async function deletePayment(id){
-  if(!confirm('Delete this payment record?')) return;
-  await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).delete();
+  if(!confirm('Move this payment to the Recycle Bin? You can restore it within 30 days.')) return;
+  await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).update({
+    deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
   await loadPayments();
   if(currentLedgerSupplierId) renderSupplierLedger(currentLedgerSupplierId);
 }
@@ -1052,7 +1171,7 @@ async function savePaymentEntry(){
 function renderPaymentsTable(){
   const tbody = document.getElementById('paymentsEntryTable');
   if(!tbody) return;
-  tbody.innerHTML = paymentsCache.map(p => `
+  tbody.innerHTML = paymentsCache.filter(p => dateInRange(p.date, 'paymentHistFrom', 'paymentHistTo')).map(p => `
     <tr>
       <td>${esc(p.date)}</td>
       <td><a href="#" onclick="goToSupplierDashboard('${p.supplierId}');return false;">${esc(p.supplierName)}</a></td>
@@ -1423,8 +1542,8 @@ let invoicesCache = {};
 async function loadInvoices(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('invoices').orderBy('createdAt','desc').limit(100).get();
   invoicesCache = {};
-  const rows = snap.docs.map(d => {
-    invoicesCache[d.id] = d.data();
+  snap.docs.forEach(d => { invoicesCache[d.id] = d.data(); });
+  const rows = snap.docs.filter(d => dateInRange(d.data().date||'', 'invoiceHistFrom', 'invoiceHistTo')).map(d => {
     const inv = d.data();
     return `<tr>
       <td>${esc(inv.invoiceNo||'')}</td><td>${esc(inv.date||'')}</td><td>${esc(inv.customer?.name||'')}</td>
@@ -1640,6 +1759,47 @@ function showMsg(id, text, ok){
   const el = document.getElementById(id);
   el.textContent = text;
   el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+
+/* Shared by every History table's From/To date filters: reads the two inputs
+   and reports whether dateStr falls inside the chosen range. Blank inputs on
+   either side mean "no limit" on that side. */
+function dateInRange(dateStr, fromId, toId){
+  const fromEl = document.getElementById(fromId), toEl = document.getElementById(toId);
+  const from = fromEl ? fromEl.value : '', to = toEl ? toEl.value : '';
+  if(from && dateStr < from) return false;
+  if(to && dateStr > to) return false;
+  return true;
+}
+function exportRowsToExcel(filename, headers, rows){
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+  XLSX.writeFile(wb, filename);
+}
+function exportPurchaseHistory(){
+  const rows = purchasesCache
+    .filter(p => dateInRange(p.date, 'purchaseHistFrom', 'purchaseHistTo'))
+    .map(p => [p.date, p.supplierName, (p.items||[]).map(li => `${li.name} (${li.qty} ${li.unit})`).join('; '), p.grandTotal||0]);
+  exportRowsToExcel('Purchase-History.xlsx', ['Date','Supplier','Products','Total (incl GST)'], rows);
+}
+function exportPaymentHistory(){
+  const rows = paymentsCache
+    .filter(p => dateInRange(p.date, 'paymentHistFrom', 'paymentHistTo'))
+    .map(p => [p.date, p.supplierName, p.amount||0, p.mode||'', p.note||'']);
+  exportRowsToExcel('Payment-History.xlsx', ['Date','Supplier','Amount','Mode','Note'], rows);
+}
+function exportStockMovements(){
+  const rows = stockMovementsCache
+    .filter(m => dateInRange(m.date, 'stockMoveFrom', 'stockMoveTo'))
+    .map(m => [m.date, m.type, m.productName, m.qty, m.note||'']);
+  exportRowsToExcel('Stock-Movements.xlsx', ['Date','Type','Product','Qty Change','Note'], rows);
+}
+function exportInvoiceHistory(){
+  const rows = Object.values(invoicesCache)
+    .filter(inv => dateInRange(inv.date||'', 'invoiceHistFrom', 'invoiceHistTo'))
+    .map(inv => [inv.invoiceNo||'', inv.date||'', inv.customer?.name||'', inv.grandTotal||0, inv.emailSent ? 'Sent' : 'Not sent']);
+  exportRowsToExcel('Invoice-History.xlsx', ['Invoice #','Date','Customer','Total','Emailed'], rows);
 }
 
 /* GSTIN format check + auto-select state from the embedded state code.
