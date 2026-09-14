@@ -24,7 +24,6 @@ auth.onAuthStateChanged(async user => {
   onFilingTypeChange();
   initSignaturePad();
   await loadProfile();
-  populateUnitSelect();
   await loadProducts();
   await loadCustomers();
   addLineItem();
@@ -54,17 +53,9 @@ async function loadProfile(){
   document.getElementById('bizAddress').value = businessData.address || '';
   document.getElementById('bizState').value = businessData.stateCode || '';
   document.getElementById('bizPhone').value = businessData.phone || '';
-  document.getElementById('bizBankName').value = businessData.bankName || '';
-  document.getElementById('bizAccountNumber').value = businessData.accountNumber || '';
-  document.getElementById('bizIfsc').value = businessData.ifsc || '';
-  document.getElementById('bizUpiId').value = businessData.upiId || '';
   if(businessData.signature){
     document.getElementById('sigPreview').src = businessData.signature;
     document.getElementById('sigPreviewWrap').classList.remove('hidden');
-  }
-  if(businessData.upiQr){
-    document.getElementById('upiQrPreview').src = businessData.upiQr;
-    document.getElementById('upiQrPreviewWrap').classList.remove('hidden');
   }
 }
 
@@ -76,36 +67,18 @@ async function saveProfile(){
     address: document.getElementById('bizAddress').value.trim(),
     stateCode: stateCode,
     state: stateNameByCode(stateCode),
-    phone: document.getElementById('bizPhone').value.trim(),
-    bankName: document.getElementById('bizBankName').value.trim(),
-    accountNumber: document.getElementById('bizAccountNumber').value.trim(),
-    ifsc: document.getElementById('bizIfsc').value.trim(),
-    upiId: document.getElementById('bizUpiId').value.trim()
+    phone: document.getElementById('bizPhone').value.trim()
   };
   await db.collection('users').doc(currentUser.uid).set(data, {merge:true});
   Object.assign(businessData, data);
   showMsg('profileMsg', 'Saved.', true);
-  showMsg('bankMsg', 'Saved.', true);
 }
 
-async function uploadUpiQr(event){
-  const file = event.target.files[0];
-  if(!file) return;
-  if(!file.type.startsWith('image/')){ showMsg('upiQrMsg', 'Please select an image file.', false); return; }
-  const reader = new FileReader();
-  reader.onload = async () => {
-    const dataUrl = reader.result;
-    await db.collection('users').doc(currentUser.uid).set({upiQr: dataUrl}, {merge:true});
-    businessData.upiQr = dataUrl;
-    document.getElementById('upiQrPreview').src = dataUrl;
-    document.getElementById('upiQrPreviewWrap').classList.remove('hidden');
-    showMsg('upiQrMsg', 'UPI QR code saved.', true);
-  };
-  reader.readAsDataURL(file);
-}
-
-/* ---------------- Signature pad ---------------- */
+/* ---------------- Signature pad (draw or upload) ---------------- */
 let sigCtx, drawing = false;
+let sigMode = 'draw';          // 'draw' | 'upload'
+let uploadedSigDataUrl = null; // set once an uploaded image has been converted, ready to save
+
 function initSignaturePad(){
   const canvas = document.getElementById('sigPad');
   sigCtx = canvas.getContext('2d');
@@ -124,8 +97,59 @@ function initSignaturePad(){
   canvas.addEventListener('touchend', end);
 }
 function clearSignature(){ sigCtx.clearRect(0,0,400,150); }
+
+function setSignatureMode(mode){
+  sigMode = mode;
+  document.getElementById('sigDrawPanel').classList.toggle('hidden', mode !== 'draw');
+  document.getElementById('sigUploadPanel').classList.toggle('hidden', mode !== 'upload');
+  document.getElementById('sigModeDrawBtn').classList.toggle('primary', mode === 'draw');
+  document.getElementById('sigModeUploadBtn').classList.toggle('primary', mode === 'upload');
+}
+
+function handleSignatureUpload(evt){
+  const file = evt.target.files && evt.target.files[0];
+  uploadedSigDataUrl = null;
+  if(!file) return;
+  if(file.type !== 'image/png' && file.type !== 'image/jpeg'){
+    showMsg('sigMsg', 'Please choose a JPG or PNG image.', false);
+    evt.target.value = '';
+    return;
+  }
+  if(file.size > 5 * 1024 * 1024){
+    showMsg('sigMsg', 'That image is too large — please use one under 5MB.', false);
+    evt.target.value = '';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      // Drawn onto the same 400x150 box the signature pad uses, preserving aspect
+      // ratio. This also keeps the saved signature small (well under Firestore's
+      // 1MB document limit) no matter how large the original photo/scan was.
+      const canvas = document.getElementById('sigUploadPreview');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const scale = Math.min(canvas.width / img.width, canvas.height / img.height, 1);
+      const w = img.width * scale, h = img.height * scale;
+      ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+      uploadedSigDataUrl = canvas.toDataURL('image/png');
+    };
+    img.onerror = () => showMsg('sigMsg', 'Could not read that image file.', false);
+    img.src = reader.result;
+  };
+  reader.onerror = () => showMsg('sigMsg', 'Could not read that image file.', false);
+  reader.readAsDataURL(file);
+}
+
 async function saveSignature(){
-  const dataUrl = document.getElementById('sigPad').toDataURL('image/png');
+  let dataUrl;
+  if(sigMode === 'upload'){
+    if(!uploadedSigDataUrl){ showMsg('sigMsg', 'Choose a JPG or PNG image first.', false); return; }
+    dataUrl = uploadedSigDataUrl;
+  } else {
+    dataUrl = document.getElementById('sigPad').toDataURL('image/png');
+  }
   await db.collection('users').doc(currentUser.uid).set({signature: dataUrl}, {merge:true});
   businessData.signature = dataUrl;
   document.getElementById('sigPreview').src = dataUrl;
@@ -134,64 +158,6 @@ async function saveSignature(){
 }
 
 /* ---------------- Products ---------------- */
-
-// Standard GST UQC (Unit Quantity Code) list, used across GSTR filings.
-const UQC_UNITS = [
-  {code:'PCS', label:'PCS — Pieces'}, {code:'NOS', label:'NOS — Numbers'},
-  {code:'SET', label:'SET — Sets'}, {code:'PRS', label:'PRS — Pairs'},
-  {code:'KGS', label:'KGS — Kilograms'}, {code:'GMS', label:'GMS — Grammes'},
-  {code:'MTR', label:'MTR — Metres'}, {code:'CMS', label:'CMS — Centimetres'},
-  {code:'SQM', label:'SQM — Square Metres'}, {code:'SQF', label:'SQF — Square Feet'},
-  {code:'SQY', label:'SQY — Square Yards'}, {code:'YDS', label:'YDS — Yards'},
-  {code:'LTR', label:'LTR — Litres'}, {code:'MLT', label:'MLT — Millilitres'},
-  {code:'KLR', label:'KLR — Kilolitres'}, {code:'BOX', label:'BOX — Box'},
-  {code:'CTN', label:'CTN — Cartons'}, {code:'PAC', label:'PAC — Packs'},
-  {code:'BAG', label:'BAG — Bags'}, {code:'BDL', label:'BDL — Bundles'},
-  {code:'BTL', label:'BTL — Bottles'}, {code:'CAN', label:'CAN — Cans'},
-  {code:'DOZ', label:'DOZ — Dozens'}, {code:'DRM', label:'DRM — Drums'},
-  {code:'GRS', label:'GRS — Gross'}, {code:'ROL', label:'ROL — Rolls'},
-  {code:'TON', label:'TON — Tonnes'}, {code:'QTL', label:'QTL — Quintal'},
-  {code:'TUB', label:'TUB — Tubes'}, {code:'UNT', label:'UNT — Units'},
-  {code:'OTH', label:'OTH — Others'}
-];
-
-function populateUnitSelect(){
-  const sel = document.getElementById('pUnit');
-  sel.innerHTML = UQC_UNITS.map(u => `<option value="${u.code}">${u.label}</option>`).join('');
-  sel.value = (businessData.lastUsedUnit) || 'PCS';
-}
-
-function onHsnInput(){
-  const val = document.getElementById('pHsn').value.trim();
-  const match = HSN_GST_REFERENCE.find(h => h.hsn === val);
-  const note = document.getElementById('pHsnNote');
-  if(!match){ note.textContent = ''; note.className = 'msg'; return; }
-  if(match.rate == null){
-    note.textContent = match.note || 'This HSN has a variable rate — check the official rate schedule.';
-    note.className = 'msg error';
-  } else {
-    note.textContent = `${esc(match.desc)} — commonly ${match.rate}% GST (verify and select the rate yourself below).`;
-    note.className = 'msg ok';
-  }
-}
-
-// Two-way price calculation: entering either the GST-inclusive final price
-// or the excl.-GST base price fills in the other, using the selected rate.
-let lastProductPriceEdited = 'excl';
-function onProductPriceOrRateChange(source){
-  if(source !== 'rate') lastProductPriceEdited = source;
-  const rate = parseFloat(document.getElementById('pGst').value) || 0;
-  const inclEl = document.getElementById('pPriceIncl');
-  const exclEl = document.getElementById('pPrice');
-  if(lastProductPriceEdited === 'incl'){
-    const incl = parseFloat(inclEl.value);
-    if(!isNaN(incl)) exclEl.value = (incl / (1 + rate/100)).toFixed(2);
-  } else {
-    const excl = parseFloat(exclEl.value);
-    if(!isNaN(excl)) inclEl.value = (excl * (1 + rate/100)).toFixed(2);
-  }
-}
-
 async function loadProducts(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get();
   productsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
@@ -208,27 +174,18 @@ function renderProducts(){
 }
 async function saveProduct(){
   const id = document.getElementById('pEditId').value;
-  const unit = document.getElementById('pUnit').value || 'PCS';
   const data = {
     name: document.getElementById('pName').value.trim(),
     hsn: document.getElementById('pHsn').value.trim(),
-    unit,
+    unit: document.getElementById('pUnit').value.trim() || 'PCS',
     price: parseFloat(document.getElementById('pPrice').value) || 0,
     gstRate: parseFloat(document.getElementById('pGst').value)
   };
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-
-  // Remember the unit just used as the default for next time.
-  businessData.lastUsedUnit = unit;
-  await db.collection('users').doc(currentUser.uid).set({lastUsedUnit: unit}, {merge:true});
-
-  ['pName','pHsn','pPrice','pPriceIncl','pEditId'].forEach(f => document.getElementById(f).value = '');
+  ['pName','pHsn','pUnit','pPrice','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
-  document.getElementById('pHsnNote').textContent = '';
-  populateUnitSelect();
-  lastProductPriceEdited = 'excl';
   showMsg('productMsg', 'Saved.', true);
   loadProducts();
 }
@@ -240,9 +197,6 @@ function editProduct(id){
   document.getElementById('pUnit').value = p.unit;
   document.getElementById('pPrice').value = p.price;
   document.getElementById('pGst').value = p.gstRate;
-  lastProductPriceEdited = 'excl';
-  onProductPriceOrRateChange('excl');
-  onHsnInput();
 }
 async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
@@ -259,18 +213,17 @@ async function loadCustomers(){
 }
 function renderCustomers(){
   document.getElementById('customersTable').innerHTML = customersCache.map(c => `
-    <tr><td>${esc(c.name)}</td><td>${esc(c.tradeName||'—')}</td><td>${esc(c.gstin||'—')}</td><td>${esc(c.state||'')}</td><td>${esc(c.email||'')}</td>
+    <tr><td>${esc(c.name)}</td><td>${esc(c.gstin||'—')}</td><td>${esc(c.state||'')}</td><td>${esc(c.email||'')}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editCustomer('${c.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteCustomer('${c.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No customers yet.</td></tr>';
+    </td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No customers yet.</td></tr>';
 }
 async function saveCustomer(){
   const id = document.getElementById('cEditId').value;
   const stateCode = document.getElementById('cState').value;
   const data = {
     name: document.getElementById('cName').value.trim(),
-    tradeName: document.getElementById('cTradeName').value.trim(),
     gstin: document.getElementById('cGstin').value.trim(),
     address: document.getElementById('cAddress').value.trim(),
     stateCode: stateCode,
@@ -278,10 +231,10 @@ async function saveCustomer(){
     email: document.getElementById('cEmail').value.trim(),
     phone: document.getElementById('cPhone').value.trim()
   };
-  if(!data.name){ showMsg('customerMsg', 'Legal Name of Business is required.', false); return; }
+  if(!data.name){ showMsg('customerMsg', 'Customer name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('customers');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['cName','cTradeName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
+  ['cName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('cState').value = '';
   showMsg('customerMsg', 'Saved.', true);
   loadCustomers();
@@ -290,7 +243,6 @@ function editCustomer(id){
   const c = customersCache.find(x => x.id === id);
   document.getElementById('cEditId').value = id;
   document.getElementById('cName').value = c.name;
-  document.getElementById('cTradeName').value = c.tradeName || '';
   document.getElementById('cGstin').value = c.gstin || '';
   document.getElementById('cAddress').value = c.address || '';
   document.getElementById('cState').value = c.stateCode || '';
@@ -305,7 +257,7 @@ async function deleteCustomer(id){
 function renderCustomerDropdown(){
   const sel = document.getElementById('invCustomer');
   sel.innerHTML = '<option value="">Select customer…</option>' +
-    customersCache.map(c => `<option value="${c.id}">${esc(c.name)}${c.tradeName ? ' ('+esc(c.tradeName)+')' : ''}</option>`).join('');
+    customersCache.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
 }
 
 /* ---------------- Invoice line items ---------------- */
@@ -427,7 +379,7 @@ async function saveAndGenerate(sendEmail){
   const invoiceData = {
     invoiceNo, date: dateVal, reverseCharge,
     business: { ...businessData },
-    customer: { name:customer.name, tradeName:customer.tradeName||'', gstin:customer.gstin, address:customer.address, state:customer.state, stateCode:customer.stateCode, email:customer.email },
+    customer: { name:customer.name, gstin:customer.gstin, address:customer.address, state:customer.state, stateCode:customer.stateCode, email:customer.email },
     items: lineItems.map(li => ({...li, taxable: lineTaxable(li)})),
     subtotal: totals.subtotal, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, grandTotal: totals.grand,
     sameState: totals.sameState,
@@ -502,7 +454,6 @@ function buildInvoicePDF(inv){
   doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.text('Bill To:', 40, y); y += 14;
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
   doc.text(inv.customer.name || '', 40, y); y += 12;
-  if(inv.customer.tradeName){ doc.text(`Trade Name: ${inv.customer.tradeName}`, 40, y); y += 12; }
   const custAddrLines = doc.splitTextToSize(inv.customer.address || '', 300);
   doc.text(custAddrLines, 40, y); y += custAddrLines.length * 12;
   if(inv.customer.gstin){ doc.text(`GSTIN: ${inv.customer.gstin}`, 40, y); y += 12; }
@@ -544,21 +495,6 @@ function buildInvoicePDF(inv){
   doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
   doc.text('Tax is payable on reverse charge basis: ' + (inv.reverseCharge ? 'Yes' : 'No'), 40, y);
   doc.text('This is a computer-generated invoice.', 40, y+12);
-
-  // Payment details block (left side)
-  if(inv.business.bankName || inv.business.accountNumber || inv.business.ifsc || inv.business.upiId || inv.business.upiQr){
-    let py = y + 32;
-    doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
-    doc.text('Payment Details:', 40, py); py += 14;
-    doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
-    if(inv.business.bankName){ doc.text(`Bank: ${inv.business.bankName}`, 40, py); py += 12; }
-    if(inv.business.accountNumber){ doc.text(`A/c No: ${inv.business.accountNumber}`, 40, py); py += 12; }
-    if(inv.business.ifsc){ doc.text(`IFSC: ${inv.business.ifsc}`, 40, py); py += 12; }
-    if(inv.business.upiId){ doc.text(`UPI ID: ${inv.business.upiId}`, 40, py); py += 12; }
-    if(inv.business.upiQr){
-      try{ doc.addImage(inv.business.upiQr, imgFormatFromDataUrl(inv.business.upiQr), 190, y+20, 75, 75); }catch(e){}
-    }
-  }
 
   // Signature block, bottom right
   const sigY = y - 10;
@@ -810,13 +746,6 @@ function downloadGstr1Excel(){
 
 /* ---------------- Utils ---------------- */
 function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
-function imgFormatFromDataUrl(dataUrl){
-  const m = /^data:image\/(png|jpe?g|webp)/i.exec(dataUrl||'');
-  if(!m) return 'PNG';
-  const t = m[1].toLowerCase();
-  if(t === 'jpg' || t === 'jpeg') return 'JPEG';
-  return t.toUpperCase();
-}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function showMsg(id, text, ok){
   const el = document.getElementById(id);
