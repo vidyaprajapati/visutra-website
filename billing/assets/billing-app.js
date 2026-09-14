@@ -80,6 +80,10 @@ function activateView(viewName){
   if(billingBtn) billingBtn.classList.toggle('primary', group === 'billing');
   if(purchaseBtn) purchaseBtn.classList.toggle('primary', group === 'purchase');
 
+  // Centered topbar title always names the page you're currently on.
+  const titleEl = document.getElementById('topbarTitle');
+  if(titleEl) titleEl.textContent = link.textContent;
+
   if(viewName === 'invoices') loadInvoices();
   if(viewName === 'purchases') loadPurchases();
 }
