@@ -43,6 +43,10 @@ auth.onAuthStateChanged(async user => {
   loadInvoices();
   loadPurchases();
 
+  // Sidebar starts scoped to Business Profile only; the two buttons there
+  // (or a deep link below) reveal the GST Billing or Purchase Entry pages.
+  activateView('profile');
+
   // Deep-link support: e.g. app.html?view=purchases (used by the "Purchase
   // Data Entry" button on the main site) opens straight on that tab instead
   // of the default Business Profile view.
@@ -59,6 +63,15 @@ function activateView(viewName){
   link.classList.add('active');
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   target.classList.remove('hidden');
+
+  // Scope the sidebar: only the group ("billing" or "purchase") this view
+  // belongs to stays visible. Business Profile has no data-group, so it's
+  // untouched by this loop and always stays visible as the way back.
+  const group = link.dataset.group || null;
+  document.querySelectorAll('.nav-link[data-group]').forEach(l => {
+    l.classList.toggle('hidden', l.dataset.group !== group);
+  });
+
   if(viewName === 'invoices') loadInvoices();
   if(viewName === 'purchases') loadPurchases();
 }
