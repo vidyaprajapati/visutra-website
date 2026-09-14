@@ -193,8 +193,37 @@
 
         <div class="totals-box" id="purchaseTotalsBox"></div>
 
-        <div style="margin-top:20px"><button class="btn primary" onclick="savePurchase()">Save Purchase</button></div>
+        <div class="grid2" style="margin-top:16px">
+          <div class="field"><label>Amount paid to supplier now (₹) — optional</label><input id="purPaidNow" type="number" min="0" step="0.01" value="0" oninput="recalcPurchaseTotals()"></div>
+          <div class="field"><label>Balance to this supplier after this purchase</label><input id="purBalancePreview" type="text" readonly style="background:var(--ivory);color:var(--muted)"></div>
+        </div>
+
+        <div style="margin-top:10px"><button class="btn primary" onclick="savePurchase()">Save Purchase</button></div>
         <p class="msg" id="purchaseMsg"></p>
+      </div>
+
+      <div class="card">
+        <h2>Supplier Dashboard</h2>
+        <p class="sub">Pick a supplier to review everything at a glance — purchase entries, items purchased, amount paid, and balance still to pay.</p>
+        <div class="field" style="max-width:320px"><label>Supplier</label><select id="dashSupplier" onchange="renderSupplierDashboard(this.value)"></select></div>
+
+        <div id="dashSummaryWrap" class="hidden">
+          <div class="grid3" style="margin-top:8px">
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Purchase Entries</h3><p style="font-size:20px;font-weight:700;margin:0" id="dashEntries">0</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Items Purchased</h3><p style="font-size:20px;font-weight:700;margin:0" id="dashItems">0</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Purchase Value</h3><p style="font-size:20px;font-weight:700;margin:0" id="dashTotalPurchase">₹0.00</p></div>
+          </div>
+          <div class="grid3" style="margin-top:12px">
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Paid</h3><p style="font-size:20px;font-weight:700;margin:0" id="dashTotalPaid">₹0.00</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Balance to Pay</h3><p style="font-size:20px;font-weight:700;margin:0;color:var(--paprika-dark)" id="dashBalance">₹0.00</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Last Purchase</h3><p style="font-size:14px;font-weight:600;margin:0" id="dashLastPurchase">—</p></div>
+          </div>
+          <div style="margin-top:18px;max-height:320px;overflow-y:auto">
+            <table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th>Purchase (Dr)</th><th>Paid (Cr)</th><th>Balance</th></tr></thead>
+            <tbody id="dashTable"></tbody></table>
+          </div>
+        </div>
+        <p class="sub hidden" id="dashEmptyMsg">No purchases or payments recorded for this supplier yet.</p>
       </div>
 
       <div class="card">
