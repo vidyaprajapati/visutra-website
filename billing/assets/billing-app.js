@@ -936,17 +936,17 @@ function buildInvoicePDF(inv){
 
   const sameState = inv.sameState;
   const head = sameState
-    ? [['#','Description','HSN','Qty','Unit','Rate','Taxable','CGST','SGST','Total']]
-    : [['#','Description','HSN','Qty','Unit','Rate','Taxable','IGST','Total']];
+    ? [['#','Description','HSN','Qty','Unit','Rate','Taxable','GST%','CGST','SGST','Total']]
+    : [['#','Description','HSN','Qty','Unit','Rate','Taxable','GST%','IGST','Total']];
 
   const body = inv.items.filter(li => li.productId).map((li, i) => {
     const taxable = li.taxable;
     const taxAmt = taxable * (li.gstRate||0) / 100;
     if(sameState){
       const half = taxAmt/2;
-      return [i+1, li.name, li.hsn, li.qty, li.unit, fmtMoney(li.rate), fmtMoney(taxable), fmtMoney(half), fmtMoney(half), fmtMoney(taxable+taxAmt)];
+      return [i+1, li.name, li.hsn, li.qty, li.unit, fmtMoney(li.rate), fmtMoney(taxable), `${li.gstRate||0}%`, fmtMoney(half), fmtMoney(half), fmtMoney(taxable+taxAmt)];
     } else {
-      return [i+1, li.name, li.hsn, li.qty, li.unit, fmtMoney(li.rate), fmtMoney(taxable), fmtMoney(taxAmt), fmtMoney(taxable+taxAmt)];
+      return [i+1, li.name, li.hsn, li.qty, li.unit, fmtMoney(li.rate), fmtMoney(taxable), `${li.gstRate||0}%`, fmtMoney(taxAmt), fmtMoney(taxable+taxAmt)];
     }
   });
 
