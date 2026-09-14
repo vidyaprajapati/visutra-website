@@ -195,32 +195,30 @@
     <div id="view-purchases" class="view hidden">
       <div class="card">
         <h2>New Purchase</h2>
-        <p class="sub">Select a supplier and product, enter the purchase quantity, unit price and GST. The GST-inclusive purchase value is calculated automatically.</p>
+        <p class="sub">Enter all products purchased from the same supplier on the same date on one page. You can add as many items as required and save the complete purchase together.</p>
         <div class="grid3">
           <div class="field"><label>Purchase date</label><input id="purDate" type="date"></div>
-          <div class="field"><label>Supplier</label><select id="purSupplier"></select></div>
+          <div class="field"><label>Supplier</label><select id="purSupplier" onchange="refreshAllPurchaseRows()"></select></div>
           <div class="field"><label>Invoice / bill no. (optional)</label><input id="purBillNo"></div>
         </div>
-        <div class="purchase-entry-row">
-          <div class="field"><label>Product</label><select id="purProduct" onchange="fillPurchaseProduct()"></select></div>
-          <div class="field"><label>Quantity</label><input id="purQty" type="number" min="0" step="0.001" value="1" oninput="recalcPurchase()"></div>
-          <div class="field"><label>Unit</label><input id="purUnit" disabled></div>
-          <div class="field"><label>Unit price before GST (₹)</label><input id="purRate" type="number" min="0" step="0.01" oninput="recalcPurchase()"></div>
-          <div class="field"><label>GST rate</label>
-            <select id="purGst" onchange="recalcPurchase()">
-              <option value="0">0%</option><option value="5">5%</option><option value="12">12%</option>
-              <option value="18">18%</option><option value="28">28%</option>
-            </select>
-          </div>
+        <div class="purchase-items-head">
+          <h3>Purchase Items</h3>
+          <button class="btn small" type="button" onclick="addPurchaseRow()">+ Add Product</button>
+        </div>
+        <div class="purchase-table-wrap">
+          <table class="purchase-entry-table">
+            <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Rate before GST (₹)</th><th>GST</th><th>GST Amount</th><th>Final Amount</th><th></th></tr></thead>
+            <tbody id="purchaseItemsBody"></tbody>
+          </table>
         </div>
         <div class="purchase-total-box" id="purchaseTotalBox">
-          <div><span>Taxable value</span><b id="purTaxable">₹0.00</b></div>
-          <div><span>GST amount</span><b id="purGstAmount">₹0.00</b></div>
-          <div><span>Unit price incl. GST</span><b id="purUnitFinal">₹0.00</b></div>
-          <div class="grand"><span>Final purchase price incl. GST</span><b id="purGrand">₹0.00</b></div>
+          <div><span>Total taxable value</span><b id="purBatchTaxable">₹0.00</b></div>
+          <div><span>Total GST</span><b id="purBatchGst">₹0.00</b></div>
+          <div class="grand"><span>Total purchase including GST</span><b id="purBatchGrand">₹0.00</b></div>
         </div>
         <div class="field"><label>Notes (optional)</label><textarea id="purNotes" rows="2"></textarea></div>
-        <button class="btn primary" onclick="savePurchase()">Save Purchase</button>
+        <button class="btn primary" type="button" onclick="savePurchaseBatch()">Save All Purchase Items</button>
+        <button class="btn" type="button" onclick="clearPurchaseForm()">Clear</button>
         <p class="msg" id="purchaseMsg"></p>
       </div>
       <div class="card">
