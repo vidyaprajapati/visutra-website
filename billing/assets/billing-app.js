@@ -28,6 +28,7 @@ auth.onAuthStateChanged(async user => {
   populateStateSelect(document.getElementById('sState'));
   document.getElementById('invDate').valueAsDate = new Date();
   document.getElementById('purDate').valueAsDate = new Date();
+  document.getElementById('payEntryDate').valueAsDate = new Date();
   populateGstrFY();
   onFilingTypeChange();
   initSignaturePad();
@@ -348,7 +349,7 @@ async function deleteSupplier(id){
   loadSuppliers();
 }
 function renderSupplierDropdown(){
-  ['purSupplier','dashSupplier'].forEach(id => {
+  ['purSupplier','dashSupplier','payEntrySupplier'].forEach(id => {
     const sel = document.getElementById(id);
     if(!sel) return;
     const prev = sel.value;
@@ -648,12 +649,52 @@ async function loadPayments(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('payments').orderBy('date','desc').get();
   paymentsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
   refreshOpenDashboard();
+  renderPaymentsTable();
 }
 async function deletePayment(id){
   if(!confirm('Delete this payment record?')) return;
   await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).delete();
   await loadPayments();
   if(currentLedgerSupplierId) renderSupplierLedger(currentLedgerSupplierId);
+}
+
+/* ---------------- Payment Entry (standalone page — log a payment any time, not tied to a purchase) ---------------- */
+async function savePaymentEntry(){
+  const supplierId = document.getElementById('payEntrySupplier').value;
+  const supplier = suppliersCache.find(s => s.id === supplierId);
+  if(!supplier){ showMsg('paymentEntryMsg', 'Select a supplier first.', false); return; }
+  const amount = parseFloat(document.getElementById('payEntryAmount').value) || 0;
+  if(amount <= 0){ showMsg('paymentEntryMsg', 'Enter a payment amount greater than zero.', false); return; }
+  const dateVal = document.getElementById('payEntryDate').value || new Date().toISOString().slice(0,10);
+  const mode = document.getElementById('payEntryMode').value.trim();
+  const note = document.getElementById('payEntryNote').value.trim();
+
+  await db.collection('users').doc(currentUser.uid).collection('payments').add({
+    supplierId, supplierName: supplier.name, date: dateVal, amount, mode, note,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  await loadPayments();
+
+  ['payEntryAmount','payEntryMode','payEntryNote'].forEach(f => document.getElementById(f).value = '');
+  showMsg('paymentEntryMsg', `Payment of ₹${fmtMoney(amount)} recorded for ${supplier.name}. Balance now ₹${fmtMoney(getSupplierBalance(supplierId))}.`, true);
+}
+function renderPaymentsTable(){
+  const tbody = document.getElementById('paymentsEntryTable');
+  if(!tbody) return;
+  tbody.innerHTML = paymentsCache.map(p => `
+    <tr>
+      <td>${esc(p.date)}</td>
+      <td><a href="#" onclick="goToSupplierDashboard('${p.supplierId}');return false;">${esc(p.supplierName)}</a></td>
+      <td>₹${fmtMoney(p.amount)}</td>
+      <td>${esc(p.mode||'—')}</td>
+      <td>${esc(p.note||'')}</td>
+      <td class="row-actions"><button class="btn small danger" onclick="deletePayment('${p.id}')">Delete</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No payments recorded yet.</td></tr>';
+}
+function goToSupplierDashboard(supplierId){
+  activateView('supplier-dashboard');
+  const sel = document.getElementById('dashSupplier');
+  if(sel){ sel.value = supplierId; renderSupplierDashboard(supplierId); }
 }
 
 /* ---------------- Supplier ledger (product-wise, date-wise purchases + payments) ---------------- */
