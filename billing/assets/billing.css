@@ -66,3 +66,8 @@ th{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacin
 .balance-strip{padding:13px 15px;margin:10px 0 16px;background:var(--ivory);border:1px solid var(--thread);border-radius:8px;font-weight:600}
 .stat-card span{font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted)}
 .stat-card b{display:block;font-size:24px;margin-top:6px}
+.billing-mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:10px;margin-bottom:10px;background:rgba(0,0,0,.03);border-radius:12px}
+.mode-btn{border:1px solid var(--thread);background:transparent;padding:10px 8px;border-radius:9px;font-weight:700;cursor:pointer;color:var(--ink)}
+.mode-btn.active{background:var(--ink);color:#fff}
+.nav-section{font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--muted);padding:14px 12px 6px}
+.mode-hidden{display:none!important}

@@ -1,6 +1,8 @@
 let currentUser = null;
 let businessData = {};
 let productsCache = [];
+let purchaseProductsCache = [];
+let billingMode = 'invoice';
 let customersCache = [];
 let suppliersCache = [];
 let purchasesCache = [];
@@ -28,6 +30,7 @@ auth.onAuthStateChanged(async user => {
   initSignaturePad();
   await loadProfile();
   await loadProducts();
+  await loadPurchaseProducts();
   await loadCustomers();
   await loadSuppliers();
   await loadPurchases();
@@ -40,10 +43,22 @@ auth.onAuthStateChanged(async user => {
 
 function signOut(){ auth.signOut().then(()=> window.location.href = 'login.html'); }
 
-/* ---------------- Nav ---------------- */
+/* ---------------- Nav / billing modes ---------------- */
+function setBillingMode(mode){
+  billingMode = mode;
+  document.getElementById('modeInvoiceBtn').classList.toggle('active', mode === 'invoice');
+  document.getElementById('modePurchaseBtn').classList.toggle('active', mode === 'purchase');
+  document.querySelectorAll('[data-mode="invoice"]').forEach(el => el.classList.toggle('mode-hidden', mode !== 'invoice'));
+  document.querySelectorAll('[data-mode="purchase"]').forEach(el => el.classList.toggle('mode-hidden', mode !== 'purchase'));
+  const first = mode === 'invoice' ? 'products' : 'suppliers';
+  const link = document.querySelector('.nav-link[data-view="'+first+'"]');
+  if(link) link.click();
+}
+
 document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', e => {
     e.preventDefault();
+    if(link.dataset.mode && link.dataset.mode !== 'common' && link.dataset.mode !== billingMode) return;
     document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
     link.classList.add('active');
     document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
@@ -53,6 +68,7 @@ document.querySelectorAll('.nav-link').forEach(link => {
     if(link.dataset.view === 'payments') { loadSupplierPayments(); showSupplierBalance(); }
     if(link.dataset.view === 'supplier-ledger') loadSupplierLedger();
     if(link.dataset.view === 'suppliers') loadSuppliers();
+    if(link.dataset.view === 'purchase-products') loadPurchaseProducts();
   });
 });
 
@@ -179,7 +195,7 @@ async function loadProducts(){
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${p.price}</td><td>${p.gstRate}%</td>
+    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.sellingPrice || 0)}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button>
@@ -191,8 +207,8 @@ async function saveProduct(){
     name: document.getElementById('pName').value.trim(),
     hsn: document.getElementById('pHsn').value.trim(),
     unit: document.getElementById('pUnit').value.trim() || 'PCS',
-    price: parseFloat(document.getElementById('pPrice').value) || 0,
-    gstRate: parseFloat(document.getElementById('pGst').value)
+    gstRate: parseFloat(document.getElementById('pGst').value),
+    sellingPrice: parseFloat(document.getElementById('pPrice').value) || 0
   };
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
@@ -208,8 +224,8 @@ function editProduct(id){
   document.getElementById('pName').value = p.name;
   document.getElementById('pHsn').value = p.hsn;
   document.getElementById('pUnit').value = p.unit;
-  document.getElementById('pPrice').value = p.price;
   document.getElementById('pGst').value = p.gstRate;
+  document.getElementById('pPrice').value = p.sellingPrice ?? '';
 }
 async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
@@ -284,14 +300,37 @@ async function deleteSupplier(id){
 function renderPurchaseProductDropdown(){
   const el=document.getElementById('purProduct'); if(!el)return;
   const old=el.value;
-  el.innerHTML='<option value="">Select product…</option>'+productsCache.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
-  if(old && productsCache.some(p=>p.id===old)) el.value=old;
+  el.innerHTML='<option value="">Select purchase product…</option>'+purchaseProductsCache.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  if(old && purchaseProductsCache.some(p=>p.id===old)) el.value=old;
 }
+async function loadPurchaseProducts(){
+  if(!currentUser)return;
+  const snap=await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').orderBy('name').get();
+  purchaseProductsCache=snap.docs.map(d=>({id:d.id,...d.data()}));
+  renderPurchaseProducts();
+  renderPurchaseProductDropdown();
+}
+function renderPurchaseProducts(){
+  const el=document.getElementById('purchaseProductsTable'); if(!el)return;
+  el.innerHTML=purchaseProductsCache.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.hsn||'')}</td><td>${esc(p.unit||'')}</td><td>${p.gstRate||0}%</td><td class="row-actions"><button class="btn small" onclick="editPurchaseProduct('${p.id}')">Edit</button><button class="btn small danger" onclick="deletePurchaseProduct('${p.id}')">Delete</button></td></tr>`).join('')||'<tr><td colspan="5" style="color:var(--muted)">No purchase products yet.</td></tr>';
+}
+async function savePurchaseProduct(){
+  const id=document.getElementById('ppEditId').value;
+  const data={name:document.getElementById('ppName').value.trim(),hsn:document.getElementById('ppHsn').value.trim(),unit:document.getElementById('ppUnit').value.trim()||'PCS',gstRate:parseFloat(document.getElementById('ppGst').value)||0};
+  if(!data.name){showMsg('purchaseProductMsg','Product name is required.',false);return;}
+  const col=db.collection('users').doc(currentUser.uid).collection('purchaseProducts');
+  if(id) await col.doc(id).set(data); else await col.add(data);
+  ['ppName','ppHsn','ppUnit','ppEditId'].forEach(x=>document.getElementById(x).value=''); document.getElementById('ppGst').value='0';
+  showMsg('purchaseProductMsg','Purchase product saved.',true); await loadPurchaseProducts();
+}
+function editPurchaseProduct(id){const p=purchaseProductsCache.find(x=>x.id===id);if(!p)return;document.getElementById('ppEditId').value=id;document.getElementById('ppName').value=p.name||'';document.getElementById('ppHsn').value=p.hsn||'';document.getElementById('ppUnit').value=p.unit||'';document.getElementById('ppGst').value=p.gstRate||0;}
+async function deletePurchaseProduct(id){if(!confirm('Delete this purchase product? Existing purchase records will remain.'))return;await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').doc(id).delete();await loadPurchaseProducts();}
+
 function fillPurchaseProduct(){
-  const p=productsCache.find(x=>x.id===document.getElementById('purProduct').value);
+  const p=purchaseProductsCache.find(x=>x.id===document.getElementById('purProduct').value);
   if(!p){document.getElementById('purUnit').value=''; document.getElementById('purRate').value=''; return;}
   document.getElementById('purUnit').value=p.unit||'PCS';
-  document.getElementById('purRate').value=p.price||0;
+  document.getElementById('purRate').value='';
   document.getElementById('purGst').value=(p.gstRate ?? 0);
   recalcPurchase();
 }
@@ -310,7 +349,7 @@ async function savePurchase(){
   const supplierId=document.getElementById('purSupplier').value;
   const productId=document.getElementById('purProduct').value;
   const supplier=suppliersCache.find(s=>s.id===supplierId);
-  const product=productsCache.find(p=>p.id===productId);
+  const product=purchaseProductsCache.find(p=>p.id===productId);
   if(!supplier){showMsg('purchaseMsg','Select a supplier.',false);return;}
   if(!product){showMsg('purchaseMsg','Select a product.',false);return;}
   const c=recalcPurchase();
@@ -599,7 +638,7 @@ function renderLineItems(){
 function onProductPick(idx, productId){
   const p = productsCache.find(x => x.id === productId);
   if(!p) return;
-  lineItems[idx] = { productId, name:p.name, hsn:p.hsn, unit:p.unit, qty:lineItems[idx].qty||1, rate:p.price, discount:0, gstRate:p.gstRate };
+  lineItems[idx] = { productId, name:p.name, hsn:p.hsn, unit:p.unit, qty:lineItems[idx].qty||1, rate:Number(p.sellingPrice)||0, discount:0, gstRate:p.gstRate };
   renderLineItems();
 }
 function updateLine(idx, field, value){
