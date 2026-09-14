@@ -137,6 +137,7 @@ nav a.active{color:var(--paprika)}
 
 /* ---------- why / icon grid ---------- */
 .why{display:grid;grid-template-columns:repeat(4,1fr);gap:22px}
+.why.two-col{grid-template-columns:repeat(2,1fr)}
 .why div{padding:24px 20px;border-radius:var(--radius);background:var(--canvas);border:1px solid var(--thread)}
 .why .icon{width:40px;height:40px;border-radius:10px;background:var(--indigo);color:var(--marigold);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700;margin-bottom:14px}
 .why h3{font-size:16.5px;margin-bottom:6px}
@@ -213,6 +214,7 @@ footer b{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(
 }
 @media(max-width:560px){
   .products,.why{grid-template-columns:1fr}
+  .why.two-col{grid-template-columns:1fr}
   .grid2{grid-template-columns:1fr}
   .foot-grid{grid-template-columns:1fr}
   .hero-grid img{height:150px}
