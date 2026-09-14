@@ -12,12 +12,15 @@
 <body>
 
 <div class="topbar">
-  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"><b>VISUTRA Billing</b></a>
-  <div class="topbar-switch">
-    <button class="btn small" id="topbarBillingBtn" onclick="activateView('new-invoice')">GST Billing</button>
-    <button class="btn small" id="topbarPurchaseBtn" onclick="activateView('purchases')">Purchase Entry</button>
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"></a>
+  <div class="topbar-title" id="topbarTitle">Business Profile</div>
+  <div class="topbar-right">
+    <div class="topbar-switch">
+      <button class="btn small" id="topbarBillingBtn" onclick="activateView('new-invoice')">GST Billing</button>
+      <button class="btn small" id="topbarPurchaseBtn" onclick="activateView('purchases')">Purchase Entry</button>
+    </div>
+    <div id="userMenuMount"></div>
   </div>
-  <div id="userMenuMount"></div>
 </div>
 
 <div class="shell">
