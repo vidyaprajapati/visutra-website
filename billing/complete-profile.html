@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Complete your profile | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+<style>
+  .wrap{max-width:460px;margin:50px auto;padding:0 20px}
+  .logo-row{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:26px}
+  .logo-row img{height:36px;width:36px;border-radius:8px}
+  .logo-row span{font-family:var(--display);font-size:20px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo-row"><img src="../assets/logo.png" alt="VISUTRA"><span>VISUTRA Billing</span></div>
+  <div class="card">
+    <h2>Just a few more details</h2>
+    <p class="sub">Google gave us your name and email — we still need a little more to set up your account.</p>
+
+    <div class="field"><label for="cpName">Full name</label><input type="text" id="cpName"></div>
+    <div class="grid2">
+      <div class="field"><label for="cpBusinessType">Type of business</label>
+        <select id="cpBusinessType">
+          <option value="">Select…</option>
+          <option>Manufacturer</option><option>Trader / Reseller</option>
+          <option>Retailer</option><option>Wholesaler</option>
+          <option>Service Provider</option><option>E-commerce Seller</option>
+          <option>Freelancer / Consultant</option><option>Other</option>
+        </select>
+      </div>
+      <div class="field"><label for="cpMobile">Mobile number</label><input type="tel" id="cpMobile" placeholder="10-digit mobile"></div>
+    </div>
+    <div class="field"><label for="cpUsername">Choose a username</label><input type="text" id="cpUsername" placeholder="letters, numbers, underscores only" oninput="this.value=this.value.replace(/[^a-zA-Z0-9_]/g,'').toLowerCase()"></div>
+
+    <button class="btn primary" style="width:100%" onclick="saveProfile()">Continue</button>
+    <p class="msg" id="cpMsg"></p>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script>
+let currentUser = null;
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = 'login.html'; return; }
+  currentUser = user;
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(snap.exists && snap.data().profileComplete){
+    window.location.href = postLoginTarget();
+    return;
+  }
+  document.getElementById('cpName').value = (snap.exists && snap.data().fullName) || user.displayName || '';
+});
+
+function postLoginTarget(){
+  const params = new URLSearchParams(window.location.search);
+  const r = params.get('redirect');
+  return r ? decodeURIComponent(r) : 'app.html';
+}
+
+function showMsg(text, ok){
+  const el = document.getElementById('cpMsg');
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+
+async function captureLocation(){
+  if(!navigator.geolocation) return null;
+  try{
+    const pos = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {timeout: 6000});
+    });
+    const {latitude, longitude} = pos.coords;
+    let place = null;
+    try{
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
+      const data = await res.json();
+      place = data.address ? {
+        city: data.address.city || data.address.town || data.address.village || '',
+        state: data.address.state || '',
+        country: data.address.country || ''
+      } : null;
+    }catch(e){}
+    return { lat: latitude, lng: longitude, ...place };
+  }catch(e){ return null; }
+}
+
+async function saveProfile(){
+  const name = document.getElementById('cpName').value.trim();
+  const businessType = document.getElementById('cpBusinessType').value;
+  const mobile = document.getElementById('cpMobile').value.trim();
+  const username = document.getElementById('cpUsername').value.trim().toLowerCase();
+
+  if(!name || !businessType || !mobile || !username){ showMsg('Please fill in every field.', false); return; }
+  if(!/^[a-z0-9_]{3,20}$/.test(username)){ showMsg('Username must be 3–20 characters: letters, numbers, underscores only.', false); return; }
+
+  showMsg('Checking username availability…', true);
+  const usernameDoc = await db.collection('usernames').doc(username).get();
+  if(usernameDoc.exists && usernameDoc.data().uid !== currentUser.uid){
+    showMsg('That username is already taken — please choose another.', false);
+    return;
+  }
+
+  showMsg('Saving…', true);
+  const location = await captureLocation();
+
+  await db.collection('users').doc(currentUser.uid).set({
+    fullName: name, businessType, mobileNumber: mobile, username,
+    location: location || null, profileComplete: true
+  }, {merge: true});
+  await db.collection('usernames').doc(username).set({ uid: currentUser.uid, email: currentUser.email });
+
+  window.location.href = postLoginTarget();
+}
+</script>
+</body>
+</html>
