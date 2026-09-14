@@ -61,8 +61,23 @@ async function loadInvoice(){
     const inv = snap.data();
     currentInvoiceData = inv;
     render(inv);
+    // Auto-download the PDF the moment the page opens, so the buyer gets the
+    // actual file without an extra click — no paid EmailJS attachment plan needed.
+    // The button stays too, in case a browser blocks the automatic download or
+    // they want to grab it again later.
+    try{ downloadInvoicePdf(); }catch(e){ console.error('Auto-download failed:', e); }
   }catch(err){
-    content.innerHTML = '<div class="errbox">Could not load this invoice.</div>';
+    console.error('Invoice load error:', err);
+    // Almost always caused by Firestore security rules not allowing public read
+    // of /public_invoices/{id} — see BILLING-SETUP.md Part 2. Surfacing the real
+    // error code here (visible in browser console) makes that diagnosable instead
+    // of a dead-end message.
+    const isPermission = err && err.code === 'permission-denied';
+    content.innerHTML = `<div class="errbox">
+      ${isPermission
+        ? 'This invoice link is not publicly readable. The site owner needs to check the Firestore security rules for the <code>public_invoices</code> collection (Firebase Console → Firestore Database → Rules) and make sure it includes <code>allow read: if true;</code>.'
+        : 'Could not load this invoice. Please try the link again in a moment, or contact the sender for a fresh copy.'}
+    </div>`;
   }
 }
 
@@ -90,7 +105,7 @@ function render(inv){
           GSTIN: ${esc(inv.business.gstin)}<br>${esc(inv.business.state)}</p>
         </div>
         <div class="box"><h3>Bill To</h3>
-          <p><b>${esc(inv.customer.name)}</b><br>${inv.customer.tradeName ? 'Trade Name: '+esc(inv.customer.tradeName)+'<br>' : ''}${esc(inv.customer.address||'')}<br>
+          <p><b>${esc(inv.customer.name)}</b><br>${esc(inv.customer.address||'')}<br>
           ${inv.customer.gstin ? 'GSTIN: '+esc(inv.customer.gstin)+'<br>' : ''}${esc(inv.customer.state||'')}</p>
         </div>
       </div>
@@ -114,33 +129,15 @@ function render(inv){
         <p style="margin:4px 0 0;font-size:12px;color:var(--muted)">Authorized Signatory</p>
       </div>
 
-      ${(inv.business.bankName || inv.business.accountNumber || inv.business.ifsc || inv.business.upiId || inv.business.upiQr) ? `
-      <div class="box" style="margin-top:20px;max-width:340px">
-        <h3>Payment Details</h3>
-        <p style="font-size:13px;line-height:1.6">
-          ${inv.business.bankName ? `Bank: ${esc(inv.business.bankName)}<br>` : ''}
-          ${inv.business.accountNumber ? `A/c No: ${esc(inv.business.accountNumber)}<br>` : ''}
-          ${inv.business.ifsc ? `IFSC: ${esc(inv.business.ifsc)}<br>` : ''}
-          ${inv.business.upiId ? `UPI ID: ${esc(inv.business.upiId)}` : ''}
-        </p>
-        ${inv.business.upiQr ? `<img src="${inv.business.upiQr}" style="max-width:120px;margin-top:8px;border:1px solid var(--thread);border-radius:6px;background:#fff;padding:4px">` : ''}
-      </div>` : ''}
-
       <p style="font-size:11px;color:var(--muted);margin-top:24px">This is a computer-generated invoice. Tax payable on reverse charge basis: ${inv.reverseCharge ? 'Yes' : 'No'}.</p>
 
-      <button class="btn" onclick="downloadInvoicePdf()">Download PDF</button>
+      <p style="font-size:12px;color:var(--muted);margin-top:16px">A PDF copy of this invoice has been downloaded to your device automatically.</p>
+      <button class="btn" onclick="downloadInvoicePdf()">Download PDF again</button>
     </div>
   `;
 }
 
 function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
-function imgFormatFromDataUrl(dataUrl){
-  const m = /^data:image\/(png|jpe?g|webp)/i.exec(dataUrl||'');
-  if(!m) return 'PNG';
-  const t = m[1].toLowerCase();
-  if(t === 'jpg' || t === 'jpeg') return 'JPEG';
-  return t.toUpperCase();
-}
 
 // Identical layout to the one the business owner downloads from their dashboard —
 // generated fresh from this page's saved data, so no file storage is needed
@@ -180,7 +177,6 @@ function buildInvoicePDF(inv){
   doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.text('Bill To:', 40, y); y += 14;
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
   doc.text(inv.customer.name || '', 40, y); y += 12;
-  if(inv.customer.tradeName){ doc.text(`Trade Name: ${inv.customer.tradeName}`, 40, y); y += 12; }
   const custAddrLines = doc.splitTextToSize(inv.customer.address || '', 300);
   doc.text(custAddrLines, 40, y); y += custAddrLines.length * 12;
   if(inv.customer.gstin){ doc.text(`GSTIN: ${inv.customer.gstin}`, 40, y); y += 12; }
@@ -222,21 +218,6 @@ function buildInvoicePDF(inv){
   doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
   doc.text('Tax is payable on reverse charge basis: ' + (inv.reverseCharge ? 'Yes' : 'No'), 40, y);
   doc.text('This is a computer-generated invoice.', 40, y+12);
-
-  // Payment details block (left side)
-  if(inv.business.bankName || inv.business.accountNumber || inv.business.ifsc || inv.business.upiId || inv.business.upiQr){
-    let py = y + 32;
-    doc.setFont('helvetica','bold'); doc.setFontSize(9.5);
-    doc.text('Payment Details:', 40, py); py += 14;
-    doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
-    if(inv.business.bankName){ doc.text(`Bank: ${inv.business.bankName}`, 40, py); py += 12; }
-    if(inv.business.accountNumber){ doc.text(`A/c No: ${inv.business.accountNumber}`, 40, py); py += 12; }
-    if(inv.business.ifsc){ doc.text(`IFSC: ${inv.business.ifsc}`, 40, py); py += 12; }
-    if(inv.business.upiId){ doc.text(`UPI ID: ${inv.business.upiId}`, 40, py); py += 12; }
-    if(inv.business.upiQr){
-      try{ doc.addImage(inv.business.upiQr, imgFormatFromDataUrl(inv.business.upiQr), 190, y+20, 75, 75); }catch(e){}
-    }
-  }
 
   const sigY = y - 10;
   doc.setFontSize(9);
