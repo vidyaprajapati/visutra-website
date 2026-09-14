@@ -2,6 +2,9 @@ let currentUser = null;
 let businessData = {};
 let productsCache = [];
 let customersCache = [];
+let suppliersCache = [];
+let purchasesCache = [];
+let paymentsCache = [];
 let lineItems = []; // {productId, name, hsn, unit, qty, rate, discount, gstRate}
 
 /* ---------------- Auth guard ---------------- */
@@ -18,7 +21,7 @@ auth.onAuthStateChanged(async user => {
   currentUser = user;
   mountUserMenu('userMenuMount', user, { showBillingLink: false });
   populateStateSelect(document.getElementById('bizState'));
-  populateStateSelect(document.getElementById('cState'));
+  populateStateSelect(document.getElementById('cState')); populateStateSelect(document.getElementById('sState'));
   document.getElementById('invDate').valueAsDate = new Date();
   populateGstrFY();
   onFilingTypeChange();
@@ -26,6 +29,11 @@ auth.onAuthStateChanged(async user => {
   await loadProfile();
   await loadProducts();
   await loadCustomers();
+  await loadSuppliers();
+  await loadPurchases();
+  await loadSupplierPayments();
+  document.getElementById('purDate').valueAsDate = new Date();
+  document.getElementById('payDate').valueAsDate = new Date();
   addLineItem();
   loadInvoices();
 });
@@ -41,6 +49,10 @@ document.querySelectorAll('.nav-link').forEach(link => {
     document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
     document.getElementById('view-' + link.dataset.view).classList.remove('hidden');
     if(link.dataset.view === 'invoices') loadInvoices();
+    if(link.dataset.view === 'purchases') { loadPurchases(); fillPurchaseProduct(); }
+    if(link.dataset.view === 'payments') { loadSupplierPayments(); showSupplierBalance(); }
+    if(link.dataset.view === 'supplier-ledger') loadSupplierLedger();
+    if(link.dataset.view === 'suppliers') loadSuppliers();
   });
 });
 
@@ -163,6 +175,7 @@ async function loadProducts(){
   productsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
   renderProducts();
   renderProductDropdowns();
+  renderPurchaseProductDropdown();
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => `
@@ -202,6 +215,293 @@ async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
   await db.collection('users').doc(currentUser.uid).collection('products').doc(id).delete();
   loadProducts();
+}
+
+
+/* ---------------- Suppliers ---------------- */
+async function loadSuppliers(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  suppliersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderSuppliers();
+  renderSupplierDropdowns();
+}
+function renderSuppliers(){
+  const el = document.getElementById('suppliersTable');
+  if(!el) return;
+  el.innerHTML = suppliersCache.map(s => `<tr>
+    <td>${esc(s.name)}</td><td>${esc(s.gstin||'—')}</td><td>${esc(s.state||'')}</td><td>${esc(s.phone||'')}</td>
+    <td class="row-actions"><button class="btn small" onclick="editSupplier('${s.id}')">Edit</button>
+    <button class="btn small danger" onclick="deleteSupplier('${s.id}')">Delete</button></td></tr>`).join('') ||
+    '<tr><td colspan="5" style="color:var(--muted)">No suppliers yet.</td></tr>';
+}
+function supplierOptions(placeholder){
+  return `<option value="">${placeholder}</option>` + suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+}
+function renderSupplierDropdowns(){
+  ['purSupplier','paySupplier','ledgerSupplier','purchaseHistorySupplier'].forEach(id=>{
+    const el=document.getElementById(id); if(!el) return;
+    const old=el.value;
+    const ph = id==='purchaseHistorySupplier' ? 'All suppliers' : 'Select supplier…';
+    el.innerHTML=supplierOptions(ph);
+    if(old && suppliersCache.some(s=>s.id===old)) el.value=old;
+  });
+  renderPurchaseProductDropdown();
+}
+async function saveSupplier(){
+  const id=document.getElementById('sEditId').value;
+  const stateCode=document.getElementById('sState').value;
+  const data={
+    name:document.getElementById('sName').value.trim(),
+    gstin:document.getElementById('sGstin').value.trim(),
+    address:document.getElementById('sAddress').value.trim(),
+    stateCode, state:stateNameByCode(stateCode),
+    phone:document.getElementById('sPhone').value.trim(),
+    email:document.getElementById('sEmail').value.trim()
+  };
+  if(!data.name){showMsg('supplierMsg','Supplier name is required.',false);return;}
+  const col=db.collection('users').doc(currentUser.uid).collection('suppliers');
+  if(id) await col.doc(id).set(data,{merge:true}); else await col.add(data);
+  ['sName','sGstin','sAddress','sPhone','sEmail','sEditId'].forEach(x=>document.getElementById(x).value='');
+  document.getElementById('sState').value='';
+  showMsg('supplierMsg','Supplier saved.',true);
+  await loadSuppliers();
+}
+function editSupplier(id){
+  const s=suppliersCache.find(x=>x.id===id); if(!s)return;
+  document.getElementById('sEditId').value=id;
+  document.getElementById('sName').value=s.name||'';
+  document.getElementById('sGstin').value=s.gstin||'';
+  document.getElementById('sAddress').value=s.address||'';
+  document.getElementById('sState').value=s.stateCode||'';
+  document.getElementById('sPhone').value=s.phone||'';
+  document.getElementById('sEmail').value=s.email||'';
+}
+async function deleteSupplier(id){
+  if(!confirm('Delete this supplier? Existing purchase/payment records will remain.'))return;
+  await db.collection('users').doc(currentUser.uid).collection('suppliers').doc(id).delete();
+  await loadSuppliers();
+}
+function renderPurchaseProductDropdown(){
+  const el=document.getElementById('purProduct'); if(!el)return;
+  const old=el.value;
+  el.innerHTML='<option value="">Select product…</option>'+productsCache.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  if(old && productsCache.some(p=>p.id===old)) el.value=old;
+}
+function fillPurchaseProduct(){
+  const p=productsCache.find(x=>x.id===document.getElementById('purProduct').value);
+  if(!p){document.getElementById('purUnit').value=''; document.getElementById('purRate').value=''; return;}
+  document.getElementById('purUnit').value=p.unit||'PCS';
+  document.getElementById('purRate').value=p.price||0;
+  document.getElementById('purGst').value=(p.gstRate ?? 0);
+  recalcPurchase();
+}
+function recalcPurchase(){
+  const qty=parseFloat(document.getElementById('purQty').value)||0;
+  const rate=parseFloat(document.getElementById('purRate').value)||0;
+  const gst=parseFloat(document.getElementById('purGst').value)||0;
+  const taxable=qty*rate, gstAmt=taxable*gst/100, grand=taxable+gstAmt;
+  document.getElementById('purTaxable').textContent='₹'+fmtMoney(taxable);
+  document.getElementById('purGstAmount').textContent='₹'+fmtMoney(gstAmt);
+  document.getElementById('purUnitFinal').textContent='₹'+fmtMoney(rate*(1+gst/100));
+  document.getElementById('purGrand').textContent='₹'+fmtMoney(grand);
+  return {qty,rate,gst,taxable,gstAmt,grand,unitFinal:rate*(1+gst/100)};
+}
+async function savePurchase(){
+  const supplierId=document.getElementById('purSupplier').value;
+  const productId=document.getElementById('purProduct').value;
+  const supplier=suppliersCache.find(s=>s.id===supplierId);
+  const product=productsCache.find(p=>p.id===productId);
+  if(!supplier){showMsg('purchaseMsg','Select a supplier.',false);return;}
+  if(!product){showMsg('purchaseMsg','Select a product.',false);return;}
+  const c=recalcPurchase();
+  if(c.qty<=0||c.rate<0){showMsg('purchaseMsg','Enter a valid quantity and unit price.',false);return;}
+  const date=document.getElementById('purDate').value||new Date().toISOString().slice(0,10);
+  const data={
+    date,supplierId, supplierName:supplier.name, productId, productName:product.name,
+    unit:document.getElementById('purUnit').value||product.unit||'PCS',
+    qty:c.qty, unitPrice:c.rate, gstRate:c.gst, taxable:c.taxable, gstAmount:c.gstAmt,
+    total:c.grand, unitPriceInclGst:c.unitFinal,
+    billNo:document.getElementById('purBillNo').value.trim(),
+    notes:document.getElementById('purNotes').value.trim(),
+    createdAt:firebase.firestore.FieldValue.serverTimestamp()
+  };
+  await db.collection('users').doc(currentUser.uid).collection('purchases').add(data);
+  document.getElementById('purBillNo').value=''; document.getElementById('purNotes').value='';
+  showMsg('purchaseMsg','Purchase saved. Final price including GST: ₹'+fmtMoney(c.grand),true);
+  await loadPurchases();
+}
+async function loadPurchases(){
+  if(!currentUser)return;
+  const snap=await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').limit(500).get();
+  purchasesCache=snap.docs.map(d=>({id:d.id,...d.data()}));
+  renderPurchaseHistory();
+  if(document.getElementById('ledgerSupplier')) loadSupplierLedger();
+}
+function inDateRange(item,from,to){
+  if(from && item.date<from)return false;
+  if(to && item.date>to)return false;
+  return true;
+}
+function renderPurchaseHistory(){
+  const el=document.getElementById('purchasesTable'); if(!el)return;
+  const sid=document.getElementById('purchaseHistorySupplier')?.value||'';
+  const from=document.getElementById('purchaseHistoryFrom')?.value||'', to=document.getElementById('purchaseHistoryTo')?.value||'';
+  const rows=purchasesCache.filter(p=>(!sid||p.supplierId===sid)&&inDateRange(p,from,to)).map(p=>
+    `<tr><td>${esc(p.date||'')}</td><td>${esc(p.supplierName||'')}</td><td>${esc(p.productName||'')}</td>
+    <td>${p.qty}</td><td>₹${fmtMoney(p.unitPriceInclGst||0)}</td><td>₹${fmtMoney(p.gstAmount||0)} (${p.gstRate||0}%)</td>
+    <td><b>₹${fmtMoney(p.total||0)}</b></td><td>${esc(p.billNo||'—')}</td><td><button class="btn small" onclick="downloadPurchaseVoucher('${p.id}')">PDF</button></td></tr>`).join('');
+  el.innerHTML=rows||'<tr><td colspan="9" style="color:var(--muted)">No purchases found.</td></tr>';
+}
+async function loadSupplierPayments(){
+  if(!currentUser)return;
+  const snap=await db.collection('users').doc(currentUser.uid).collection('supplierPayments').orderBy('date','desc').limit(500).get();
+  paymentsCache=snap.docs.map(d=>({id:d.id,...d.data()}));
+  renderPayments();
+  showSupplierBalance();
+}
+function renderPayments(){
+  const el=document.getElementById('paymentsTable'); if(!el)return;
+  const rows=paymentsCache.map(p=>`<tr><td>${esc(p.date||'')}</td><td>${esc(p.supplierName||'')}</td>
+    <td><b>₹${fmtMoney(p.amount||0)}</b></td><td>${esc(p.method||'')}</td><td>${esc(p.reference||'—')}</td><td>${esc(p.notes||'')}</td></tr>`).join('');
+  el.innerHTML=rows||'<tr><td colspan="6" style="color:var(--muted)">No payments yet.</td></tr>';
+}
+function supplierTotals(supplierId,from='',to=''){
+  const purchases=purchasesCache.filter(p=>p.supplierId===supplierId&&inDateRange(p,from,to));
+  const pays=paymentsCache.filter(p=>p.supplierId===supplierId&&inDateRange(p,from,to));
+  const purchaseTotal=purchases.reduce((a,p)=>a+(Number(p.total)||0),0);
+  const paymentTotal=pays.reduce((a,p)=>a+(Number(p.amount)||0),0);
+  return {purchases,pays,purchaseTotal,paymentTotal,balance:purchaseTotal-paymentTotal};
+}
+function showSupplierBalance(){
+  const id=document.getElementById('paySupplier')?.value;
+  const el=document.getElementById('paymentBalanceBox'); if(!el)return;
+  if(!id){el.textContent='Supplier balance: ₹0.00';return;}
+  const t=supplierTotals(id);
+  el.textContent='Current supplier balance: ₹'+fmtMoney(t.balance)+'  |  Total purchases: ₹'+fmtMoney(t.purchaseTotal)+'  |  Total payments: ₹'+fmtMoney(t.paymentTotal);
+}
+async function saveSupplierPayment(){
+  const id=document.getElementById('paySupplier').value, s=suppliersCache.find(x=>x.id===id);
+  const amount=parseFloat(document.getElementById('payAmount').value)||0;
+  if(!s){showMsg('paymentMsg','Select a supplier.',false);return;}
+  if(amount<=0){showMsg('paymentMsg','Enter a payment amount greater than zero.',false);return;}
+  const data={
+    date:document.getElementById('payDate').value||new Date().toISOString().slice(0,10),
+    supplierId:id,supplierName:s.name,amount,
+    method:document.getElementById('payMethod').value,
+    reference:document.getElementById('payReference').value.trim(),
+    notes:document.getElementById('payNotes').value.trim(),
+    createdAt:firebase.firestore.FieldValue.serverTimestamp()
+  };
+  await db.collection('users').doc(currentUser.uid).collection('supplierPayments').add(data);
+  document.getElementById('payAmount').value='';document.getElementById('payReference').value='';document.getElementById('payNotes').value='';
+  showMsg('paymentMsg','Payment saved: ₹'+fmtMoney(amount),true);
+  await loadSupplierPayments();
+}
+async function loadSupplierLedger(){
+  const id=document.getElementById('ledgerSupplier')?.value;
+  if(!id){
+    ['ledgerPurchaseTotal','ledgerPaymentTotal','ledgerBalance'].forEach(x=>document.getElementById(x).textContent='₹0.00');
+    document.getElementById('ledgerPurchasesTable').innerHTML='<tr><td colspan="8" style="color:var(--muted)">Select a supplier.</td></tr>';
+    document.getElementById('ledgerPaymentsTable').innerHTML='<tr><td colspan="5" style="color:var(--muted)">Select a supplier.</td></tr>';
+    return;
+  }
+  const from=document.getElementById('ledgerFrom').value||'',to=document.getElementById('ledgerTo').value||'';
+  const t=supplierTotals(id,from,to);
+  document.getElementById('ledgerPurchaseTotal').textContent='₹'+fmtMoney(t.purchaseTotal);
+  document.getElementById('ledgerPaymentTotal').textContent='₹'+fmtMoney(t.paymentTotal);
+  document.getElementById('ledgerBalance').textContent='₹'+fmtMoney(t.balance);
+  document.getElementById('ledgerPurchasesTable').innerHTML=t.purchases.map(p=>`<tr>
+    <td>${esc(p.date||'')}</td><td>${esc(p.productName||'')}</td><td>${p.qty}</td><td>${esc(p.unit||'')}</td>
+    <td>₹${fmtMoney(p.unitPriceInclGst||0)}</td><td>${p.gstRate||0}% / ₹${fmtMoney(p.gstAmount||0)}</td>
+    <td><b>₹${fmtMoney(p.total||0)}</b></td><td>${esc(p.billNo||'—')}</td></tr>`).join('')||
+    '<tr><td colspan="8" style="color:var(--muted)">No purchases for this selection.</td></tr>';
+  document.getElementById('ledgerPaymentsTable').innerHTML=t.pays.map(p=>`<tr>
+    <td>${esc(p.date||'')}</td><td><b>₹${fmtMoney(p.amount||0)}</b></td><td>${esc(p.method||'')}</td>
+    <td>${esc(p.reference||'—')}</td><td>${esc(p.notes||'')}</td></tr>`).join('')||
+    '<tr><td colspan="5" style="color:var(--muted)">No payments for this selection.</td></tr>';
+}
+
+
+/* ---------------- Purchase / supplier exports ---------------- */
+function pdfDoc(title, subtitle){
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({unit:'mm',format:'a4'});
+  doc.setFontSize(18); doc.text(title,14,18);
+  doc.setFontSize(9); doc.setTextColor(100); doc.text(subtitle||'',14,25);
+  doc.setTextColor(20); return doc;
+}
+function downloadPurchaseVoucher(id){
+  const p=purchasesCache.find(x=>x.id===id); if(!p)return;
+  const s=suppliersCache.find(x=>x.id===p.supplierId)||{};
+  const doc=pdfDoc('Purchase Voucher', `${p.date||''}  |  ${p.billNo ? 'Bill: '+p.billNo : 'Purchase entry'}`);
+  doc.setFontSize(11); doc.text('Supplier: '+(p.supplierName||s.name||''),14,34);
+  if(s.gstin) doc.text('GSTIN: '+s.gstin,14,40);
+  if(s.address) doc.text('Address: '+s.address,14,46,{maxWidth:180});
+  doc.autoTable({startY:53,head:[['Product','Qty','Unit','Unit Price','GST','GST Amount','Final Amount']],body:[[
+    p.productName||'', String(p.qty||0), p.unit||'', '₹'+fmtMoney(p.unitPrice||0),
+    (p.gstRate||0)+'%', '₹'+fmtMoney(p.gstAmount||0), '₹'+fmtMoney(p.total||0)
+  ]]});
+  let y=doc.lastAutoTable.finalY+10;
+  doc.setFontSize(10); doc.text('Taxable value: ₹'+fmtMoney(p.taxable||0),14,y); y+=6;
+  doc.text('GST amount: ₹'+fmtMoney(p.gstAmount||0),14,y); y+=6;
+  doc.setFontSize(12); doc.text('Total purchase including GST: ₹'+fmtMoney(p.total||0),14,y);
+  if(p.notes){y+=10;doc.setFontSize(9);doc.text('Notes: '+p.notes,14,y,{maxWidth:180});}
+  doc.setFontSize(8); doc.setTextColor(100); doc.text('Generated from VISUTRA Billing',14,287);
+  doc.save('purchase-voucher-'+(p.date||'purchase')+'.pdf');
+}
+function selectedLedgerData(){
+  const id=document.getElementById('ledgerSupplier')?.value;
+  if(!id)return null;
+  const from=document.getElementById('ledgerFrom')?.value||'',to=document.getElementById('ledgerTo')?.value||'';
+  const supplier=suppliersCache.find(s=>s.id===id)||{};
+  return {id,supplier,from,to,...supplierTotals(id,from,to)};
+}
+function downloadSupplierStatement(){
+  const d=selectedLedgerData(); if(!d){alert('Select a supplier first.');return;}
+  const doc=pdfDoc('Supplier Statement', `${d.supplier.name||''}  |  ${d.from||'All dates'} to ${d.to||'All dates'}`);
+  doc.setFontSize(10); doc.text('Supplier: '+(d.supplier.name||''),14,34);
+  if(d.supplier.gstin) doc.text('GSTIN: '+d.supplier.gstin,14,40);
+  doc.autoTable({startY:47,head:[['Date','Product','Qty','Unit','Unit Price','GST','Total','Bill No.']],body:d.purchases.map(p=>[
+    p.date||'',p.productName||'',String(p.qty||0),p.unit||'', '₹'+fmtMoney(p.unitPriceInclGst||0),
+    (p.gstRate||0)+'% / ₹'+fmtMoney(p.gstAmount||0),'₹'+fmtMoney(p.total||0),p.billNo||'—'
+  ])});
+  let y=(doc.lastAutoTable?.finalY||47)+8;
+  doc.autoTable({startY:y,head:[['Payment Date','Amount','Method','Reference','Notes']],body:d.pays.map(p=>[
+    p.date||'','₹'+fmtMoney(p.amount||0),p.method||'',p.reference||'—',p.notes||''
+  ])});
+  y=(doc.lastAutoTable?.finalY||y)+10;
+  doc.setFontSize(10); doc.text('Total purchases: ₹'+fmtMoney(d.purchaseTotal),14,y); y+=6;
+  doc.text('Total payments: ₹'+fmtMoney(d.paymentTotal),14,y); y+=7;
+  doc.setFontSize(13); doc.text('Balance payable: ₹'+fmtMoney(d.balance),14,y);
+  doc.setFontSize(8); doc.setTextColor(100); doc.text('Generated from VISUTRA Billing',14,287);
+  doc.save('supplier-statement-'+((d.supplier.name||'supplier').replace(/[^a-z0-9]+/gi,'-'))+'.pdf');
+}
+function downloadXlsx(filename, sheets){
+  if(typeof XLSX==='undefined'){alert('Excel export library could not be loaded. Please refresh the page and try again.');return;}
+  const wb=XLSX.utils.book_new();
+  Object.entries(sheets).forEach(([name,rows])=>XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),name.slice(0,31)));
+  XLSX.writeFile(wb,filename);
+}
+function exportPurchasesExcel(){
+  const sid=document.getElementById('purchaseHistorySupplier')?.value||'',from=document.getElementById('purchaseHistoryFrom')?.value||'',to=document.getElementById('purchaseHistoryTo')?.value||'';
+  const rows=purchasesCache.filter(p=>(!sid||p.supplierId===sid)&&inDateRange(p,from,to)).map(p=>({
+    Date:p.date||'',Supplier:p.supplierName||'',Product:p.productName||'',Quantity:Number(p.qty)||0,Unit:p.unit||'',
+    'Unit Price Before GST':Number(p.unitPrice)||0,'GST Rate %':Number(p.gstRate)||0,'Taxable Value':Number(p.taxable)||0,
+    'GST Amount':Number(p.gstAmount)||0,'Unit Price Including GST':Number(p.unitPriceInclGst)||0,'Final Purchase Price':Number(p.total)||0,'Bill No.':p.billNo||'',Notes:p.notes||''
+  }));
+  downloadXlsx('VISUTRA-Purchase-Register.xlsx',{Purchases:rows});
+}
+function exportPaymentsExcel(){
+  const rows=paymentsCache.map(p=>({Date:p.date||'',Supplier:p.supplierName||'',Amount:Number(p.amount)||0,Method:p.method||'',Reference:p.reference||'',Notes:p.notes||''}));
+  downloadXlsx('VISUTRA-Supplier-Payments.xlsx',{Payments:rows});
+}
+function exportSupplierLedgerExcel(){
+  const d=selectedLedgerData(); if(!d){alert('Select a supplier first.');return;}
+  const purchases=d.purchases.map(p=>({Date:p.date||'',Supplier:p.supplierName||d.supplier.name||'',Product:p.productName||'',Quantity:Number(p.qty)||0,Unit:p.unit||'',
+    'Unit Price Including GST':Number(p.unitPriceInclGst)||0,'GST Rate %':Number(p.gstRate)||0,'GST Amount':Number(p.gstAmount)||0,'Final Purchase':Number(p.total)||0,'Bill No.':p.billNo||''}));
+  const payments=d.pays.map(p=>({Date:p.date||'',Supplier:p.supplierName||d.supplier.name||'',Payment:Number(p.amount)||0,Method:p.method||'',Reference:p.reference||'',Notes:p.notes||''}));
+  const summary=[{Supplier:d.supplier.name||'',From:d.from||'All',To:d.to||'All','Total Purchases':d.purchaseTotal,'Total Payments':d.paymentTotal,'Balance Payable':d.balance}];
+  downloadXlsx('VISUTRA-'+((d.supplier.name||'Supplier').replace(/[^a-z0-9]+/gi,'-'))+'-Ledger.xlsx',{Summary:summary,Purchases:purchases,Payments:payments});
 }
 
 /* ---------------- Customers ---------------- */
