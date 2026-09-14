@@ -8,6 +8,8 @@
 <link rel="icon" href="../favicon.svg">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/billing.css">
+<style>
+.nav-section-label{font:500 10px var(--mono);letter-spacing:.08em;color:var(--muted);padding:18px 12px 6px;border-top:1px solid var(--thread);margin-top:8px}.purchase-table-wrap{overflow:auto}.purchase-total-box{display:flex;justify-content:flex-end;gap:22px;padding:16px 0;font-family:var(--mono);font-size:13px}.purchase-total-box b{font-size:16px}.box h3{font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px}.box p{font-size:22px;font-weight:700;margin:0}</style>
 </head>
 <body>
 
@@ -18,23 +20,19 @@
 
 <div class="shell">
   <div class="sidebar">
-    <div class="billing-mode-switch">
-      <button type="button" id="modeInvoiceBtn" class="mode-btn active" onclick="setBillingMode('invoice')">GST Invoice</button>
-      <button type="button" id="modePurchaseBtn" class="mode-btn" onclick="setBillingMode('purchase')">Purchase Details</button>
-    </div>
-    <a href="#profile" class="nav-link active" data-view="profile" data-mode="common">Business Profile</a>
-    <div class="nav-section" data-mode="invoice">GST INVOICE</div>
-    <a href="#products" class="nav-link" data-view="products" data-mode="invoice">Sales Product Master</a>
-    <a href="#customers" class="nav-link" data-view="customers" data-mode="invoice">Customers</a>
-    <a href="#new-invoice" class="nav-link" data-view="new-invoice" data-mode="invoice">New GST Invoice</a>
-    <a href="#invoices" class="nav-link" data-view="invoices" data-mode="invoice">Invoice History</a>
-    <a href="#gstr1" class="nav-link" data-view="gstr1" data-mode="invoice">GSTR-1 Filing</a>
-    <div class="nav-section" data-mode="purchase">PURCHASE DETAILS</div>
-    <a href="#suppliers" class="nav-link purchase-nav" data-view="suppliers" data-mode="purchase">Supplier Master</a>
-    <a href="#purchase-products" class="nav-link purchase-nav" data-view="purchase-products" data-mode="purchase">Purchase Product Master</a>
-    <a href="#purchases" class="nav-link purchase-nav" data-view="purchases" data-mode="purchase">Purchase Entry</a>
-    <a href="#payments" class="nav-link purchase-nav" data-view="payments" data-mode="purchase">Supplier Payments</a>
-    <a href="#supplier-ledger" class="nav-link purchase-nav" data-view="supplier-ledger" data-mode="purchase">Supplier Ledger</a>
+    <a href="#profile" class="nav-link active" data-view="profile">Business Profile</a>
+    <a href="#products" class="nav-link" data-view="products">Products</a>
+    <a href="#customers" class="nav-link" data-view="customers">Customers</a>
+    <a href="#new-invoice" class="nav-link" data-view="new-invoice">New Invoice</a>
+    <a href="#invoices" class="nav-link" data-view="invoices">Invoice History</a>
+    <a href="#gstr1" class="nav-link" data-view="gstr1">GSTR-1 Filing</a>
+    <div class="nav-section-label">PURCHASE DETAILS</div>
+    <a href="#suppliers" class="nav-link" data-view="suppliers">Supplier Master</a>
+    <a href="#purchase-products" class="nav-link" data-view="purchase-products">Purchase Product Master</a>
+    <a href="#new-purchase" class="nav-link" data-view="new-purchase">New Purchase</a>
+    <a href="#purchase-history" class="nav-link" data-view="purchase-history">Purchase History</a>
+    <a href="#supplier-payments" class="nav-link" data-view="supplier-payments">Supplier Payments</a>
+    <a href="#supplier-ledger" class="nav-link" data-view="supplier-ledger">Supplier Ledger</a>
   </div>
 
   <div class="main">
@@ -90,13 +88,14 @@
     <div id="view-products" class="view hidden">
       <div class="card">
         <h2>Product Master</h2>
-        <p class="sub">Maintain product name, HSN/SAC, unit, GST rate and the current selling price. The price is automatically used in new GST invoices, and you can change it here whenever the selling price changes.</p>
+        <p class="sub">Set up each product once with its HSN code and GST rate — you'll just pick from this list when billing.</p>
         <div class="grid3">
           <div class="field"><label>Product name</label><input id="pName"></div>
           <div class="field"><label>HSN / SAC code</label><input id="pHsn"></div>
           <div class="field"><label>Unit</label><input id="pUnit" placeholder="e.g. PCS, NOS, KG"></div>
         </div>
         <div class="grid3">
+          <div class="field"><label>Default price (₹)</label><input id="pPrice" type="number" step="0.01"></div>
           <div class="field"><label>GST rate</label>
             <select id="pGst">
               <option value="0">0%</option><option value="5">5%</option>
@@ -104,41 +103,88 @@
               <option value="28">28%</option>
             </select>
           </div>
-          <div class="field"><label>Selling price (₹)</label><input id="pPrice" type="number" min="0" step="0.01" placeholder="Current selling price"></div>
           <div class="field"><label>&nbsp;</label><button class="btn primary" style="width:100%" onclick="saveProduct()">Add Product</button></div>
         </div>
         <input type="hidden" id="pEditId">
         <p class="msg" id="productMsg"></p>
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>GST</th><th>Selling Price</th><th></th></tr></thead>
+        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price</th><th>GST</th><th></th></tr></thead>
         <tbody id="productsTable"></tbody></table>
       </div>
     </div>
 
-    <!-- PURCHASE PRODUCT MASTER -->
+    <!-- PURCHASE DETAILS (separate from the original GST billing system) -->
+    <div id="view-suppliers" class="view hidden">
+      <div class="card">
+        <h2>Supplier Master</h2>
+        <p class="sub">Maintain your suppliers separately from GST customers.</p>
+        <div class="grid2">
+          <div class="field"><label>Supplier / business name</label><input id="sName"></div>
+          <div class="field"><label>GSTIN</label><input id="sGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"></div>
+        </div>
+        <div class="field"><label>Address</label><textarea id="sAddress"></textarea></div>
+        <div class="grid3">
+          <div class="field"><label>State</label><select id="sState"></select></div>
+          <div class="field"><label>Phone</label><input id="sPhone"></div>
+          <div class="field"><label>Email</label><input id="sEmail" type="email"></div>
+        </div>
+        <input type="hidden" id="sEditId">
+        <button class="btn primary" onclick="saveSupplier()">Save Supplier</button>
+        <p class="msg" id="supplierMsg"></p>
+      </div>
+      <div class="card"><table><thead><tr><th>Supplier</th><th>GSTIN</th><th>State</th><th>Phone</th><th></th></tr></thead><tbody id="suppliersTable"></tbody></table></div>
+    </div>
+
     <div id="view-purchase-products" class="view hidden">
       <div class="card">
         <h2>Purchase Product Master</h2>
-        <p class="sub">Maintain purchase product name, HSN/SAC, unit and GST rate. <b>Purchase price is entered manually in each purchase entry</b> because supplier prices may fluctuate.</p>
+        <p class="sub">No purchase price is stored here. The price is entered/updated on each purchase, and the last price is remembered supplier-wise.</p>
         <div class="grid3">
           <div class="field"><label>Product name</label><input id="ppName"></div>
           <div class="field"><label>HSN / SAC code</label><input id="ppHsn"></div>
           <div class="field"><label>Unit</label><input id="ppUnit" placeholder="e.g. PCS, NOS, KG"></div>
         </div>
         <div class="grid3">
-          <div class="field"><label>Purchase GST rate</label>
-            <select id="ppGst"><option value="0">0%</option><option value="5">5%</option><option value="12">12%</option><option value="18">18%</option><option value="28">28%</option></select>
-          </div>
-          <div class="field"><label>&nbsp;</label><button class="btn primary" style="width:100%" onclick="savePurchaseProduct()">Add Purchase Product</button></div>
+          <div class="field"><label>GST rate</label><select id="ppGst"><option value="0">0%</option><option value="5">5%</option><option value="12">12%</option><option value="18">18%</option><option value="28">28%</option></select></div>
+          <div class="field"><label>&nbsp;</label><button class="btn primary" style="width:100%" onclick="savePurchaseProduct()">Add Product</button></div>
         </div>
-        <input type="hidden" id="ppEditId">
-        <p class="msg" id="purchaseProductMsg"></p>
+        <input type="hidden" id="ppEditId"><p class="msg" id="purchaseProductMsg"></p>
       </div>
+      <div class="card"><table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>GST</th><th></th></tr></thead><tbody id="purchaseProductsTable"></tbody></table></div>
+    </div>
+
+    <div id="view-new-purchase" class="view hidden">
       <div class="card">
-        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>GST</th><th></th></tr></thead>
-        <tbody id="purchaseProductsTable"></tbody></table>
+        <h2>New Purchase</h2>
+        <p class="sub">Add all products bought from one supplier on the same date/bill, then save the complete purchase once.</p>
+        <div class="grid3">
+          <div class="field"><label>Purchase date</label><input id="purDate" type="date"></div>
+          <div class="field"><label>Supplier</label><select id="purSupplier" onchange="refreshPurchaseRows()"><option value="">Select supplier</option></select></div>
+          <div class="field"><label>Bill / Invoice number</label><input id="purBillNo"></div>
+        </div>
+        <div class="purchase-table-wrap"><table><thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Rate</th><th>GST %</th><th>GST</th><th>Total</th><th></th></tr></thead><tbody id="purchaseRows"></tbody></table></div>
+        <button class="btn" style="margin-top:12px" onclick="addPurchaseRow()">+ Add Product</button>
+        <div class="purchase-total-box"><div>Taxable: ₹<span id="purTaxable">0.00</span></div><div>GST: ₹<span id="purGst">0.00</span></div><div><b>Grand Total: ₹<span id="purGrand">0.00</span></b></div></div>
+        <button class="btn primary" onclick="savePurchase()">Save All Purchase Items</button>
+        <p class="msg" id="purchaseMsg"></p>
       </div>
+    </div>
+
+    <div id="view-purchase-history" class="view hidden">
+      <div class="card"><h2>Purchase History</h2><div class="grid3"><div class="field"><label>Supplier</label><select id="phSupplier" onchange="loadPurchaseHistory()"><option value="">All suppliers</option></select></div><div class="field"><label>From date</label><input id="phFrom" type="date" onchange="loadPurchaseHistory()"></div><div class="field"><label>To date</label><input id="phTo" type="date" onchange="loadPurchaseHistory()"></div></div></div>
+      <div class="card"><table><thead><tr><th>Date</th><th>Bill No.</th><th>Supplier</th><th>Items</th><th>Taxable</th><th>GST</th><th>Total</th></tr></thead><tbody id="purchaseHistoryTable"></tbody></table></div>
+    </div>
+
+    <div id="view-supplier-payments" class="view hidden">
+      <div class="card"><h2>Supplier Payments</h2><div class="grid3"><div class="field"><label>Payment date</label><input id="payDate" type="date"></div><div class="field"><label>Supplier</label><select id="paySupplier"><option value="">Select supplier</option></select></div><div class="field"><label>Payment amount (₹)</label><input id="payAmount" type="number" step="0.01"></div></div><div class="grid3"><div class="field"><label>Payment method</label><select id="payMethod"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option><option>Other</option></select></div><div class="field"><label>Reference / transaction no.</label><input id="payRef"></div><div class="field"><label>Notes</label><input id="payNotes"></div></div><button class="btn primary" onclick="saveSupplierPayment()">Save Payment</button><p class="msg" id="paymentMsg"></p></div>
+      <div class="card"><table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead><tbody id="paymentsTable"></tbody></table></div>
+    </div>
+
+    <div id="view-supplier-ledger" class="view hidden">
+      <div class="card"><h2>Supplier Ledger</h2><div class="grid3"><div class="field"><label>Supplier</label><select id="ledgerSupplier" onchange="loadSupplierLedger()"><option value="">Select supplier</option></select></div><div class="field"><label>From date</label><input id="ledgerFrom" type="date" onchange="loadSupplierLedger()"></div><div class="field"><label>To date</label><input id="ledgerTo" type="date" onchange="loadSupplierLedger()"></div></div></div>
+      <div class="card hidden" id="ledgerSummary"><div class="grid3"><div class="box"><h3>Total Purchase</h3><p id="ledgerPurchaseTotal">₹0.00</p></div><div class="box"><h3>Total Payment</h3><p id="ledgerPaymentTotal">₹0.00</p></div><div class="box"><h3>Balance Payable</h3><p id="ledgerBalance">₹0.00</p></div></div></div>
+      <div class="card hidden" id="ledgerDetails"><h3>Product-wise Purchase Details</h3><table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Rate</th><th>GST</th><th>Total</th><th>Bill</th></tr></thead><tbody id="ledgerPurchaseRows"></tbody></table><h3 style="margin-top:24px">Payment Details</h3><table><thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead><tbody id="ledgerPaymentRows"></tbody></table></div>
     </div>
 
     <!-- CUSTOMERS -->
@@ -162,128 +208,6 @@
       <div class="card">
         <table><thead><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Email</th><th></th></tr></thead>
         <tbody id="customersTable"></tbody></table>
-      </div>
-    </div>
-
-
-    <!-- SUPPLIERS -->
-    <div id="view-suppliers" class="view hidden">
-      <div class="card">
-        <h2>Supplier Master</h2>
-        <p class="sub">Add suppliers once. Their purchase history and payment balance will be tracked automatically.</p>
-        <div class="grid2">
-          <div class="field"><label>Supplier / business name</label><input id="sName"></div>
-          <div class="field"><label>GSTIN</label><input id="sGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"></div>
-        </div>
-        <div class="field"><label>Address</label><textarea id="sAddress"></textarea></div>
-        <div class="grid3">
-          <div class="field"><label>State</label><select id="sState"></select></div>
-          <div class="field"><label>Phone</label><input id="sPhone"></div>
-          <div class="field"><label>Email</label><input id="sEmail" type="email"></div>
-        </div>
-        <input type="hidden" id="sEditId">
-        <button class="btn primary" onclick="saveSupplier()">Add Supplier</button>
-        <p class="msg" id="supplierMsg"></p>
-      </div>
-      <div class="card">
-        <table><thead><tr><th>Supplier</th><th>GSTIN</th><th>State</th><th>Phone</th><th></th></tr></thead>
-        <tbody id="suppliersTable"></tbody></table>
-      </div>
-    </div>
-
-    <!-- PURCHASES -->
-    <div id="view-purchases" class="view hidden">
-      <div class="card">
-        <h2>New Purchase</h2>
-        <p class="sub">Enter all products purchased from the same supplier on the same date on one page. You can add as many items as required and save the complete purchase together.</p>
-        <div class="grid3">
-          <div class="field"><label>Purchase date</label><input id="purDate" type="date"></div>
-          <div class="field"><label>Supplier</label><select id="purSupplier" onchange="refreshAllPurchaseRows()"></select></div>
-          <div class="field"><label>Invoice / bill no. (optional)</label><input id="purBillNo"></div>
-        </div>
-        <div class="purchase-items-head">
-          <h3>Purchase Items</h3>
-          <button class="btn small" type="button" onclick="addPurchaseRow()">+ Add Product</button>
-        </div>
-        <div class="purchase-table-wrap">
-          <table class="purchase-entry-table">
-            <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Rate before GST (₹)</th><th>GST</th><th>GST Amount</th><th>Final Amount</th><th></th></tr></thead>
-            <tbody id="purchaseItemsBody"></tbody>
-          </table>
-        </div>
-        <div class="purchase-total-box" id="purchaseTotalBox">
-          <div><span>Total taxable value</span><b id="purBatchTaxable">₹0.00</b></div>
-          <div><span>Total GST</span><b id="purBatchGst">₹0.00</b></div>
-          <div class="grand"><span>Total purchase including GST</span><b id="purBatchGrand">₹0.00</b></div>
-        </div>
-        <div class="field"><label>Notes (optional)</label><textarea id="purNotes" rows="2"></textarea></div>
-        <button class="btn primary" type="button" onclick="savePurchaseBatch()">Save All Purchase Items</button>
-        <button class="btn" type="button" onclick="clearPurchaseForm()">Clear</button>
-        <p class="msg" id="purchaseMsg"></p>
-      </div>
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2>Purchase History</h2><button class="btn small" onclick="exportPurchasesExcel()">Export Excel</button></div>
-        <div class="filter-row">
-          <select id="purchaseHistorySupplier" onchange="loadPurchases()"></select>
-          <input id="purchaseHistoryFrom" type="date" onchange="loadPurchases()">
-          <input id="purchaseHistoryTo" type="date" onchange="loadPurchases()">
-        </div>
-        <table><thead><tr><th>Date</th><th>Supplier</th><th>Product</th><th>Qty</th><th>Unit price incl. GST</th><th>GST</th><th>Total</th><th>Bill No.</th><th></th></tr></thead>
-        <tbody id="purchasesTable"></tbody></table>
-      </div>
-    </div>
-
-    <!-- SUPPLIER PAYMENTS -->
-    <div id="view-payments" class="view hidden">
-      <div class="card">
-        <h2>Make Supplier Payment</h2>
-        <div class="grid3">
-          <div class="field"><label>Payment date</label><input id="payDate" type="date"></div>
-          <div class="field"><label>Supplier</label><select id="paySupplier" onchange="showSupplierBalance()"></select></div>
-          <div class="field"><label>Payment amount (₹)</label><input id="payAmount" type="number" min="0" step="0.01" oninput="showSupplierBalance()"></div>
-        </div>
-        <div class="grid3">
-          <div class="field"><label>Payment method</label>
-            <select id="payMethod"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option><option>Other</option></select>
-          </div>
-          <div class="field"><label>Reference / transaction no.</label><input id="payReference"></div>
-          <div class="field"><label>Notes</label><input id="payNotes"></div>
-        </div>
-        <div class="balance-strip" id="paymentBalanceBox">Supplier balance: ₹0.00</div>
-        <button class="btn primary" onclick="saveSupplierPayment()">Save Payment</button>
-        <p class="msg" id="paymentMsg"></p>
-      </div>
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2>Payment History</h2><button class="btn small" onclick="exportPaymentsExcel()">Export Excel</button></div>
-        <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead>
-        <tbody id="paymentsTable"></tbody></table>
-      </div>
-    </div>
-
-    <!-- SUPPLIER LEDGER -->
-    <div id="view-supplier-ledger" class="view hidden">
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2>Supplier Ledger</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn small" onclick="downloadSupplierStatement()">Supplier Statement PDF</button><button class="btn small" onclick="exportSupplierLedgerExcel()">Export Excel</button></div></div>
-        <p class="sub">Open a supplier to see product-wise and date-wise purchases, all payments, total purchases, total payments and balance payable.</p>
-        <div class="grid2">
-          <div class="field"><label>Supplier</label><select id="ledgerSupplier" onchange="loadSupplierLedger()"></select></div>
-          <div class="field"><label>Date range</label><div style="display:flex;gap:8px"><input id="ledgerFrom" type="date" onchange="loadSupplierLedger()"><input id="ledgerTo" type="date" onchange="loadSupplierLedger()"></div></div>
-        </div>
-      </div>
-      <div class="grid3">
-        <div class="card stat-card"><span>Total Purchase</span><b id="ledgerPurchaseTotal">₹0.00</b></div>
-        <div class="card stat-card"><span>Total Payment</span><b id="ledgerPaymentTotal">₹0.00</b></div>
-        <div class="card stat-card"><span>Balance Payable</span><b id="ledgerBalance">₹0.00</b></div>
-      </div>
-      <div class="card">
-        <h3>Purchase Details</h3>
-        <table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Unit</th><th>Unit price</th><th>GST</th><th>Final price</th><th>Bill No.</th></tr></thead>
-        <tbody id="ledgerPurchasesTable"></tbody></table>
-      </div>
-      <div class="card">
-        <h3>Payment Details</h3>
-        <table><thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Notes</th></tr></thead>
-        <tbody id="ledgerPaymentsTable"></tbody></table>
       </div>
     </div>
 
@@ -370,5 +294,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="assets/indian-states.js"></script>
 <script src="assets/billing-app.js"></script>
+<script src="assets/purchase-management.js"></script>
 </body>
 </html>
