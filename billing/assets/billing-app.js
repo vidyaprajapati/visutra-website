@@ -683,11 +683,11 @@ function renderSupplierDashboard(supplierId){
   const rows = [];
   purchases.forEach(p => (p.items||[]).forEach(li => {
     totalItems += (li.qty||0);
-    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} (${li.gstRate}% GST)`, debit:li.total, credit:0 });
+    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} (${li.gstRate}% GST)`, debit:li.total, credit:0, purchaseId:p.id });
   }));
   payments.forEach(pay => {
     const label = pay.note ? `Payment (${pay.mode || '—'}) — ${pay.note}` : `Payment (${pay.mode || '—'})`;
-    rows.push({ date:pay.date, type:'payment', desc:label, debit:0, credit:pay.amount });
+    rows.push({ date:pay.date, type:'payment', desc:label, debit:0, credit:pay.amount, paymentId:pay.id });
   });
   rows.sort((a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
 
@@ -695,6 +695,9 @@ function renderSupplierDashboard(supplierId){
   document.getElementById('dashTable').innerHTML = rows.map(r => {
     running += r.debit - r.credit;
     totalPurchase += r.debit; totalPaid += r.credit;
+    const actions = r.purchaseId
+      ? `<button class="btn small" onclick="editPurchase('${r.purchaseId}')">Edit</button>`
+      : `<button class="btn small" onclick="editPayment('${r.paymentId}')">Edit</button><button class="btn small danger" onclick="deletePayment('${r.paymentId}')">Delete</button>`;
     return `<tr>
       <td>${esc(r.date)}</td>
       <td><span class="badge">${r.type === 'purchase' ? 'Purchase' : 'Payment'}</span></td>
@@ -702,6 +705,7 @@ function renderSupplierDashboard(supplierId){
       <td>${r.debit ? '₹'+fmtMoney(r.debit) : ''}</td>
       <td>${r.credit ? '₹'+fmtMoney(r.credit) : ''}</td>
       <td>₹${fmtMoney(running)}</td>
+      <td class="row-actions">${actions}</td>
     </tr>`;
   }).join('');
 
@@ -815,15 +819,56 @@ async function savePurchase(){
   const validItems = purchaseLineItems.filter(li => li.productId);
   if(!validItems.length){ showMsg('purchaseMsg', 'Add at least one product line.', false); return; }
 
+  const editId = document.getElementById('purEditId').value;
   const dateVal = document.getElementById('purDate').value || new Date().toISOString().slice(0,10);
   const totals = recalcPurchaseTotals();
-  const paidNow = parseFloat(document.getElementById('purPaidNow').value) || 0;
   const items = validItems.map(li => {
     const taxable = (li.qty||0) * (li.rate||0);
     const gstAmt = taxable * (li.gstRate||0) / 100;
     return { ...li, taxable, gstAmt, total: taxable + gstAmt };
   });
 
+  if(editId){
+    // Editing an existing purchase: undo the old stock-in effect first (using
+    // the quantities as they were before this edit), save the new details,
+    // then re-apply stock-in with the edited quantities. Payments already
+    // recorded against this purchase are untouched — the paid-now field only
+    // records a brand new payment, same as it does for a fresh purchase.
+    const original = purchasesCache.find(p => p.id === editId);
+    if(original){
+      await reverseStockForPurchaseItems(original.items || [], dateVal, `Correction: purchase on ${original.date} edited`);
+    }
+    await db.collection('users').doc(currentUser.uid).collection('purchases').doc(editId).set({
+      supplierId: supId, supplierName: supplier.name, date: dateVal,
+      items, subtotal: totals.subtotal, gstTotal: totals.gstTotal, grandTotal: totals.grand,
+      createdAt: (original && original.createdAt) || firebase.firestore.FieldValue.serverTimestamp()
+    });
+    for(const li of items){
+      const purchaseProduct = purchaseProductsCache.find(p => p.id === li.productId);
+      if(purchaseProduct && purchaseProduct.linkedProductId){
+        await addStockMovement('purchase-in', purchaseProduct.linkedProductId, li.qty, dateVal, `Purchase from ${supplier.name} (edited)`);
+      }
+    }
+    await loadProducts();
+    await loadStockMovements();
+
+    const paidNow = parseFloat(document.getElementById('purPaidNow').value) || 0;
+    if(paidNow > 0){
+      await db.collection('users').doc(currentUser.uid).collection('payments').add({
+        supplierId: supId, supplierName: supplier.name, date: dateVal, amount: paidNow,
+        mode: 'On purchase', note: `Paid against purchase dated ${dateVal}`, purchaseId: editId,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      await loadPayments();
+    }
+
+    showMsg('purchaseMsg', `Purchase updated. Balance now ₹${fmtMoney(getSupplierBalance(supId))}.`, true);
+    cancelEditPurchase();
+    await loadPurchases();
+    return;
+  }
+
+  const paidNow = parseFloat(document.getElementById('purPaidNow').value) || 0;
   const purchaseData = {
     supplierId: supId, supplierName: supplier.name, date: dateVal,
     items, subtotal: totals.subtotal, gstTotal: totals.gstTotal, grandTotal: totals.grand,
@@ -882,14 +927,58 @@ function renderPurchases(){
       <td><a href="#" onclick="openSupplierLedger('${p.supplierId}');return false;">${esc(p.supplierName)}</a></td>
       <td>${itemsSummary}</td>
       <td>₹${fmtMoney(p.grandTotal)}</td>
-      <td class="row-actions"><button class="btn small danger" onclick="deletePurchase('${p.id}')">Delete</button></td>
+      <td class="row-actions"><button class="btn small" onclick="editPurchase('${p.id}')">Edit</button><button class="btn small danger" onclick="deletePurchase('${p.id}')">Delete</button></td>
     </tr>`;
   }).join('') || '<tr><td colspan="5" style="color:var(--muted)">No purchases recorded yet.</td></tr>';
 }
 async function deletePurchase(id){
-  if(!confirm('Delete this purchase entry?')) return;
+  if(!confirm('Delete this purchase entry? Any stock it added will be reversed.')) return;
+  const purchase = purchasesCache.find(p => p.id === id);
+  if(purchase){
+    await reverseStockForPurchaseItems(purchase.items || [], new Date().toISOString().slice(0,10), `Reversed: deleted purchase dated ${purchase.date}`);
+  }
   await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).delete();
+  await loadProducts();
+  await loadStockMovements();
   loadPurchases();
+}
+/* Undoes the stock-in effect of a purchase's line items — used when a
+   purchase is deleted, and when it's edited (old effect reversed, then the
+   new one re-applied with the edited quantities). */
+async function reverseStockForPurchaseItems(items, date, note){
+  for(const li of items){
+    const purchaseProduct = purchaseProductsCache.find(p => p.id === li.productId);
+    if(purchaseProduct && purchaseProduct.linkedProductId){
+      await addStockMovement('adjustment', purchaseProduct.linkedProductId, -li.qty, date, note);
+    }
+  }
+}
+function editPurchase(id){
+  const purchase = purchasesCache.find(p => p.id === id);
+  if(!purchase) return;
+  activateView('purchases');
+  document.getElementById('purEditId').value = id;
+  document.getElementById('purSupplier').value = purchase.supplierId;
+  document.getElementById('purDate').value = purchase.date;
+  document.getElementById('purPaidNow').value = '0';
+  purchaseLineItems = (purchase.items || []).map(li => ({ productId: li.productId, name: li.name, unit: li.unit, qty: li.qty, rate: li.rate, gstRate: li.gstRate }));
+  if(!purchaseLineItems.length) purchaseLineItems.push({productId:'', name:'', unit:'PCS', qty:1, rate:0, gstRate:0});
+  renderPurchaseLineItems();
+  document.getElementById('purFormTitle').textContent = 'Edit Purchase';
+  document.getElementById('purSaveBtn').textContent = 'Update Purchase';
+  document.getElementById('purCancelEditBtn').classList.remove('hidden');
+  showMsg('purchaseMsg', 'Editing this purchase — the amount-paid field above only records a NEW payment on save; it won\'t change payments already recorded.', true);
+}
+function cancelEditPurchase(){
+  document.getElementById('purEditId').value = '';
+  document.getElementById('purSupplier').value = '';
+  document.getElementById('purPaidNow').value = '0';
+  purchaseLineItems = [];
+  addPurchaseLineItem();
+  document.getElementById('purFormTitle').textContent = 'New Purchase';
+  document.getElementById('purSaveBtn').textContent = 'Save Purchase';
+  document.getElementById('purCancelEditBtn').classList.add('hidden');
+  showMsg('purchaseMsg', '', true);
 }
 
 /* ---------------- Payments made to suppliers ---------------- */
@@ -902,6 +991,40 @@ async function loadPayments(){
 async function deletePayment(id){
   if(!confirm('Delete this payment record?')) return;
   await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).delete();
+  await loadPayments();
+  if(currentLedgerSupplierId) renderSupplierLedger(currentLedgerSupplierId);
+}
+function editPayment(id){
+  const p = paymentsCache.find(x => x.id === id);
+  if(!p) return;
+  document.getElementById('editPayId').value = id;
+  document.getElementById('editPayDate').value = p.date;
+  document.getElementById('editPayAmount').value = p.amount;
+  document.getElementById('editPayMode').value = p.mode || '';
+  document.getElementById('editPayNote').value = p.note || '';
+  document.getElementById('editPayMsg').textContent = '';
+  document.getElementById('editPaymentModal').classList.remove('hidden');
+}
+function closeEditPaymentModal(){
+  document.getElementById('editPaymentModal').classList.add('hidden');
+}
+async function saveEditedPayment(){
+  const id = document.getElementById('editPayId').value;
+  const existing = paymentsCache.find(p => p.id === id);
+  if(!existing) return;
+  const amount = parseFloat(document.getElementById('editPayAmount').value) || 0;
+  const dateVal = document.getElementById('editPayDate').value || existing.date;
+  const mode = document.getElementById('editPayMode').value.trim();
+  const note = document.getElementById('editPayNote').value.trim();
+  if(amount <= 0){ showMsg('editPayMsg', 'Enter an amount greater than zero.', false); return; }
+
+  await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).set({
+    supplierId: existing.supplierId, supplierName: existing.supplierName,
+    date: dateVal, amount, mode, note,
+    purchaseId: existing.purchaseId || null,
+    createdAt: existing.createdAt || firebase.firestore.FieldValue.serverTimestamp()
+  });
+  closeEditPaymentModal();
   await loadPayments();
   if(currentLedgerSupplierId) renderSupplierLedger(currentLedgerSupplierId);
 }
@@ -936,7 +1059,7 @@ function renderPaymentsTable(){
       <td>₹${fmtMoney(p.amount)}</td>
       <td>${esc(p.mode||'—')}</td>
       <td>${esc(p.note||'')}</td>
-      <td class="row-actions"><button class="btn small danger" onclick="deletePayment('${p.id}')">Delete</button></td>
+      <td class="row-actions"><button class="btn small" onclick="editPayment('${p.id}')">Edit</button><button class="btn small danger" onclick="deletePayment('${p.id}')">Delete</button></td>
     </tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No payments recorded yet.</td></tr>';
 }
 function goToSupplierDashboard(supplierId){
@@ -969,7 +1092,7 @@ function renderSupplierLedger(supplierId){
 
   const rows = [];
   purchases.forEach(p => (p.items||[]).forEach(li => {
-    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} (${li.gstRate}% GST)`, debit:li.total, credit:0 });
+    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} (${li.gstRate}% GST)`, debit:li.total, credit:0, purchaseId:p.id });
   }));
   payments.forEach(pay => {
     const label = pay.note ? `Payment (${pay.mode || '—'}) — ${pay.note}` : `Payment (${pay.mode || '—'})`;
@@ -982,6 +1105,9 @@ function renderSupplierLedger(supplierId){
   tbody.innerHTML = rows.map(r => {
     running += r.debit - r.credit;
     totalPurchase += r.debit; totalPaid += r.credit;
+    const actions = r.purchaseId
+      ? `<button class="btn small" onclick="editPurchase('${r.purchaseId}')">Edit</button>`
+      : `<button class="btn small" onclick="editPayment('${r.paymentId}')">Edit</button><button class="btn small danger" onclick="deletePayment('${r.paymentId}')">Delete</button>`;
     return `<tr>
       <td>${esc(r.date)}</td>
       <td><span class="badge">${r.type === 'purchase' ? 'Purchase' : 'Payment'}</span></td>
@@ -989,7 +1115,7 @@ function renderSupplierLedger(supplierId){
       <td>${r.debit ? '₹'+fmtMoney(r.debit) : ''}</td>
       <td>${r.credit ? '₹'+fmtMoney(r.credit) : ''}</td>
       <td>₹${fmtMoney(running)}</td>
-      <td class="row-actions">${r.paymentId ? `<button class="btn small danger" onclick="deletePayment('${r.paymentId}')">Delete</button>` : ''}</td>
+      <td class="row-actions">${actions}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No purchases or payments recorded for this supplier yet.</td></tr>';
 
