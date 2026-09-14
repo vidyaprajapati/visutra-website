@@ -28,6 +28,7 @@
   <div class="sidebar">
     <a href="#profile" class="nav-link active" data-view="profile">Business Profile</a>
     <a href="#stock" class="nav-link" data-view="stock">Stock Management</a>
+    <a href="#trash" class="nav-link" data-view="trash">Recycle Bin</a>
     <a href="#products" class="nav-link" data-view="products" data-group="billing">Products</a>
     <a href="#customers" class="nav-link" data-view="customers" data-group="billing">Customers</a>
     <a href="#suppliers" class="nav-link" data-view="suppliers" data-group="purchase">Suppliers</a>
@@ -102,10 +103,17 @@
 
     <!-- STOCK MANAGEMENT -->
     <div id="view-stock" class="view hidden">
+      <div class="card" id="reorderCard">
+        <h2>Needs Reorder</h2>
+        <p class="sub">Products at or below the reorder level you set in the Product Master, so this shows nothing until you set a level on at least one product.</p>
+        <table><thead><tr><th>Product</th><th>Current Stock</th><th>Reorder Level</th><th>Short By</th></tr></thead>
+        <tbody id="reorderTable"></tbody></table>
+      </div>
+
       <div class="card">
         <h2>Current Stock</h2>
         <p class="sub">Stock goes up automatically when you record a purchase of a linked purchase product, and down when you apply a monthly marketplace sales upload below. Use "Adjust Stock" for an opening balance or a correction.</p>
-        <table><thead><tr><th>Product</th><th>Unit</th><th>Current Stock</th></tr></thead>
+        <table><thead><tr><th>Product</th><th>Unit</th><th>Current Stock</th><th>Reorder Level</th></tr></thead>
         <tbody id="stockTable"></tbody></table>
       </div>
 
@@ -124,6 +132,7 @@
       <div class="card">
         <h2>Monthly Sales Upload (Stock Deduction)</h2>
         <p class="sub">Upload the report(s) you download from Meesho, Flipkart and/or Amazon for the month. Everything is read in your browser only. The first time you upload, you'll map each product/SKU to your Product Master once — after that, the same product/SKU is remembered automatically in future months.</p>
+        <p class="sub">This only updates stock — it doesn't file GSTR-1. For that, use the same report files in the <a href="../tools/gst-return-tool.html" target="_blank">GST Return Tool ↗</a> (opens in a new tab).</p>
         <div class="grid2">
           <div class="field"><label>Report files (.csv, .xlsx, .xls) — you can select more than one</label><input id="stockFiles" type="file" multiple accept=".csv,.xlsx,.xls"></div>
           <div class="field"><label>Period / label (e.g. "March 2026")</label><input id="stockPeriod" placeholder="March 2026"></div>
@@ -147,8 +156,31 @@
 
       <div class="card">
         <h2>Stock Movement History</h2>
+        <div class="grid3" style="align-items:end">
+          <div class="field"><label>From date</label><input id="stockMoveFrom" type="date" onchange="renderStockMovementsTable()"></div>
+          <div class="field"><label>To date</label><input id="stockMoveTo" type="date" onchange="renderStockMovementsTable()"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn small" style="width:100%" onclick="exportStockMovements()">Export to Excel</button></div>
+        </div>
         <table><thead><tr><th>Date</th><th>Type</th><th>Product</th><th>Qty Change</th><th>Note</th></tr></thead>
         <tbody id="stockMovementsTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- RECYCLE BIN -->
+    <div id="view-trash" class="view hidden">
+      <div class="card">
+        <h2>Recycle Bin</h2>
+        <p class="sub">Deleted purchases and payments sit here for 30 days before being permanently removed, in case something was deleted by mistake. Restoring a purchase re-applies any stock it had added.</p>
+      </div>
+      <div class="card">
+        <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Deleted Purchases</h3>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Products</th><th>Total</th><th>Deleted On</th><th></th></tr></thead>
+        <tbody id="trashPurchasesTable"></tbody></table>
+      </div>
+      <div class="card">
+        <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Deleted Payments</h3>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Deleted On</th><th></th></tr></thead>
+        <tbody id="trashPaymentsTable"></tbody></table>
       </div>
     </div>
 
@@ -173,13 +205,14 @@
           </div>
           <div class="field"><label>Price excl. GST — taxable value (₹)</label><input id="pPrice" type="text" readonly style="background:var(--ivory);color:var(--muted)"></div>
         </div>
+        <div class="field" style="max-width:260px"><label>Reorder level (optional)</label><input id="pReorderLevel" type="number" min="0" step="1" placeholder="e.g. 20"></div>
         <button class="btn primary" onclick="saveProduct()">Add Product</button>
         <input type="hidden" id="pEditId">
         <p class="msg" id="productMsg"></p>
 
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price (excl. GST)</th><th>GST</th><th>Price (incl. GST)</th><th>Stock</th><th></th></tr></thead>
+        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price (excl. GST)</th><th>GST</th><th>Price (incl. GST)</th><th>Stock</th><th>Reorder Level</th><th></th></tr></thead>
         <tbody id="productsTable"></tbody></table>
       </div>
 
@@ -285,6 +318,11 @@
       <div class="card">
         <h2>Purchase History</h2>
         <p class="sub">Click a supplier's name to open their ledger — date-wise purchases, payments made, and balance due.</p>
+        <div class="grid3" style="align-items:end">
+          <div class="field"><label>From date</label><input id="purchaseHistFrom" type="date" onchange="renderPurchases()"></div>
+          <div class="field"><label>To date</label><input id="purchaseHistTo" type="date" onchange="renderPurchases()"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn small" style="width:100%" onclick="exportPurchaseHistory()">Export to Excel</button></div>
+        </div>
         <table><thead><tr><th>Date</th><th>Supplier</th><th>Products</th><th>Total (incl. GST)</th><th></th></tr></thead>
         <tbody id="purchasesTable"></tbody></table>
       </div>
@@ -310,6 +348,11 @@
       <div class="card">
         <h2>Payment History</h2>
         <p class="sub">Click a supplier's name to open their full dashboard.</p>
+        <div class="grid3" style="align-items:end">
+          <div class="field"><label>From date</label><input id="paymentHistFrom" type="date" onchange="renderPaymentsTable()"></div>
+          <div class="field"><label>To date</label><input id="paymentHistTo" type="date" onchange="renderPaymentsTable()"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn small" style="width:100%" onclick="exportPaymentHistory()">Export to Excel</button></div>
+        </div>
         <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Mode</th><th>Note</th><th></th></tr></thead>
         <tbody id="paymentsEntryTable"></tbody></table>
       </div>
@@ -317,6 +360,13 @@
 
     <!-- SUPPLIER DASHBOARD -->
     <div id="view-supplier-dashboard" class="view hidden">
+      <div class="card">
+        <h2>All Suppliers — Amount Payable</h2>
+        <p class="sub">Every supplier ranked by balance due, highest first, so you can see who to pay next at a glance.</p>
+        <table><thead><tr><th>Supplier</th><th>Total Purchases</th><th>Total Paid</th><th>Balance to Pay</th><th></th></tr></thead>
+        <tbody id="payablesTable"></tbody></table>
+      </div>
+
       <div class="card">
         <h2>Supplier Dashboard</h2>
         <p class="sub">Pick a supplier to review everything at a glance — purchase entries, items purchased, amount paid, and balance still to pay.</p>
@@ -374,6 +424,11 @@
     <div id="view-invoices" class="view hidden">
       <div class="card">
         <h2>Invoice History</h2>
+        <div class="grid3" style="align-items:end">
+          <div class="field"><label>From date</label><input id="invoiceHistFrom" type="date" onchange="loadInvoices()"></div>
+          <div class="field"><label>To date</label><input id="invoiceHistTo" type="date" onchange="loadInvoices()"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn small" style="width:100%" onclick="exportInvoiceHistory()">Export to Excel</button></div>
+        </div>
         <table><thead><tr><th>Invoice #</th><th>Date</th><th>Customer</th><th>Total</th><th>Emailed</th><th></th></tr></thead>
         <tbody id="invoicesTable"></tbody></table>
       </div>
