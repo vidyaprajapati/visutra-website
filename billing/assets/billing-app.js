@@ -17,7 +17,7 @@ auth.onAuthStateChanged(async user => {
 
   const snap = await db.collection('users').doc(user.uid).get();
   if(!snap.exists || !snap.data().profileComplete){
-    window.location.href = 'complete-profile.html?redirect=' + encodeURIComponent('app.html');
+    window.location.href = 'complete-profile.html?redirect=' + encodeURIComponent('app.html' + window.location.search);
     return;
   }
 
@@ -41,22 +41,34 @@ auth.onAuthStateChanged(async user => {
   addPurchaseLineItem();
   loadInvoices();
   loadPurchases();
+
+  // Deep-link support: e.g. app.html?view=purchases (used by the "Purchase
+  // Data Entry" button on the main site) opens straight on that tab instead
+  // of the default Business Profile view.
+  const requestedView = new URLSearchParams(window.location.search).get('view');
+  if(requestedView) activateView(requestedView);
 });
 
-function signOut(){ auth.signOut().then(()=> window.location.href = 'login.html'); }
-
 /* ---------------- Nav ---------------- */
+function activateView(viewName){
+  const link = document.querySelector(`.nav-link[data-view="${viewName}"]`);
+  const target = document.getElementById('view-' + viewName);
+  if(!link || !target) return;
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+  link.classList.add('active');
+  document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+  target.classList.remove('hidden');
+  if(viewName === 'invoices') loadInvoices();
+  if(viewName === 'purchases') loadPurchases();
+}
 document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', e => {
     e.preventDefault();
-    document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-    link.classList.add('active');
-    document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
-    document.getElementById('view-' + link.dataset.view).classList.remove('hidden');
-    if(link.dataset.view === 'invoices') loadInvoices();
-    if(link.dataset.view === 'purchases') loadPurchases();
+    activateView(link.dataset.view);
   });
 });
+
+function signOut(){ auth.signOut().then(()=> window.location.href = 'login.html'); }
 
 /* ---------------- Business profile ---------------- */
 async function loadProfile(){
@@ -186,26 +198,29 @@ function renderProducts(){
       <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button>
     </td></tr>`).join('') || '<tr><td colspan="7" style="color:var(--muted)">No products yet.</td></tr>';
 }
-function updateProductInclusivePreview(){
-  const price = parseFloat(document.getElementById('pPrice').value) || 0;
+function updateProductExclusivePreview(){
+  const incl = parseFloat(document.getElementById('pPriceIncl').value) || 0;
   const gstRate = parseFloat(document.getElementById('pGst').value) || 0;
-  document.getElementById('pPriceIncl').value = fmtMoney(price * (1 + gstRate/100));
+  const excl = gstRate ? incl / (1 + gstRate/100) : incl;
+  document.getElementById('pPrice').value = excl.toFixed(2);
 }
 async function saveProduct(){
   const id = document.getElementById('pEditId').value;
+  const inclPrice = parseFloat(document.getElementById('pPriceIncl').value) || 0;
+  const gstRate = parseFloat(document.getElementById('pGst').value);
+  const exclPrice = Math.round((gstRate ? inclPrice / (1 + gstRate/100) : inclPrice) * 100) / 100;
   const data = {
     name: document.getElementById('pName').value.trim(),
     hsn: document.getElementById('pHsn').value.trim(),
     unit: document.getElementById('pUnit').value.trim() || 'PCS',
-    price: parseFloat(document.getElementById('pPrice').value) || 0,
-    gstRate: parseFloat(document.getElementById('pGst').value)
+    price: exclPrice, // stored as the excl.-GST taxable value, used as-is everywhere downstream (invoicing, GSTR-1)
+    gstRate
   };
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['pName','pHsn','pUnit','pPrice','pEditId'].forEach(f => document.getElementById(f).value = '');
+  ['pName','pHsn','pUnit','pPriceIncl','pPrice','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
-  updateProductInclusivePreview();
   showMsg('productMsg', 'Saved.', true);
   loadProducts();
 }
@@ -215,9 +230,9 @@ function editProduct(id){
   document.getElementById('pName').value = p.name;
   document.getElementById('pHsn').value = p.hsn;
   document.getElementById('pUnit').value = p.unit;
-  document.getElementById('pPrice').value = p.price;
+  document.getElementById('pPriceIncl').value = (p.price * (1 + (p.gstRate||0)/100)).toFixed(2);
   document.getElementById('pGst').value = p.gstRate;
-  updateProductInclusivePreview();
+  updateProductExclusivePreview();
 }
 async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
@@ -348,25 +363,22 @@ async function loadPurchaseProducts(){
 }
 function renderPurchaseProducts(){
   document.getElementById('purchaseProductsTable').innerHTML = purchaseProductsCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td>
+    <tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editPurchaseProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deletePurchaseProduct('${p.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No purchase products yet.</td></tr>';
+    </td></tr>`).join('') || '<tr><td colspan="3" style="color:var(--muted)">No purchase products yet.</td></tr>';
 }
 async function savePurchaseProduct(){
   const id = document.getElementById('ppEditId').value;
   const data = {
     name: document.getElementById('ppName').value.trim(),
-    unit: document.getElementById('ppUnit').value.trim() || 'PCS',
-    price: parseFloat(document.getElementById('ppPrice').value) || 0,
-    gstRate: parseFloat(document.getElementById('ppGst').value)
+    unit: document.getElementById('ppUnit').value.trim() || 'PCS'
   };
   if(!data.name){ showMsg('purchaseProductMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('purchaseProducts');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['ppName','ppUnit','ppPrice','ppEditId'].forEach(f => document.getElementById(f).value = '');
-  document.getElementById('ppGst').value = '0';
+  ['ppName','ppUnit','ppEditId'].forEach(f => document.getElementById(f).value = '');
   showMsg('purchaseProductMsg', 'Saved.', true);
   loadPurchaseProducts();
 }
@@ -375,8 +387,6 @@ function editPurchaseProduct(id){
   document.getElementById('ppEditId').value = id;
   document.getElementById('ppName').value = p.name;
   document.getElementById('ppUnit').value = p.unit;
-  document.getElementById('ppPrice').value = p.price;
-  document.getElementById('ppGst').value = p.gstRate;
 }
 async function deletePurchaseProduct(id){
   if(!confirm('Delete this purchase product?')) return;
@@ -389,6 +399,19 @@ function renderPurchaseProductDropdowns(){
 function fillPurchaseProductOptions(sel){
   sel.innerHTML = '<option value="">Select product…</option>' +
     purchaseProductsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+}
+
+/* Looks through past purchases for the most recent price paid to a specific
+   supplier for a specific product. purchasesCache is already ordered newest
+   date first (see loadPurchases), so the first match found is the latest. */
+function getLastPriceForSupplierProduct(supplierId, productId){
+  for(const p of purchasesCache){
+    if(p.supplierId !== supplierId) continue;
+    for(const li of (p.items||[])){
+      if(li.productId === productId) return { rate: li.rate, gstRate: li.gstRate, date: p.date };
+    }
+  }
+  return null;
 }
 
 /* ---------------- Purchases (line items pick from the Purchase Product master above, not the billing Products list) ---------------- */
@@ -428,7 +451,29 @@ function renderPurchaseLineItems(){
 function onPurchaseProductPick(idx, productId){
   const p = purchaseProductsCache.find(x => x.id === productId);
   if(!p) return;
-  purchaseLineItems[idx] = { productId, name:p.name, unit:p.unit, qty:purchaseLineItems[idx].qty||1, rate:p.price, gstRate:p.gstRate };
+  const supplierId = document.getElementById('purSupplier').value;
+  const last = supplierId ? getLastPriceForSupplierProduct(supplierId, productId) : null;
+  purchaseLineItems[idx] = {
+    productId, name:p.name, unit:p.unit,
+    qty: purchaseLineItems[idx].qty || 1,
+    rate: last ? last.rate : 0,
+    gstRate: last ? last.gstRate : 0
+  };
+  renderPurchaseLineItems();
+  if(last){
+    showMsg('purchaseMsg', `Filled in the last price paid to this supplier for ${p.name}: ₹${fmtMoney(last.rate)} (${last.gstRate}% GST) on ${last.date}. Adjust it if this purchase is different.`, true);
+  } else {
+    showMsg('purchaseMsg', `No earlier purchase of ${p.name} from this supplier found — enter the price and GST rate manually.`, true);
+  }
+}
+function onPurchaseSupplierChange(){
+  const supplierId = document.getElementById('purSupplier').value;
+  if(!supplierId) return;
+  purchaseLineItems.forEach(li => {
+    if(!li.productId) return;
+    const last = getLastPriceForSupplierProduct(supplierId, li.productId);
+    if(last){ li.rate = last.rate; li.gstRate = last.gstRate; }
+  });
   renderPurchaseLineItems();
 }
 function updatePurchaseLine(idx, field, value){
