@@ -8,6 +8,7 @@
 <link rel="icon" href="../favicon.svg">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/billing.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -26,6 +27,7 @@
 <div class="shell">
   <div class="sidebar">
     <a href="#profile" class="nav-link active" data-view="profile">Business Profile</a>
+    <a href="#stock" class="nav-link" data-view="stock">Stock Management</a>
     <a href="#products" class="nav-link" data-view="products" data-group="billing">Products</a>
     <a href="#customers" class="nav-link" data-view="customers" data-group="billing">Customers</a>
     <a href="#suppliers" class="nav-link" data-view="suppliers" data-group="purchase">Suppliers</a>
@@ -98,6 +100,58 @@
       </div>
     </div>
 
+    <!-- STOCK MANAGEMENT -->
+    <div id="view-stock" class="view hidden">
+      <div class="card">
+        <h2>Current Stock</h2>
+        <p class="sub">Stock goes up automatically when you record a purchase of a linked purchase product, and down when you apply a monthly marketplace sales upload below. Use "Adjust Stock" for an opening balance or a correction.</p>
+        <table><thead><tr><th>Product</th><th>Unit</th><th>Current Stock</th></tr></thead>
+        <tbody id="stockTable"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Adjust Stock</h2>
+        <p class="sub">For an opening balance, a stock count correction, damage, or anything else outside the normal purchase/sale flow. Use a negative number to reduce stock.</p>
+        <div class="grid3">
+          <div class="field"><label>Product</label><select id="adjProduct"></select></div>
+          <div class="field"><label>Quantity change</label><input id="adjQty" type="number" step="1" placeholder="e.g. 50 or -5"></div>
+          <div class="field"><label>Note</label><input id="adjNote" placeholder="e.g. Opening balance"></div>
+        </div>
+        <button class="btn primary" onclick="adjustStock()">Apply Adjustment</button>
+        <p class="msg" id="adjMsg"></p>
+      </div>
+
+      <div class="card">
+        <h2>Monthly Sales Upload (Stock Deduction)</h2>
+        <p class="sub">Upload the report(s) you download from Meesho, Flipkart and/or Amazon for the month. Everything is read in your browser only. The first time you upload, you'll map each product/SKU to your Product Master once — after that, the same product/SKU is remembered automatically in future months.</p>
+        <div class="grid2">
+          <div class="field"><label>Report files (.csv, .xlsx, .xls) — you can select more than one</label><input id="stockFiles" type="file" multiple accept=".csv,.xlsx,.xls"></div>
+          <div class="field"><label>Period / label (e.g. "March 2026")</label><input id="stockPeriod" placeholder="March 2026"></div>
+        </div>
+        <button class="btn" onclick="parseStockFiles()">Read Files</button>
+        <p class="msg" id="stockUploadMsg"></p>
+
+        <div id="stockColumnMapWrap" class="hidden" style="margin-top:18px">
+          <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 1 — Which column is the product, and which is the quantity?</h3>
+          <div id="stockColumnMapList"></div>
+          <button class="btn primary" style="margin-top:10px" onclick="aggregateStockUpload()">Next: Match Products</button>
+        </div>
+
+        <div id="stockAggWrap" class="hidden" style="margin-top:18px">
+          <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 2 — Match each product/SKU, then apply</h3>
+          <table><thead><tr><th>From report</th><th>Qty sold this period</th><th>Matches to</th></tr></thead>
+          <tbody id="stockAggTable"></tbody></table>
+          <button class="btn primary" style="margin-top:14px" onclick="applyStockUpload()">Apply &amp; Update Stock</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Stock Movement History</h2>
+        <table><thead><tr><th>Date</th><th>Type</th><th>Product</th><th>Qty Change</th><th>Note</th></tr></thead>
+        <tbody id="stockMovementsTable"></tbody></table>
+      </div>
+    </div>
+
     <!-- PRODUCTS -->
     <div id="view-products" class="view hidden">
       <div class="card">
@@ -125,7 +179,7 @@
 
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price (excl. GST)</th><th>GST</th><th>Price (incl. GST)</th><th></th></tr></thead>
+        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price (excl. GST)</th><th>GST</th><th>Price (incl. GST)</th><th>Stock</th><th></th></tr></thead>
         <tbody id="productsTable"></tbody></table>
       </div>
 
@@ -188,13 +242,14 @@
         <div class="grid3">
           <div class="field"><label>Product name</label><input id="ppName"></div>
           <div class="field"><label>Unit</label><input id="ppUnit" placeholder="e.g. PCS, NOS, KG"></div>
-          <div class="field"><label>&nbsp;</label><button class="btn primary" style="width:100%" onclick="savePurchaseProduct()">Add Purchase Product</button></div>
+          <div class="field"><label>Restocks which billing product? (optional)</label><select id="ppLinkedProduct"><option value="">Not linked — doesn't affect stock</option></select></div>
         </div>
+        <button class="btn primary" onclick="savePurchaseProduct()">Add Purchase Product</button>
         <input type="hidden" id="ppEditId">
         <p class="msg" id="purchaseProductMsg"></p>
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>Unit</th><th></th></tr></thead>
+        <table><thead><tr><th>Name</th><th>Unit</th><th>Restocks</th><th></th></tr></thead>
         <tbody id="purchaseProductsTable"></tbody></table>
       </div>
 
