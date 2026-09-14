@@ -185,3 +185,6 @@ switches on automatically the moment real config values are in place.
 - **Multi-user access per business** — right now each Firebase login is its own isolated business; there's no way yet for two people to share access to one business's data.
 
 These are all reasonable next steps if this proves useful — just flag it and we can build any of them in.
+
+## Purchase Management
+The Purchase Details section uses these authenticated subcollections under each user: `suppliers`, `purchaseProducts`, `purchases`, and `supplierPayments`. The existing wildcard user subcollection rule already covers them.
