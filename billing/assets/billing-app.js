@@ -1570,19 +1570,24 @@ async function loadInvoices(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('invoices').orderBy('createdAt','desc').limit(100).get();
   invoicesCache = {};
   snap.docs.forEach(d => { invoicesCache[d.id] = d.data(); });
-  const rows = snap.docs.filter(d => dateInRange(d.data().date||'', 'invoiceHistFrom', 'invoiceHistTo')).map(d => {
+  const rows = [];
+  snap.docs.filter(d => dateInRange(d.data().date||'', 'invoiceHistFrom', 'invoiceHistTo')).forEach(d => {
     const inv = d.data();
-    return `<tr>
-      <td>${esc(inv.invoiceNo||'')}</td><td>${esc(inv.date||'')}</td><td>${esc(inv.customer?.name||'')}</td>
-      <td>₹${fmtMoney(inv.grandTotal||0)}</td>
-      <td><span class="badge">${inv.emailSent ? 'Sent' : 'Not sent'}</span></td>
-      <td class="row-actions">
-        <button class="btn small" onclick="redownloadInvoicePdf('${d.id}')">Download PDF</button>
-        <a class="btn small" href="invoice-view.html?id=${d.id}" target="_blank">View</a>
-      </td>
-    </tr>`;
-  }).join('');
-  document.getElementById('invoicesTable').innerHTML = rows || '<tr><td colspan="6" style="color:var(--muted)">No invoices yet.</td></tr>';
+    const items = (inv.items||[]).filter(li => li.productId);
+    (items.length ? items : [{name:'—', qty:'', unit:''}]).forEach(li => {
+      rows.push(`<tr>
+        <td>${esc(inv.invoiceNo||'')}</td><td>${esc(inv.date||'')}</td><td>${esc(inv.customer?.name||'')}</td>
+        <td>${esc(li.name||'')}</td><td>${li.qty||''} ${esc(li.unit||'')}</td>
+        <td>₹${fmtMoney(inv.grandTotal||0)}</td>
+        <td><span class="badge">${inv.emailSent ? 'Sent' : 'Not sent'}</span></td>
+        <td class="row-actions">
+          <button class="btn small" onclick="redownloadInvoicePdf('${d.id}')">Download PDF</button>
+          <a class="btn small" href="invoice-view.html?id=${d.id}" target="_blank">View</a>
+        </td>
+      </tr>`);
+    });
+  });
+  document.getElementById('invoicesTable').innerHTML = rows.join('') || '<tr><td colspan="8" style="color:var(--muted)">No invoices yet.</td></tr>';
 }
 
 // PDFs are never stored as files anywhere — every download is generated fresh,
@@ -1826,10 +1831,16 @@ function exportStockMovements(){
   exportRowsToExcel('Stock-Movements.xlsx', ['Date','Type','Product','Qty Change','Note'], rows);
 }
 function exportInvoiceHistory(){
-  const rows = Object.values(invoicesCache)
+  const rows = [];
+  Object.values(invoicesCache)
     .filter(inv => dateInRange(inv.date||'', 'invoiceHistFrom', 'invoiceHistTo'))
-    .map(inv => [inv.invoiceNo||'', inv.date||'', inv.customer?.name||'', inv.grandTotal||0, inv.emailSent ? 'Sent' : 'Not sent']);
-  exportRowsToExcel('Invoice-History.xlsx', ['Invoice #','Date','Customer','Total','Emailed'], rows);
+    .forEach(inv => {
+      const items = (inv.items||[]).filter(li => li.productId);
+      (items.length ? items : [{name:'', qty:'', unit:''}]).forEach(li => {
+        rows.push([inv.invoiceNo||'', inv.date||'', inv.customer?.name||'', li.name||'', li.qty||'', li.unit||'', inv.grandTotal||0, inv.emailSent ? 'Sent' : 'Not sent']);
+      });
+    });
+  exportRowsToExcel('Invoice-History.xlsx', ['Invoice #','Date','Customer','Product','Qty','Unit','Total','Emailed'], rows);
 }
 
 /* GSTIN format check + auto-select state from the embedded state code.
