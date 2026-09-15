@@ -32,6 +32,7 @@
     <a href="#products" class="nav-link" data-view="products" data-group="billing">Products</a>
     <a href="#customers" class="nav-link" data-view="customers" data-group="billing">Customers</a>
     <a href="#suppliers" class="nav-link" data-view="suppliers" data-group="purchase">Suppliers</a>
+    <a href="#purchase-products" class="nav-link" data-view="purchase-products" data-group="purchase">Purchase Products</a>
     <a href="#purchases" class="nav-link" data-view="purchases" data-group="purchase">Purchases</a>
     <a href="#payment-entry" class="nav-link" data-view="payment-entry" data-group="purchase">Payment Entry</a>
     <a href="#supplier-dashboard" class="nav-link" data-view="supplier-dashboard" data-group="purchase">Supplier Dashboard</a>
@@ -267,8 +268,8 @@
       </div>
     </div>
 
-    <!-- PURCHASES -->
-    <div id="view-purchases" class="view hidden">
+    <!-- PURCHASE PRODUCTS -->
+    <div id="view-purchase-products" class="view hidden">
       <div class="card">
         <h2>Purchase Product Master</h2>
         <p class="sub">A separate product list just for purchases (name and unit only) — since the purchase (cost) price is different from the selling price in your GST billing Products list, and even varies supplier to supplier, you enter the price and GST rate manually for every purchase instead of a fixed default.</p>
@@ -285,7 +286,10 @@
         <table><thead><tr><th>Name</th><th>Unit</th><th>Restocks</th><th></th></tr></thead>
         <tbody id="purchaseProductsTable"></tbody></table>
       </div>
+    </div>
 
+    <!-- PURCHASES -->
+    <div id="view-purchases" class="view hidden">
       <div class="card">
         <h2 id="purFormTitle">New Purchase</h2>
         <p class="sub">Pick a supplier, then a product, and enter the unit price and GST rate you were charged this time — choose whether the price is including or excluding GST from the dropdown next to it, since suppliers quote it differently. If you've bought this product from this supplier before, the last price (and price type) you used is filled in automatically — adjust it if this purchase is different.</p>
