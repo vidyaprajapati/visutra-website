@@ -178,7 +178,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 
       <div class="vlc-field">
         <label>Output paper size</label>
-        <select id="vlcOutSize" onchange="saveDefaultOutSize(currentPlatform, this.value); showOutSizeSaved()">
+        <select id="vlcOutSize" onchange="saveDefaultOutSize(currentPlatform, this.value); onSettingChange(); showOutSizeSaved()">
           <option value="native">Keep cropped size (recommended)</option>
           <option value="4x6">Force 4 × 6 in (most common thermal printer)</option>
           <option value="4x4">Force 4 × 4 in</option>
@@ -192,6 +192,20 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
           <option value="4x8">Force 4 × 8 in (label + invoice combined)</option>
         </select>
         <p class="vlc-saved-note" id="vlcOutSizeSaved" style="opacity:0;transition:opacity .3s;margin-top:6px">Saved as your default.</p>
+      </div>
+
+      <div class="vlc-field">
+        <label>Print orientation</label>
+        <div style="display:flex;gap:20px;margin-top:6px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400">
+            <input type="radio" name="vlcOrientation" value="portrait" id="vlcOrientPortrait" checked onchange="onSettingChange()" style="width:auto">
+            <span>Portrait</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400">
+            <input type="radio" name="vlcOrientation" value="landscape" id="vlcOrientLandscape" onchange="onSettingChange()" style="width:auto">
+            <span>Landscape</span>
+          </label>
+        </div>
       </div>
 
       <div class="vlc-field" id="vlcAmazonSkuField" style="display:none">
@@ -213,7 +227,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         </label>
         <p class="vlc-help" style="margin-top:8px">Turn on both to sort by courier partner first, then by SKU within each courier — handy for packing SKU-by-SKU within each courier's run. The SKU is read from the "Product Details" block printed on every Meesho label.</p>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
-          <input type="checkbox" id="vlcMeeshoSkuStampMode" style="width:auto">
+          <input type="checkbox" id="vlcMeeshoSkuStampMode" onchange="onSettingChange()" style="width:auto">
           <span>Also print SKU &amp; Qty in larger text at the bottom of each label</span>
         </label>
         <p class="vlc-help" style="margin-top:8px">Meesho prints the SKU in very small text in the Product Details block. With this on, the same SKU and Qty are read off that block and reprinted in bigger, clearer text at the bottom of the cropped label — e.g. "SKU: VST-WFAT-7-8.5-FA32 x1".</p>
@@ -387,6 +401,7 @@ function onGroupFilterChange(){
   groupByCourier = document.getElementById('vlcGroupByCourier').checked;
   groupBySku = document.getElementById('vlcGroupBySku').checked;
   renderCourierPanel();
+  storePreset(currentPlatform, getAllSettings());
 }
 
 function renderCourierPanel(){
@@ -510,9 +525,22 @@ function applyPreset(p){
   document.getElementById('rngRight').value = preset.right;
   document.getElementById('rngGap').value = preset.gap;
   document.getElementById('vlcHelpText').textContent = PRESETS[p].help;
-  document.getElementById('vlcOutSize').value = loadDefaultOutSize(p);
+  // Output size: prefer the new consolidated setting; fall back to the older
+  // separate key (from before this update) so nobody's existing saved default
+  // is lost, then to 'native'.
+  document.getElementById('vlcOutSize').value = (stored && stored.outSize) || loadDefaultOutSize(p);
+  const orientation = (stored && stored.orientation) || 'portrait';
+  document.getElementById('vlcOrientPortrait').checked = orientation !== 'landscape';
+  document.getElementById('vlcOrientLandscape').checked = orientation === 'landscape';
+  groupByCourier = stored ? (stored.groupByCourier !== false) : true;
+  groupBySku = stored ? !!stored.groupBySku : false;
+  document.getElementById('vlcGroupByCourier').checked = groupByCourier;
+  document.getElementById('vlcGroupBySku').checked = groupBySku;
+  document.getElementById('vlcMeeshoSkuStampMode').checked = stored ? !!stored.meeshoSkuStampMode : false;
+  document.getElementById('vlcAmazonSkuMode').checked = stored ? (stored.amazonSkuMode !== false) : true;
   setMode(preset.mode || 'single');
   updateLabels();
+  updateAmazonSkuUiState();
   updatePreview();
 }
 
@@ -553,6 +581,12 @@ function onAmazonSkuModeChange(){
   if(document.getElementById('vlcAmazonSkuMode').checked && pdfJsDoc && currentPlatform === 'amazon'){
     detectAmazonSkus();
   }
+  storePreset(currentPlatform, getAllSettings());
+}
+// Generic handler for any setting (orientation, Meesho SKU-stamp mode) that just
+// needs to be persisted per platform — no other side effect required.
+function onSettingChange(){
+  storePreset(currentPlatform, getAllSettings());
 }
 
 function setMode(mode){
@@ -575,19 +609,35 @@ function updateLabels(){
 ['rngTop','rngBottom','rngLeft','rngRight','rngGap'].forEach(id=>{
   document.getElementById(id).addEventListener('input', ()=>{
     updateLabels();
-    storePreset(currentPlatform, getCropValues());
+    storePreset(currentPlatform, getAllSettings());
   });
 });
 
-function getCropValues(){
+// Everything that should be remembered per platform, in one place — crop
+// sliders, mode, output size, print orientation, and the Meesho/Amazon
+// checkboxes — so switching platforms (or reopening the tool later) restores
+// exactly how it was left last time, for that platform specifically.
+function getAllSettings(){
   return {
     top: parseFloat(document.getElementById('rngTop').value),
     bottom: parseFloat(document.getElementById('rngBottom').value),
     left: parseFloat(document.getElementById('rngLeft').value),
     right: parseFloat(document.getElementById('rngRight').value),
     gap: parseFloat(document.getElementById('rngGap').value),
-    mode: currentMode
+    mode: currentMode,
+    outSize: document.getElementById('vlcOutSize').value,
+    orientation: document.getElementById('vlcOrientLandscape').checked ? 'landscape' : 'portrait',
+    groupByCourier: document.getElementById('vlcGroupByCourier') ? document.getElementById('vlcGroupByCourier').checked : true,
+    groupBySku: document.getElementById('vlcGroupBySku') ? document.getElementById('vlcGroupBySku').checked : false,
+    meeshoSkuStampMode: document.getElementById('vlcMeeshoSkuStampMode') ? document.getElementById('vlcMeeshoSkuStampMode').checked : false,
+    amazonSkuMode: document.getElementById('vlcAmazonSkuMode') ? document.getElementById('vlcAmazonSkuMode').checked : true
   };
+}
+function getCropValues(){
+  // Kept for the parts of the code that only need the crop geometry (not the
+  // full settings blob) — same shape as before this update.
+  const s = getAllSettings();
+  return { top: s.top, bottom: s.bottom, left: s.left, right: s.right, gap: s.gap, mode: s.mode };
 }
 
 /* ---------------- File handling ---------------- */
@@ -721,6 +771,7 @@ async function processPdf(courierFilter){
     const embedded = await outDoc.embedPages(srcPages);
     const v = getCropValues();
     const outSizeKey = document.getElementById('vlcOutSize').value;
+    const isLandscape = document.getElementById('vlcOrientLandscape').checked;
     const amazonSkuMode = currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode').checked;
     const meeshoSkuStampMode = currentPlatform === 'meesho' && document.getElementById('vlcMeeshoSkuStampMode') && document.getElementById('vlcMeeshoSkuStampMode').checked;
     const skuFont = (amazonSkuMode || meeshoSkuStampMode) ? await outDoc.embedFont(PDFLib.StandardFonts.Helvetica) : null;
@@ -783,6 +834,7 @@ async function processPdf(courierFilter){
         }
 
         const newPage = outDoc.addPage([pageW, pageH]);
+        if(isLandscape) newPage.setRotation(PDFLib.degrees(90));
         const drawW = pw*scaleX, drawH = ph*scaleY;
         const offsetX = -(pw*(leftPct/100))*scaleX;
         const offsetY = -(ph*(r.bottomPct/100))*scaleY;
