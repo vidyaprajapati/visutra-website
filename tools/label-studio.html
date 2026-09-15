@@ -16,7 +16,7 @@
 <meta name="description" content="Free online tool to create QR codes, barcodes, price tags and shipping labels. Print-ready for A4 or thermal rolls.">
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.5/JsBarcode.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -429,6 +429,10 @@ function generateBarcode(){
   const format = document.getElementById('bcFormat').value;
   const showText = document.getElementById('bcShowText').value === 'true';
   const svg = document.getElementById('bcSvg');
+  if(typeof JsBarcode === 'undefined'){
+    alert('The barcode library did not load — check your internet connection and reload the page, then try again.');
+    return;
+  }
   try{
     JsBarcode(svg, value, {
       format, displayValue: showText, font: 'IBM Plex Mono',
