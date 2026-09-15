@@ -327,7 +327,7 @@
           <div class="field"><label>To date</label><input id="purchaseHistTo" type="date" onchange="renderPurchases()"></div>
           <div class="field"><label>&nbsp;</label><button class="btn small" style="width:100%" onclick="exportPurchaseHistory()">Export to Excel</button></div>
         </div>
-        <table><thead><tr><th>Date</th><th>Supplier</th><th>Products</th><th>Total (incl. GST)</th><th></th></tr></thead>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Product</th><th>Qty</th><th>Total (incl. GST)</th><th></th></tr></thead>
         <tbody id="purchasesTable"></tbody></table>
       </div>
     </div>
@@ -388,7 +388,7 @@
             <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Last Purchase</h3><p style="font-size:14px;font-weight:600;margin:0" id="dashLastPurchase">—</p></div>
           </div>
           <div style="margin-top:18px;max-height:320px;overflow-y:auto">
-            <table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th>Purchase (Dr)</th><th>Paid (Cr)</th><th>Balance</th><th></th></tr></thead>
+            <table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th>Qty</th><th>Purchase (Dr)</th><th>Paid (Cr)</th><th>Balance</th><th></th></tr></thead>
             <tbody id="dashTable"></tbody></table>
           </div>
         </div>
@@ -489,7 +489,7 @@
     </div>
 
     <div style="margin-top:18px;max-height:300px;overflow-y:auto">
-      <table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th>Purchase (Dr)</th><th>Paid (Cr)</th><th>Balance</th><th></th></tr></thead>
+      <table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th>Qty</th><th>Purchase (Dr)</th><th>Paid (Cr)</th><th>Balance</th><th></th></tr></thead>
       <tbody id="ledgerTable"></tbody></table>
     </div>
 
