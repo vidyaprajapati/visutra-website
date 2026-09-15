@@ -698,7 +698,7 @@ function renderSupplierDashboard(supplierId){
   const rows = [];
   purchases.forEach(p => (p.items||[]).forEach(li => {
     totalItems += (li.qty||0);
-    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} (${li.gstRate}% GST)`, debit:li.total, credit:0, purchaseId:p.id });
+    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} incl. GST (${li.gstRate}% GST)`, debit:li.total, credit:0, purchaseId:p.id });
   }));
   payments.forEach(pay => {
     const label = pay.note ? `Payment (${pay.mode || '—'}) — ${pay.note}` : `Payment (${pay.mode || '—'})`;
@@ -764,11 +764,20 @@ function removePurchaseLineItem(idx){
   purchaseLineItems.splice(idx, 1);
   renderPurchaseLineItems();
 }
+/* Purchase line items now take the unit price INCLUDING GST (matching how
+   the billing Products master works) — this derives the taxable value and
+   GST amount from that inclusive price, instead of adding GST on top. */
+function purchaseLineCalc(li){
+  const gstRate = li.gstRate || 0;
+  const total = (li.qty||0) * (li.rate||0); // rate is inclusive, so qty × rate is already the line total incl. GST
+  const taxable = gstRate ? total / (1 + gstRate/100) : total;
+  const gstAmt = total - taxable;
+  return { taxable, gstAmt, total };
+}
 function renderPurchaseLineItems(){
   const tbody = document.getElementById('purchaseLineItemsTable');
   tbody.innerHTML = purchaseLineItems.map((li, i) => {
-    const taxable = (li.qty||0) * (li.rate||0);
-    const gstAmt = taxable * (li.gstRate||0) / 100;
+    const { taxable, gstAmt, total } = purchaseLineCalc(li);
     return `<tr>
       <td><select class="pur-line-product" onchange="onPurchaseProductPick(${i}, this.value)"></select></td>
       <td><input type="number" min="0" step="1" value="${li.qty}" style="width:60px" onchange="updatePurchaseLine(${i},'qty',this.value)"></td>
@@ -779,7 +788,7 @@ function renderPurchaseLineItems(){
       </select></td>
       <td>${fmtMoney(taxable)}</td>
       <td>${fmtMoney(gstAmt)}</td>
-      <td>${fmtMoney(taxable + gstAmt)}</td>
+      <td>${fmtMoney(total)}</td>
       <td><button class="btn small danger" onclick="removePurchaseLineItem(${i})">✕</button></td>
     </tr>`;
   }).join('');
@@ -802,9 +811,9 @@ function onPurchaseProductPick(idx, productId){
   };
   renderPurchaseLineItems();
   if(last){
-    showMsg('purchaseMsg', `Filled in the last price paid to this supplier for ${p.name}: ₹${fmtMoney(last.rate)} (${last.gstRate}% GST) on ${last.date}. Adjust it if this purchase is different.`, true);
+    showMsg('purchaseMsg', `Filled in the last price paid to this supplier for ${p.name}: ₹${fmtMoney(last.rate)} incl. GST (${last.gstRate}% GST) on ${last.date}. Adjust it if this purchase is different.`, true);
   } else {
-    showMsg('purchaseMsg', `No earlier purchase of ${p.name} from this supplier found — enter the price and GST rate manually.`, true);
+    showMsg('purchaseMsg', `No earlier purchase of ${p.name} from this supplier found — enter the price (incl. GST) and GST rate manually.`, true);
   }
 }
 function onPurchaseSupplierChange(){
@@ -825,9 +834,9 @@ function updatePurchaseLine(idx, field, value){
 function recalcPurchaseTotals(){
   let subtotal = 0, gstTotal = 0;
   purchaseLineItems.forEach(li => {
-    const taxable = (li.qty||0) * (li.rate||0);
+    const { taxable, gstAmt } = purchaseLineCalc(li);
     subtotal += taxable;
-    gstTotal += taxable * (li.gstRate||0) / 100;
+    gstTotal += gstAmt;
   });
   const grand = subtotal + gstTotal;
   const box = document.getElementById('purchaseTotalsBox');
@@ -857,9 +866,8 @@ async function savePurchase(){
   const dateVal = document.getElementById('purDate').value || new Date().toISOString().slice(0,10);
   const totals = recalcPurchaseTotals();
   const items = validItems.map(li => {
-    const taxable = (li.qty||0) * (li.rate||0);
-    const gstAmt = taxable * (li.gstRate||0) / 100;
-    return { ...li, taxable, gstAmt, total: taxable + gstAmt };
+    const { taxable, gstAmt, total } = purchaseLineCalc(li);
+    return { ...li, taxable, gstAmt, total };
   });
 
   if(editId){
@@ -1211,7 +1219,7 @@ function renderSupplierLedger(supplierId){
 
   const rows = [];
   purchases.forEach(p => (p.items||[]).forEach(li => {
-    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} (${li.gstRate}% GST)`, debit:li.total, credit:0, purchaseId:p.id });
+    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} incl. GST (${li.gstRate}% GST)`, debit:li.total, credit:0, purchaseId:p.id });
   }));
   payments.forEach(pay => {
     const label = pay.note ? `Payment (${pay.mode || '—'}) — ${pay.note}` : `Payment (${pay.mode || '—'})`;
