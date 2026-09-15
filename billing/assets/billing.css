@@ -10,7 +10,7 @@ body{margin:0;font-family:var(--body);background:var(--ivory);color:var(--ink)}
 a{color:var(--indigo)}
 .topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:var(--canvas);border-bottom:1px solid var(--thread)}
 .topbar .brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink)}
-.topbar .brand img{height:32px;width:32px;border-radius:6px}
+.topbar .brand img{height:28px;width:auto}
 .topbar-title{font-family:var(--display);font-weight:600;font-size:16px;color:var(--ink);text-align:center;flex:1}
 .topbar-right{display:flex;align-items:center;gap:16px}
 .topbar .user{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--muted)}
