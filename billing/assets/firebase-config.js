@@ -26,5 +26,9 @@ const EMAILJS_TEMPLATE_ID = "template_ds08b1e";
 // (register your domain "visutra.in", choose reCAPTCHA v2 "Checkbox").
 const RECAPTCHA_SITE_KEY = "6LdBgJYtAAAAACIxZhjWF8Y0KLtG-DWyMAYAGZ0r";
 firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
+// Not every page that includes this shared config also loads the Firebase Auth
+// SDK (e.g. invoice-view.html is a public page with no login, so it only loads
+// the app + firestore scripts). Calling firebase.auth() there would throw and
+// abort this whole file before `db` below ever gets defined — guard it instead.
+const auth = typeof firebase.auth === 'function' ? firebase.auth() : null;
 const db = firebase.firestore();
