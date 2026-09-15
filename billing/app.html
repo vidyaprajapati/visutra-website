@@ -288,14 +288,14 @@
 
       <div class="card">
         <h2 id="purFormTitle">New Purchase</h2>
-        <p class="sub">Pick a supplier, then a product, and enter the unit price <b>including GST</b> and the GST rate you were charged this time — the taxable value is worked out for you. If you've bought this product from this supplier before, the last price you paid them is filled in automatically — adjust it if this purchase is at a different price.</p>
+        <p class="sub">Pick a supplier, then a product, and enter the unit price and GST rate you were charged this time — choose whether the price is including or excluding GST from the dropdown next to it, since suppliers quote it differently. If you've bought this product from this supplier before, the last price (and price type) you used is filled in automatically — adjust it if this purchase is different.</p>
         <div class="grid2">
           <div class="field"><label>Supplier</label><select id="purSupplier" onchange="onPurchaseSupplierChange()"></select></div>
           <div class="field"><label>Purchase date</label><input id="purDate" type="date"></div>
         </div>
 
         <table class="line-items">
-          <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Unit Price incl. GST (₹)</th><th>GST</th><th>Taxable</th><th>GST Amt</th><th>Total (incl. GST)</th><th></th></tr></thead>
+          <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Unit Price (₹)</th><th>Price Type</th><th>GST</th><th>Taxable</th><th>GST Amt</th><th>Total (incl. GST)</th><th></th></tr></thead>
           <tbody id="purchaseLineItemsTable"></tbody>
         </table>
         <button class="btn small" style="margin-top:10px" onclick="addPurchaseLineItem()">+ Add line item</button>
