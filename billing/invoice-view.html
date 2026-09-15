@@ -55,17 +55,11 @@ async function loadInvoice(){
   const content = document.getElementById('content');
   if(!id){ content.innerHTML = '<div class="errbox">No invoice specified.</div>'; return; }
 
+  let inv;
   try{
     const snap = await db.collection('public_invoices').doc(id).get();
     if(!snap.exists){ content.innerHTML = '<div class="errbox">Invoice not found.</div>'; return; }
-    const inv = snap.data();
-    currentInvoiceData = inv;
-    render(inv);
-    // Auto-download the PDF the moment the page opens, so the buyer gets the
-    // actual file without an extra click — no paid EmailJS attachment plan needed.
-    // The button stays too, in case a browser blocks the automatic download or
-    // they want to grab it again later.
-    try{ downloadInvoicePdf(); }catch(e){ console.error('Auto-download failed:', e); }
+    inv = snap.data();
   }catch(err){
     console.error('Invoice load error:', err);
     // Almost always caused by Firestore security rules not allowing public read
@@ -78,6 +72,25 @@ async function loadInvoice(){
         ? 'This invoice link is not publicly readable. The site owner needs to check the Firestore security rules for the <code>public_invoices</code> collection (Firebase Console → Firestore Database → Rules) and make sure it includes <code>allow read: if true;</code>.'
         : 'Could not load this invoice. Please try the link again in a moment, or contact the sender for a fresh copy.'}
     </div>`;
+    return;
+  }
+
+  // The invoice WAS fetched successfully at this point — anything that goes
+  // wrong from here is a display/rendering problem, not a loading problem, so
+  // it gets its own separate error message rather than the generic one above
+  // (which was previously shown for both, making real rendering bugs look like
+  // network/permission issues and impossible to tell apart).
+  try{
+    currentInvoiceData = inv;
+    render(inv);
+    // Auto-download the PDF the moment the page opens, so the buyer gets the
+    // actual file without an extra click — no paid EmailJS attachment plan needed.
+    // The button stays too, in case a browser blocks the automatic download or
+    // they want to grab it again later.
+    try{ downloadInvoicePdf(); }catch(e){ console.error('Auto-download failed:', e); }
+  }catch(err){
+    console.error('Invoice render error:', err, inv);
+    content.innerHTML = '<div class="errbox">This invoice was found, but something on it couldn\'t be displayed (it may be from an older format). Check the browser console for details, or contact the sender for a fresh copy.</div>';
   }
 }
 
@@ -86,11 +99,14 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;
 
 function render(inv){
   const sameState = inv.sameState;
+  const biz = inv.business || {};
+  const cust = inv.customer || {};
   const rows = (inv.items||[]).filter(li=>li.productId).map((li,i)=>{
-    const taxAmt = li.taxable * (li.gstRate||0)/100;
+    const taxable = li.taxable||0;
+    const taxAmt = taxable * (li.gstRate||0)/100;
     return `<tr><td>${i+1}</td><td>${esc(li.name)}<br><span style="color:#6B6255;font-size:11px">HSN ${esc(li.hsn)}</span></td>
-      <td>${li.qty} ${esc(li.unit)}</td><td>₹${fmt(li.rate)}</td><td>₹${fmt(li.taxable)}</td>
-      <td>${li.gstRate}%<br>₹${fmt(taxAmt)}</td><td>₹${fmt(li.taxable+taxAmt)}</td></tr>`;
+      <td>${li.qty||0} ${esc(li.unit)}</td><td>₹${fmt(li.rate)}</td><td>₹${fmt(taxable)}</td>
+      <td>${li.gstRate||0}%<br>₹${fmt(taxAmt)}</td><td>₹${fmt(taxable+taxAmt)}</td></tr>`;
   }).join('');
 
   document.getElementById('content').innerHTML = `
@@ -101,12 +117,12 @@ function render(inv){
 
       <div class="grid2">
         <div class="box"><h3>From</h3>
-          <p><b>${esc(inv.business.businessName)}</b><br>${esc(inv.business.address)}<br>
-          GSTIN: ${esc(inv.business.gstin)}<br>${esc(inv.business.state)}</p>
+          <p><b>${esc(biz.businessName)}</b><br>${esc(biz.address)}<br>
+          GSTIN: ${esc(biz.gstin)}<br>${esc(biz.state)}</p>
         </div>
         <div class="box"><h3>Bill To</h3>
-          <p><b>${esc(inv.customer.name)}</b><br>${esc(inv.customer.address||'')}<br>
-          ${inv.customer.gstin ? 'GSTIN: '+esc(inv.customer.gstin)+'<br>' : ''}${esc(inv.customer.state||'')}</p>
+          <p><b>${esc(cust.name)}</b><br>${esc(cust.address||'')}<br>
+          ${cust.gstin ? 'GSTIN: '+esc(cust.gstin)+'<br>' : ''}${esc(cust.state||'')}</p>
         </div>
       </div>
 
@@ -124,8 +140,8 @@ function render(inv){
       </div>
 
       <div class="sig">
-        <p style="margin:0 0 4px;font-size:13px">For ${esc(inv.business.businessName)}</p>
-        ${inv.business.signature ? `<img src="${inv.business.signature}">` : ''}
+        <p style="margin:0 0 4px;font-size:13px">For ${esc(biz.businessName)}</p>
+        ${biz.signature ? `<img src="${biz.signature}">` : ''}
         <p style="margin:4px 0 0;font-size:12px;color:var(--muted)">Authorized Signatory</p>
       </div>
 
@@ -146,6 +162,8 @@ function buildInvoicePDF(inv){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:'pt', format:'a4'});
   const pageW = doc.internal.pageSize.getWidth();
+  const biz = inv.business || {};
+  const cust = inv.customer || {};
   let y = 40;
 
   doc.setFont('helvetica','bold'); doc.setFontSize(16);
@@ -156,31 +174,31 @@ function buildInvoicePDF(inv){
   y += 24;
 
   doc.setFont('helvetica','bold'); doc.setFontSize(11);
-  doc.text(inv.business.businessName || '', 40, y);
+  doc.text(biz.businessName || '', 40, y);
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
   y += 14;
-  const bizAddrLines = doc.splitTextToSize(inv.business.address || '', 250);
+  const bizAddrLines = doc.splitTextToSize(biz.address || '', 250);
   doc.text(bizAddrLines, 40, y); y += bizAddrLines.length * 12;
-  doc.text(`GSTIN: ${inv.business.gstin || ''}`, 40, y); y += 12;
-  doc.text(`State: ${inv.business.state || ''} (${inv.business.stateCode || ''})`, 40, y);
+  doc.text(`GSTIN: ${biz.gstin || ''}`, 40, y); y += 12;
+  doc.text(`State: ${biz.state || ''} (${biz.stateCode || ''})`, 40, y);
 
   let yR = 78;
-  doc.setFont('helvetica','bold'); doc.text('Invoice No:', 330, yR); doc.setFont('helvetica','normal'); doc.text(inv.invoiceNo, 410, yR); yR += 14;
-  doc.setFont('helvetica','bold'); doc.text('Invoice Date:', 330, yR); doc.setFont('helvetica','normal'); doc.text(inv.date, 410, yR); yR += 14;
+  doc.setFont('helvetica','bold'); doc.text('Invoice No:', 330, yR); doc.setFont('helvetica','normal'); doc.text(inv.invoiceNo || '', 410, yR); yR += 14;
+  doc.setFont('helvetica','bold'); doc.text('Invoice Date:', 330, yR); doc.setFont('helvetica','normal'); doc.text(inv.date || '', 410, yR); yR += 14;
   doc.setFont('helvetica','bold'); doc.text('Reverse charge:', 330, yR); doc.setFont('helvetica','normal'); doc.text(inv.reverseCharge ? 'Yes' : 'No', 410, yR); yR += 14;
   doc.setFont('helvetica','bold'); doc.text('Place of supply:', 330, yR); doc.setFont('helvetica','normal');
-  doc.text(`${inv.customer.state || ''} (${inv.customer.stateCode || ''})`, 410, yR);
+  doc.text(`${cust.state || ''} (${cust.stateCode || ''})`, 410, yR);
 
   y = Math.max(y, yR) + 26;
   doc.setDrawColor(200); doc.line(40, y, pageW-40, y); y += 18;
 
   doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.text('Bill To:', 40, y); y += 14;
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
-  doc.text(inv.customer.name || '', 40, y); y += 12;
-  const custAddrLines = doc.splitTextToSize(inv.customer.address || '', 300);
+  doc.text(cust.name || '', 40, y); y += 12;
+  const custAddrLines = doc.splitTextToSize(cust.address || '', 300);
   doc.text(custAddrLines, 40, y); y += custAddrLines.length * 12;
-  if(inv.customer.gstin){ doc.text(`GSTIN: ${inv.customer.gstin}`, 40, y); y += 12; }
-  doc.text(`State: ${inv.customer.state || ''}`, 40, y);
+  if(cust.gstin){ doc.text(`GSTIN: ${cust.gstin}`, 40, y); y += 12; }
+  doc.text(`State: ${cust.state || ''}`, 40, y);
   y += 22;
 
   const sameState = inv.sameState;
@@ -188,7 +206,7 @@ function buildInvoicePDF(inv){
     ? [['#','Description','HSN','Qty','Unit','Rate','Taxable','CGST','SGST','Total']]
     : [['#','Description','HSN','Qty','Unit','Rate','Taxable','IGST','Total']];
 
-  const body = inv.items.filter(li => li.productId).map((li, i) => {
+  const body = (inv.items||[]).filter(li => li.productId).map((li, i) => {
     const taxable = li.taxable;
     const taxAmt = taxable * (li.gstRate||0) / 100;
     if(sameState){
@@ -221,9 +239,9 @@ function buildInvoicePDF(inv){
 
   const sigY = y - 10;
   doc.setFontSize(9);
-  doc.text(`For ${inv.business.businessName || ''}`, pageW-160, sigY, {align:'center'});
-  if(inv.business.signature){
-    try{ doc.addImage(inv.business.signature, 'PNG', pageW-210, sigY+8, 100, 40); }catch(e){}
+  doc.text(`For ${biz.businessName || ''}`, pageW-160, sigY, {align:'center'});
+  if(biz.signature){
+    try{ doc.addImage(biz.signature, 'PNG', pageW-210, sigY+8, 100, 40); }catch(e){}
   }
   doc.text('Authorized Signatory', pageW-160, sigY+56, {align:'center'});
 
