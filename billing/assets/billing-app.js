@@ -698,11 +698,11 @@ function renderSupplierDashboard(supplierId){
   const rows = [];
   purchases.forEach(p => (p.items||[]).forEach(li => {
     totalItems += (li.qty||0);
-    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} ${li.priceMode==='excl' ? 'excl. GST' : 'incl. GST'} (${li.gstRate}% GST)`, debit:li.total, credit:0, purchaseId:p.id });
+    rows.push({ date:p.date, type:'purchase', desc:`${li.name} @ ₹${fmtMoney(li.rate)} ${li.priceMode==='excl' ? 'excl. GST' : 'incl. GST'} (${li.gstRate}% GST)`, qty:`${li.qty} ${li.unit}`, debit:li.total, credit:0, purchaseId:p.id });
   }));
   payments.forEach(pay => {
     const label = pay.note ? `Payment (${pay.mode || '—'}) — ${pay.note}` : `Payment (${pay.mode || '—'})`;
-    rows.push({ date:pay.date, type:'payment', desc:label, debit:0, credit:pay.amount, paymentId:pay.id });
+    rows.push({ date:pay.date, type:'payment', desc:label, qty:'', debit:0, credit:pay.amount, paymentId:pay.id });
   });
   rows.sort((a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
 
@@ -717,6 +717,7 @@ function renderSupplierDashboard(supplierId){
       <td>${esc(r.date)}</td>
       <td><span class="badge">${r.type === 'purchase' ? 'Purchase' : 'Payment'}</span></td>
       <td>${esc(r.desc)}</td>
+      <td>${esc(r.qty)}</td>
       <td>${r.debit ? '₹'+fmtMoney(r.debit) : ''}</td>
       <td>${r.credit ? '₹'+fmtMoney(r.credit) : ''}</td>
       <td>₹${fmtMoney(running)}</td>
@@ -977,16 +978,20 @@ async function loadPurchases(){
 function renderPurchases(){
   const tbody = document.getElementById('purchasesTable');
   if(!tbody) return;
-  tbody.innerHTML = purchasesCache.filter(p => dateInRange(p.date, 'purchaseHistFrom', 'purchaseHistTo')).map(p => {
-    const itemsSummary = (p.items||[]).map(li => `${esc(li.name)} (${li.qty} ${esc(li.unit)})`).join(', ');
-    return `<tr>
-      <td>${esc(p.date)}</td>
-      <td><a href="#" onclick="openSupplierLedger('${p.supplierId}');return false;">${esc(p.supplierName)}</a></td>
-      <td>${itemsSummary}</td>
-      <td>₹${fmtMoney(p.grandTotal)}</td>
-      <td class="row-actions"><button class="btn small" onclick="editPurchase('${p.id}')">Edit</button><button class="btn small danger" onclick="deletePurchase('${p.id}')">Delete</button></td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="5" style="color:var(--muted)">No purchases recorded yet.</td></tr>';
+  const rows = [];
+  purchasesCache.filter(p => dateInRange(p.date, 'purchaseHistFrom', 'purchaseHistTo')).forEach(p => {
+    (p.items||[]).forEach(li => {
+      rows.push(`<tr>
+        <td>${esc(p.date)}</td>
+        <td><a href="#" onclick="openSupplierLedger('${p.supplierId}');return false;">${esc(p.supplierName)}</a></td>
+        <td>${esc(li.name)}</td>
+        <td>${li.qty} ${esc(li.unit)}</td>
+        <td>₹${fmtMoney(li.total)}</td>
+        <td class="row-actions"><button class="btn small" onclick="editPurchase('${p.id}')">Edit</button><button class="btn small danger" onclick="deletePurchase('${p.id}')">Delete</button></td>
+      </tr>`);
+    });
+  });
+  tbody.innerHTML = rows.join('') || '<tr><td colspan="6" style="color:var(--muted)">No purchases recorded yet.</td></tr>';
 }
 async function deletePurchase(id){
   if(!confirm('Move this purchase to the Recycle Bin? Any stock it added will be reversed. You can restore it within 30 days.')) return;
@@ -1232,11 +1237,11 @@ function renderSupplierLedger(supplierId){
 
   const rows = [];
   purchases.forEach(p => (p.items||[]).forEach(li => {
-    rows.push({ date:p.date, type:'purchase', desc:`${li.name} — ${li.qty} ${li.unit} @ ₹${fmtMoney(li.rate)} ${li.priceMode==='excl' ? 'excl. GST' : 'incl. GST'} (${li.gstRate}% GST)`, debit:li.total, credit:0, purchaseId:p.id });
+    rows.push({ date:p.date, type:'purchase', desc:`${li.name} @ ₹${fmtMoney(li.rate)} ${li.priceMode==='excl' ? 'excl. GST' : 'incl. GST'} (${li.gstRate}% GST)`, qty:`${li.qty} ${li.unit}`, debit:li.total, credit:0, purchaseId:p.id });
   }));
   payments.forEach(pay => {
     const label = pay.note ? `Payment (${pay.mode || '—'}) — ${pay.note}` : `Payment (${pay.mode || '—'})`;
-    rows.push({ date:pay.date, type:'payment', desc:label, debit:0, credit:pay.amount, paymentId:pay.id });
+    rows.push({ date:pay.date, type:'payment', desc:label, qty:'', debit:0, credit:pay.amount, paymentId:pay.id });
   });
   rows.sort((a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
 
@@ -1252,12 +1257,13 @@ function renderSupplierLedger(supplierId){
       <td>${esc(r.date)}</td>
       <td><span class="badge">${r.type === 'purchase' ? 'Purchase' : 'Payment'}</span></td>
       <td>${esc(r.desc)}</td>
+      <td>${esc(r.qty)}</td>
       <td>${r.debit ? '₹'+fmtMoney(r.debit) : ''}</td>
       <td>${r.credit ? '₹'+fmtMoney(r.credit) : ''}</td>
       <td>₹${fmtMoney(running)}</td>
       <td class="row-actions">${actions}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No purchases or payments recorded for this supplier yet.</td></tr>';
+  }).join('') || '<tr><td colspan="8" style="color:var(--muted)">No purchases or payments recorded for this supplier yet.</td></tr>';
 
   document.getElementById('ledgerTotalPurchase').textContent = '₹' + fmtMoney(totalPurchase);
   document.getElementById('ledgerTotalPaid').textContent = '₹' + fmtMoney(totalPaid);
@@ -1799,10 +1805,13 @@ function exportRowsToExcel(filename, headers, rows){
   XLSX.writeFile(wb, filename);
 }
 function exportPurchaseHistory(){
-  const rows = purchasesCache
+  const rows = [];
+  purchasesCache
     .filter(p => dateInRange(p.date, 'purchaseHistFrom', 'purchaseHistTo'))
-    .map(p => [p.date, p.supplierName, (p.items||[]).map(li => `${li.name} (${li.qty} ${li.unit})`).join('; '), p.grandTotal||0]);
-  exportRowsToExcel('Purchase-History.xlsx', ['Date','Supplier','Products','Total (incl GST)'], rows);
+    .forEach(p => (p.items||[]).forEach(li => {
+      rows.push([p.date, p.supplierName, li.name, li.qty, li.unit, li.total||0]);
+    }));
+  exportRowsToExcel('Purchase-History.xlsx', ['Date','Supplier','Product','Qty','Unit','Total (incl GST)'], rows);
 }
 function exportPaymentHistory(){
   const rows = paymentsCache
