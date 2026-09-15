@@ -180,9 +180,16 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         <label>Output paper size</label>
         <select id="vlcOutSize" onchange="saveDefaultOutSize(currentPlatform, this.value); showOutSizeSaved()">
           <option value="native">Keep cropped size (recommended)</option>
-          <option value="4x6">Force 4 × 6 in</option>
-          <option value="3x5">Force 3 × 5 in</option>
+          <option value="4x6">Force 4 × 6 in (most common thermal printer)</option>
           <option value="4x4">Force 4 × 4 in</option>
+          <option value="4x3">Force 4 × 3 in</option>
+          <option value="3x5">Force 3 × 5 in</option>
+          <option value="3x4">Force 3 × 4 in</option>
+          <option value="2x4">Force 2 × 4 in</option>
+          <option value="2x3">Force 2 × 3 in</option>
+          <option value="2x1">Force 2 × 1 in</option>
+          <option value="a6">Force A6 (105 × 148 mm)</option>
+          <option value="4x8">Force 4 × 8 in (label + invoice combined)</option>
         </select>
         <p class="vlc-saved-note" id="vlcOutSizeSaved" style="opacity:0;transition:opacity .3s;margin-top:6px">Saved as your default.</p>
       </div>
@@ -193,6 +200,18 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
           <span>Alternating label + invoice pages — add SKU &amp; Qty to each label</span>
         </label>
         <p class="vlc-help" style="margin-top:8px">Amazon's bulk PDF puts each shipping label on an odd page and its matching tax invoice on the next (even) page. With this on, only the label pages are kept in the output, and the SKU (the text in parentheses before "HSN:") plus the Qty from that line item's Qty column are read from the invoice and printed at the bottom of that label — e.g. "SKU: led-clr-55 x2". Orders with more than one product on the invoice print every SKU/Qty pair.</p>
+      </div>
+
+      <div class="vlc-field" id="vlcMeeshoGroupField" style="display:none">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:8px">
+          <input type="checkbox" id="vlcGroupByCourier" checked onchange="onGroupFilterChange()" style="width:auto">
+          <span>Group &amp; sort by courier partner</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="vlcGroupBySku" onchange="onGroupFilterChange()" style="width:auto">
+          <span>Group &amp; sort by SKU code</span>
+        </label>
+        <p class="vlc-help" style="margin-top:8px">Turn on both to sort by courier partner first, then by SKU within each courier — handy for packing SKU-by-SKU within each courier's run. The SKU is read from the "Product Details" block printed on every Meesho label.</p>
       </div>
 
       <button class="vlc-btn accent" id="vlcProcessBtn" onclick="processPdf()" disabled>Crop &amp; download PDF</button>
@@ -292,11 +311,29 @@ const KNOWN_COURIERS = [
   { match:'UPS', name:'UPS' }
 ];
 let pageCouriers = [];    // index -> courier name (0-based, matches PDF page order)
-let courierOrder = [];    // list of courier names in the order to export them
+let pageSkus = [];        // index -> SKU string (0-based, matches PDF page order)
+let pageGroups = [];      // index -> the current grouping key in use (courier, SKU, or "courier — SKU")
+let groupOrder = [];      // list of group keys in the order to export them
+let groupByCourier = true;
+let groupBySku = false;
+
+function extractMeeshoSku(text){
+  // Primary: anchor on the "SKU Size Qty Color Order No." table header printed on
+  // every Meesho label, then take the very next token — that's the SKU value that
+  // follows it in reading order, e.g. "...Order No. VST-WFAT-7-8.5-FA32 Free Size 1 Green...".
+  let m = text.match(/SKU\s*Size\s*Qty\s*Color\s*Order\s*No\.?\s*([A-Za-z0-9][A-Za-z0-9.\-]{2,})/i);
+  if(m) return m[1].trim();
+  // Fallback for label layouts where that exact header anchor doesn't line up:
+  // VISUTRA's own product codes are consistently prefixed "VST-", so pick that
+  // straight out of the page text instead.
+  m = text.match(/\bVST-[A-Za-z0-9.\-]{2,}/i);
+  if(m) return m[0].trim();
+  return 'Unknown SKU';
+}
 
 async function detectCouriers(){
   pageCouriers = [];
-  const counts = {};
+  pageSkus = [];
   for(let i=1;i<=pdfJsDoc.numPages;i++){
     const page = await pdfJsDoc.getPage(i);
     const content = await page.getTextContent();
@@ -307,17 +344,53 @@ async function detectCouriers(){
       if(lower.includes(c.match.toLowerCase())){ found = c.name; break; }
     }
     pageCouriers.push(found);
-    counts[found] = (counts[found]||0) + 1;
+    pageSkus.push(extractMeeshoSku(text));
   }
-  courierOrder = Object.keys(counts).sort((a,b)=> counts[b]-counts[a] || a.localeCompare(b));
-  renderCourierPanel(counts);
+  renderCourierPanel();
 }
 
-function renderCourierPanel(counts){
+function onGroupFilterChange(){
+  groupByCourier = document.getElementById('vlcGroupByCourier').checked;
+  groupBySku = document.getElementById('vlcGroupBySku').checked;
+  renderCourierPanel();
+}
+
+function renderCourierPanel(){
   const panel = document.getElementById('vlcCourierPanel');
   if(currentPlatform !== 'meesho' || !pageCouriers.length){ panel.style.display='none'; panel.innerHTML=''; return; }
-  const total = pageCouriers.length;
-  let rows = courierOrder.map(name=>{
+
+  if(!groupByCourier && !groupBySku){
+    pageGroups = []; groupOrder = [];
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+
+  // Build this page's group key from whichever filter(s) are on. With both on,
+  // the key is "Courier — SKU" so sorting it naturally sorts courier first, SKU second.
+  pageGroups = pageCouriers.map((c, i) => {
+    const s = pageSkus[i];
+    if(groupByCourier && groupBySku) return `${c} — ${s}`;
+    return groupByCourier ? c : s;
+  });
+  const counts = {};
+  pageGroups.forEach(g => { counts[g] = (counts[g]||0) + 1; });
+
+  if(groupByCourier && groupBySku){
+    // Courier first, then SKU within each courier — not just count-sorted.
+    groupOrder = Object.keys(counts).sort((a,b) => {
+      const [ca, sa=''] = a.split(' — ');
+      const [cb, sb=''] = b.split(' — ');
+      return ca.localeCompare(cb) || sa.localeCompare(sb);
+    });
+  } else {
+    groupOrder = Object.keys(counts).sort((a,b) => counts[b]-counts[a] || a.localeCompare(b));
+  }
+
+  const total = pageGroups.length;
+  const heading = groupByCourier && groupBySku ? 'Orders by courier partner, then SKU'
+    : groupByCourier ? 'Orders by courier partner' : 'Orders by SKU';
+  let rows = groupOrder.map(name=>{
     return `<div class="vlc-courier-row">
       <span class="vlc-courier-name">${escapeHtml(name)}</span>
       <span class="vlc-courier-count">${counts[name]} order${counts[name]===1?'':'s'}</span>
@@ -325,7 +398,7 @@ function renderCourierPanel(counts){
     </div>`;
   }).join('');
   panel.innerHTML = `<div class="vlc-courier-panel">
-    <h4>Orders by courier partner</h4>
+    <h4>${escapeHtml(heading)}</h4>
     ${rows}
     <div class="vlc-courier-total"><span>Total</span><span>${total} order${total===1?'':'s'}</span></div>
   </div>`;
@@ -417,13 +490,14 @@ document.getElementById('vlcPlatforms').addEventListener('click', e=>{
   currentPlatform = btn.dataset.p;
   applyPreset(currentPlatform);
   document.getElementById('vlcAmazonSkuField').style.display = currentPlatform === 'amazon' ? 'block' : 'none';
+  document.getElementById('vlcMeeshoGroupField').style.display = currentPlatform === 'meesho' ? 'block' : 'none';
   updateAmazonSkuUiState();
   if(currentPlatform === 'meesho' && pdfJsDoc && !pageCouriers.length){
     detectCouriers();
   } else if(currentPlatform !== 'meesho'){
     document.getElementById('vlcCourierPanel').style.display = 'none';
   } else {
-    renderCourierPanel(pageCouriers.reduce((acc,c)=>{ acc[c]=(acc[c]||0)+1; return acc; }, {}));
+    renderCourierPanel();
   }
   if(currentPlatform === 'amazon' && pdfJsDoc && document.getElementById('vlcAmazonSkuMode').checked && !Object.keys(amazonSkuByLabelIndex).length){
     detectAmazonSkus();
@@ -501,7 +575,7 @@ async function handleFile(file){
   document.getElementById('vlcFilename').textContent = file.name;
   pdfBytes = new Uint8Array(await file.arrayBuffer());
   document.getElementById('vlcProcessBtn').disabled = false;
-  pageCouriers = []; courierOrder = [];
+  pageCouriers = []; pageSkus = []; pageGroups = []; groupOrder = [];
   amazonSkuByLabelIndex = {};
   document.getElementById('vlcCourierPanel').style.display = 'none';
   await renderPreview();
@@ -589,7 +663,14 @@ const { PDFDocument } = PDFLib;
 const OUT_SIZES = {
   '4x6': [288, 432],
   '3x5': [216, 360],
-  '4x4': [288, 288]
+  '4x4': [288, 288],
+  '4x3': [288, 216],
+  '3x4': [216, 288],
+  '2x4': [144, 288],
+  '2x3': [144, 216],
+  '2x1': [144, 72],
+  'a6': [298, 420],
+  '4x8': [288, 576]
 };
 
 async function processPdf(courierFilter){
@@ -609,17 +690,18 @@ async function processPdf(courierFilter){
     const amazonSkuMode = currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode').checked;
     const skuFont = amazonSkuMode ? await outDoc.embedFont(PDFLib.StandardFonts.Helvetica) : null;
 
-    // Meesho: process pages grouped by courier partner (or filtered to just one
-    // courier when exporting a single partner's batch) instead of file order.
+    // Meesho: process pages grouped by the active filter(s) — courier partner,
+    // SKU, or both (courier first, then SKU) — or filtered to just one group
+    // when exporting a single row's batch from the panel.
     let pageIndexOrder = embedded.map((_, i) => i);
-    if(currentPlatform === 'meesho' && pageCouriers.length === embedded.length){
+    if(currentPlatform === 'meesho' && pageGroups.length === embedded.length && groupOrder.length){
       if(courierFilter){
-        pageIndexOrder = pageIndexOrder.filter(i => pageCouriers[i] === courierFilter);
+        pageIndexOrder = pageIndexOrder.filter(i => pageGroups[i] === courierFilter);
       } else {
         pageIndexOrder = pageIndexOrder.slice().sort((a,b)=>{
-          const ca = courierOrder.indexOf(pageCouriers[a]);
-          const cb = courierOrder.indexOf(pageCouriers[b]);
-          return ca - cb || a - b;
+          const ga = groupOrder.indexOf(pageGroups[a]);
+          const gb = groupOrder.indexOf(pageGroups[b]);
+          return ga - gb || a - b;
         });
       }
     }
