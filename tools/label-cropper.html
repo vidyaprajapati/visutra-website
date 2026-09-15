@@ -212,6 +212,11 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
           <span>Group &amp; sort by SKU code</span>
         </label>
         <p class="vlc-help" style="margin-top:8px">Turn on both to sort by courier partner first, then by SKU within each courier — handy for packing SKU-by-SKU within each courier's run. The SKU is read from the "Product Details" block printed on every Meesho label.</p>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
+          <input type="checkbox" id="vlcMeeshoSkuStampMode" style="width:auto">
+          <span>Also print SKU &amp; Qty in larger text at the bottom of each label</span>
+        </label>
+        <p class="vlc-help" style="margin-top:8px">Meesho prints the SKU in very small text in the Product Details block. With this on, the same SKU and Qty are read off that block and reprinted in bigger, clearer text at the bottom of the cropped label — e.g. "SKU: VST-WFAT-7-8.5-FA32 x1".</p>
       </div>
 
       <button class="vlc-btn accent" id="vlcProcessBtn" onclick="processPdf()" disabled>Crop &amp; download PDF</button>
@@ -312,28 +317,31 @@ const KNOWN_COURIERS = [
 ];
 let pageCouriers = [];    // index -> courier name (0-based, matches PDF page order)
 let pageSkus = [];        // index -> SKU string (0-based, matches PDF page order)
+let pageQtys = [];        // index -> quantity (0-based, matches PDF page order)
 let pageGroups = [];      // index -> the current grouping key in use (courier, SKU, or "courier — SKU")
 let groupOrder = [];      // list of group keys in the order to export them
 let groupByCourier = true;
 let groupBySku = false;
 
-function extractMeeshoSku(text){
+function extractMeeshoSkuQty(text){
   // Primary: anchor on the "SKU Size Qty Color Order No." table header printed on
-  // every Meesho label, then take the very next token — that's the SKU value that
-  // follows it in reading order, e.g. "...Order No. VST-WFAT-7-8.5-FA32 Free Size 1 Green...".
-  let m = text.match(/SKU\s*Size\s*Qty\s*Color\s*Order\s*No\.?\s*([A-Za-z0-9][A-Za-z0-9.\-]{2,})/i);
-  if(m) return m[1].trim();
-  // Fallback for label layouts where that exact header anchor doesn't line up:
+  // every Meesho label, then read off SKU, Size (kept but unused), Qty, Color and
+  // Order No. in that column order — e.g. "...Order No. VST-WFAT-7-8.5-FA32 Free
+  // Size 1 Green 330416486719326400_1" -> sku=VST-WFAT-7-8.5-FA32, qty=1.
+  let m = text.match(/SKU\s*Size\s*Qty\s*Color\s*Order\s*No\.?\s*([A-Za-z0-9][A-Za-z0-9.\-]*)\s+(.+?)\s+(\d+)\s+(\S+)\s+(\d{6,}_\d+)/i);
+  if(m) return { sku: m[1].trim(), qty: parseInt(m[3],10) || 1 };
+  // Fallback for label layouts where that exact header/row shape doesn't line up:
   // VISUTRA's own product codes are consistently prefixed "VST-", so pick that
-  // straight out of the page text instead.
+  // straight out of the page text (quantity defaults to 1 in this fallback).
   m = text.match(/\bVST-[A-Za-z0-9.\-]{2,}/i);
-  if(m) return m[0].trim();
-  return 'Unknown SKU';
+  if(m) return { sku: m[0].trim(), qty: 1 };
+  return { sku: 'Unknown SKU', qty: 1 };
 }
 
 async function detectCouriers(){
   pageCouriers = [];
   pageSkus = [];
+  pageQtys = [];
   for(let i=1;i<=pdfJsDoc.numPages;i++){
     const page = await pdfJsDoc.getPage(i);
     const content = await page.getTextContent();
@@ -344,7 +352,9 @@ async function detectCouriers(){
       if(lower.includes(c.match.toLowerCase())){ found = c.name; break; }
     }
     pageCouriers.push(found);
-    pageSkus.push(extractMeeshoSku(text));
+    const skuQty = extractMeeshoSkuQty(text);
+    pageSkus.push(skuQty.sku);
+    pageQtys.push(skuQty.qty);
   }
   renderCourierPanel();
 }
@@ -575,7 +585,7 @@ async function handleFile(file){
   document.getElementById('vlcFilename').textContent = file.name;
   pdfBytes = new Uint8Array(await file.arrayBuffer());
   document.getElementById('vlcProcessBtn').disabled = false;
-  pageCouriers = []; pageSkus = []; pageGroups = []; groupOrder = [];
+  pageCouriers = []; pageSkus = []; pageQtys = []; pageGroups = []; groupOrder = [];
   amazonSkuByLabelIndex = {};
   document.getElementById('vlcCourierPanel').style.display = 'none';
   await renderPreview();
@@ -688,7 +698,8 @@ async function processPdf(courierFilter){
     const v = getCropValues();
     const outSizeKey = document.getElementById('vlcOutSize').value;
     const amazonSkuMode = currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode').checked;
-    const skuFont = amazonSkuMode ? await outDoc.embedFont(PDFLib.StandardFonts.Helvetica) : null;
+    const meeshoSkuStampMode = currentPlatform === 'meesho' && document.getElementById('vlcMeeshoSkuStampMode') && document.getElementById('vlcMeeshoSkuStampMode').checked;
+    const skuFont = (amazonSkuMode || meeshoSkuStampMode) ? await outDoc.embedFont(PDFLib.StandardFonts.Helvetica) : null;
 
     // Meesho: process pages grouped by the active filter(s) — courier partner,
     // SKU, or both (courier first, then SKU) — or filtered to just one group
@@ -767,6 +778,18 @@ async function processPdf(courierFilter){
               x, y: 6, size: fontSize, font: skuFont, color: PDFLib.rgb(0,0,0)
             });
           }
+        }
+        if(meeshoSkuStampMode && pageSkus[i] && pageSkus[i] !== 'Unknown SKU'){
+          // Meesho already prints the SKU on the label, but in very small text —
+          // this reprints the same SKU + Qty bigger and bolder at the bottom so
+          // it's legible at a glance while packing.
+          const label = `SKU: ${pageSkus[i]} x${pageQtys[i] || 1}`;
+          const fontSize = Math.max(9, Math.min(13, pageH * 0.028));
+          const textWidth = skuFont.widthOfTextAtSize(label, fontSize);
+          const x = Math.max(4, (pageW - textWidth) / 2);
+          newPage.drawText(label, {
+            x, y: 6, size: fontSize, font: skuFont, color: PDFLib.rgb(0,0,0)
+          });
         }
       }
     }
