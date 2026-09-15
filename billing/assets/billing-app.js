@@ -879,7 +879,12 @@ async function savePurchase(){
   const totals = recalcPurchaseTotals();
   const items = validItems.map(li => {
     const { taxable, gstAmt, total } = purchaseLineCalc(li);
-    return { ...li, taxable, gstAmt, total };
+    // Snapshot which billing product this restocks AT THE TIME OF PURCHASE.
+    // If the Purchase Product's link is later changed or removed, this old
+    // purchase must still reverse/reapply stock against the SAME product it
+    // originally affected — not whatever the link happens to be now.
+    const purchaseProduct = purchaseProductsCache.find(p => p.id === li.productId);
+    return { ...li, taxable, gstAmt, total, linkedProductId: (purchaseProduct && purchaseProduct.linkedProductId) || null };
   });
 
   if(editId){
@@ -898,9 +903,8 @@ async function savePurchase(){
       createdAt: (original && original.createdAt) || firebase.firestore.FieldValue.serverTimestamp()
     });
     for(const li of items){
-      const purchaseProduct = purchaseProductsCache.find(p => p.id === li.productId);
-      if(purchaseProduct && purchaseProduct.linkedProductId){
-        await addStockMovement('purchase-in', purchaseProduct.linkedProductId, li.qty, dateVal, `Purchase from ${supplier.name} (edited)`);
+      if(li.linkedProductId){
+        await addStockMovement('purchase-in', li.linkedProductId, li.qty, dateVal, `Purchase from ${supplier.name} (edited)`);
       }
     }
     await loadProducts();
@@ -934,9 +938,8 @@ async function savePurchase(){
   // Product automatically adds the purchased quantity to that product's stock.
   let stockedItems = 0;
   for(const li of items){
-    const purchaseProduct = purchaseProductsCache.find(p => p.id === li.productId);
-    if(purchaseProduct && purchaseProduct.linkedProductId){
-      await addStockMovement('purchase-in', purchaseProduct.linkedProductId, li.qty, dateVal, `Purchase from ${supplier.name}`);
+    if(li.linkedProductId){
+      await addStockMovement('purchase-in', li.linkedProductId, li.qty, dateVal, `Purchase from ${supplier.name}`);
       stockedItems++;
     }
   }
@@ -1003,9 +1006,8 @@ async function deletePurchase(id){
    new one re-applied with the edited quantities). */
 async function reverseStockForPurchaseItems(items, date, note){
   for(const li of items){
-    const purchaseProduct = purchaseProductsCache.find(p => p.id === li.productId);
-    if(purchaseProduct && purchaseProduct.linkedProductId){
-      await addStockMovement('adjustment', purchaseProduct.linkedProductId, -li.qty, date, note);
+    if(li.linkedProductId){
+      await addStockMovement('adjustment', li.linkedProductId, -li.qty, date, note);
     }
   }
 }
@@ -1074,9 +1076,8 @@ async function restorePurchase(id){
   await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).update({ deleted: false, deletedAt: null });
   // Re-apply the stock-in effect that was reversed when this was deleted.
   for(const li of (purchase.items || [])){
-    const purchaseProduct = purchaseProductsCache.find(p => p.id === li.productId);
-    if(purchaseProduct && purchaseProduct.linkedProductId){
-      await addStockMovement('purchase-in', purchaseProduct.linkedProductId, li.qty, new Date().toISOString().slice(0,10), `Restored purchase dated ${purchase.date}`);
+    if(li.linkedProductId){
+      await addStockMovement('purchase-in', li.linkedProductId, li.qty, new Date().toISOString().slice(0,10), `Restored purchase dated ${purchase.date}`);
     }
   }
   await loadProducts();
