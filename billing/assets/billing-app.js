@@ -14,74 +14,6 @@ let skuMappingsCache = [];
 let stockUploadSheets = []; // {fileName, sheetName, headers, rows} — rows is an array of arrays, header row excluded
 let stockAggregation = []; // {rawKey, displayKey, totalQty} built from stockUploadSheets after column mapping
 
-// Firestore real-time listeners. Saved data should appear/update automatically;
-// the user should never need a Refresh button just to see their saved data.
-const realtimeUnsubs = {};
-function stopRealtime(key){
-  if(realtimeUnsubs[key]){ try{realtimeUnsubs[key]();}catch(e){} delete realtimeUnsubs[key]; }
-}
-
-// Reliable real-time collection loader.
-// IMPORTANT: wait for the initial snapshot from ALL candidate collections before
-// selecting one. The previous implementation could render an empty legacy
-// collection first and leave the UI apparently blank until a later write.
-function listenUserCollectionCandidates(key, candidates, onDocs, onError){
-  stopRealtime(key);
-  if(!currentUser || !currentUser.uid) return Promise.reject(new Error('User authentication is not ready.'));
-
-  const base = db.collection('users').doc(currentUser.uid);
-  const states = candidates.map(name => ({name, docs:null, error:null, unsub:null}));
-  let finished = false;
-  let resolveReady;
-  const readyPromise = new Promise(resolve => { resolveReady = resolve; });
-
-  const renderChosen = () => {
-    // Prefer a collection that actually contains documents. If several contain
-    // data, use the first candidate (the canonical name) consistently.
-    const chosen = states.find(x => Array.isArray(x.docs) && x.docs.length > 0)
-                || states.find(x => Array.isArray(x.docs) && !x.error)
-                || states[0];
-    if(!chosen) return;
-    try { onDocs(chosen.docs || [], chosen.name); }
-    catch(e){ console.error('Realtime render failed:', e); }
-  };
-
-  const checkInitial = () => {
-    if(finished) return;
-    if(states.every(x => x.docs !== null || x.error)){
-      finished = true;
-      renderChosen();
-      resolveReady();
-    }
-  };
-
-  states.forEach(state => {
-    state.unsub = base.collection(state.name).onSnapshot(snap => {
-      state.docs = snap.docs;
-      state.error = null;
-      checkInitial();
-      // After initial selection, only the selected collection should drive the
-      // UI. This also handles real-time additions/edits/deletes.
-      if(finished){
-        const anyData = states.find(x => Array.isArray(x.docs) && x.docs.length > 0);
-        if(anyData === state) renderChosen();
-      }
-    }, err => {
-      state.error = err;
-      state.docs = [];
-      if(onError) onError(err, state.name);
-      checkInitial();
-    });
-  });
-
-  realtimeUnsubs[key] = () => states.forEach(x => { try{ if(x.unsub) x.unsub(); }catch(e){} });
-  return readyPromise;
-}
-
-function listenUserCollection(key, name, onDocs, onError){
-  return listenUserCollectionCandidates(key,[name],onDocs,onError);
-}
-
 /* ---------------- Auth guard ---------------- */
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -106,12 +38,13 @@ auth.onAuthStateChanged(async user => {
   onFilingTypeChange();
   initSignaturePad();
   await loadProfile();
-  // Load every master independently. One unavailable/legacy collection must
-  // never stop the remaining tables from rendering.
-  await Promise.allSettled([
-    loadProducts(), loadCustomers(), loadSuppliers(), loadPurchaseProducts(),
-    loadPayments(), loadSkuMappings(), loadStockMovements()
-  ]);
+  await loadProducts();
+  await loadCustomers();
+  await loadSuppliers();
+  await loadPurchaseProducts();
+  await loadPayments();
+  await loadSkuMappings();
+  await loadStockMovements();
   addLineItem();
   addPurchaseLineItem();
   loadInvoices();
@@ -289,40 +222,13 @@ async function saveSignature(){
 }
 
 /* ---------------- Products ---------------- */
-async function readUserCollection(candidates){
-  // Read the first available collection that contains documents. This keeps
-  // the app compatible with data created by older VISUTRA versions where the
-  // master collection names were slightly different.
-  const base = db.collection('users').doc(currentUser.uid);
-  let lastError = null;
-  for (const name of candidates) {
-    try {
-      const snap = await base.collection(name).get();
-      if (!snap.empty) return {name, snap};
-      // Remember an empty collection but keep checking legacy names.
-      if (!lastError) lastError = null;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  if (lastError) throw lastError;
-  return {name:candidates[0], snap:{empty:true, docs:[]}};
-}
-
-function normaliseProductDoc(d){
-  const x={id:d.id,...d.data()};
-  const name=x.name || x.productName || x.product || x.title || x.description || '';
-  return {...x,name:String(name).trim(),hsn:x.hsn || x.hsnCode || x.hsnSac || '',unit:x.unit || x.uom || 'PCS'};
-}
 async function loadProducts(){
-  await listenUserCollectionCandidates('products',['products','productMaster','productMasters'],docs=>{
-    productsCache=docs.map(d=>normaliseProductDoc(d)).filter(p=>p.name).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
-    renderProducts(); renderProductDropdowns(); renderStockDropdowns(); renderStockTable();
-    if(document.getElementById('productMsg')) document.getElementById('productMsg').textContent='';
-  },err=>{
-    console.error('Product Master realtime load failed:',err);
-    if(document.getElementById('productMsg')) showMsg('productMsg','Unable to load Product Master: '+(err.code||err.message||err),false);
-  });
+  const snap = await db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get();
+  productsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderProducts();
+  renderProductDropdowns();
+  renderStockDropdowns();
+  renderStockTable();
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => `
@@ -359,6 +265,7 @@ async function saveProduct(){
   ['pName','pHsn','pUnit','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
   showMsg('productMsg', 'Saved.', true);
+  loadProducts();
 }
 function editProduct(id){
   const p = productsCache.find(x => x.id === id);
@@ -374,7 +281,7 @@ function editProduct(id){
 async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
   await db.collection('users').doc(currentUser.uid).collection('products').doc(id).delete();
-  await loadProducts();
+  loadProducts();
 }
 
 /* ---------------- Stock Management ---------------- */
@@ -424,12 +331,11 @@ async function loadSkuMappings(){
   skuMappingsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
 }
 async function loadStockMovements(){
-  await listenUserCollection('stockMovements','stockMovements',docs=>{
-    stockMovementsCache=docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>((b.createdAt?.seconds||0)-(a.createdAt?.seconds||0))).slice(0,200);
-    renderStockMovementsTable();
-  },err=>console.error('Stock movement realtime load failed:',err));
+  const snap = await db.collection('users').doc(currentUser.uid).collection('stockMovements').orderBy('createdAt','desc').limit(200).get();
+  stockMovementsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderStockMovementsTable();
 }
-/* Shared by purchase stock-in stock-in and manual adjustment: bumps a product's stock
+/* Shared by purchase stock-in and manual adjustment: bumps a product's stock
    by qty (can be negative) and logs the movement for the history table. */
 async function addStockMovement(type, productId, qty, date, note){
   const product = productsCache.find(p => p.id === productId);
@@ -586,19 +492,11 @@ async function applyStockUpload(){
 }
 
 /* ---------------- Customers ---------------- */
-function normaliseCustomerDoc(d){
-  const x={id:d.id,...d.data()};
-  return {...x,name:String(x.name||x.customerName||x.businessName||x.customer||x.title||'').trim()};
-}
 async function loadCustomers(){
-  await listenUserCollectionCandidates('customers',['customers','customerMaster','customerMasters'],docs=>{
-    customersCache=docs.map(normaliseCustomerDoc).filter(c=>c.name).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
-    renderCustomers(); renderCustomerDropdown();
-    if(document.getElementById('customerMsg')) document.getElementById('customerMsg').textContent='';
-  },err=>{
-    console.error('Customer Master realtime load failed:',err);
-    if(document.getElementById('customerMsg')) showMsg('customerMsg','Unable to load Customer Master: '+(err.code||err.message||err),false);
-  });
+  const snap = await db.collection('users').doc(currentUser.uid).collection('customers').orderBy('name').get();
+  customersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderCustomers();
+  renderCustomerDropdown();
 }
 function renderCustomers(){
   document.getElementById('customersTable').innerHTML = customersCache.map(c => `
@@ -626,6 +524,7 @@ async function saveCustomer(){
   ['cName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('cState').value = '';
   showMsg('customerMsg', 'Saved.', true);
+  loadCustomers();
 }
 function editCustomer(id){
   const c = customersCache.find(x => x.id === id);
@@ -640,6 +539,7 @@ function editCustomer(id){
 async function deleteCustomer(id){
   if(!confirm('Delete this customer?')) return;
   await db.collection('users').doc(currentUser.uid).collection('customers').doc(id).delete();
+  loadCustomers();
 }
 function renderCustomerDropdown(){
   const sel = document.getElementById('invCustomer');
@@ -648,15 +548,12 @@ function renderCustomerDropdown(){
 }
 
 /* ---------------- Suppliers (purchase side, separate master from Customers) ---------------- */
-function normaliseSupplierDoc(d){
-  const x={id:d.id,...d.data()};
-  return {...x,name:String(x.name||x.businessName||x.supplierName||x.supplier||x.title||'').trim()};
-}
 async function loadSuppliers(){
-  await listenUserCollectionCandidates('suppliers',['suppliers','supplierMaster','supplierMasters'],docs=>{
-    suppliersCache=docs.map(normaliseSupplierDoc).filter(x=>x.name).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
-    renderSuppliers(); renderSupplierDropdown(); renderPayablesOverview();
-  },err=>console.error('Supplier Master realtime load failed:',err));
+  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  suppliersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderSuppliers();
+  renderSupplierDropdown();
+  renderPayablesOverview();
 }
 function renderSuppliers(){
   document.getElementById('suppliersTable').innerHTML = suppliersCache.map(s => `
@@ -685,6 +582,7 @@ async function saveSupplier(){
   ['sName','sGstin','sAddress','sEmail','sPhone','sEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('sState').value = '';
   showMsg('supplierMsg', 'Saved.', true);
+  loadSuppliers();
 }
 function editSupplier(id){
   const s = suppliersCache.find(x => x.id === id);
@@ -713,15 +611,11 @@ function renderSupplierDropdown(){
 }
 
 /* ---------------- Purchase Product Master (separate from the GST billing Products list — purchase price differs from selling price) ---------------- */
-function normalisePurchaseProductDoc(d){
-  const x={id:d.id,...d.data()};
-  return {...x,name:String(x.name||x.productName||x.product||x.title||'').trim(),unit:x.unit||x.uom||'PCS'};
-}
 async function loadPurchaseProducts(){
-  await listenUserCollectionCandidates('purchaseProducts',['purchaseProducts','purchaseProductMaster','purchaseProductMasters'],docs=>{
-    purchaseProductsCache=docs.map(normalisePurchaseProductDoc).filter(x=>x.name).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
-    renderPurchaseProducts(); renderPurchaseProductDropdowns();
-  },err=>console.error('Purchase Product Master realtime load failed:',err));
+  const snap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').orderBy('name').get();
+  purchaseProductsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderPurchaseProducts();
+  renderPurchaseProductDropdowns();
 }
 function renderPurchaseProducts(){
   document.getElementById('purchaseProductsTable').innerHTML = purchaseProductsCache.map(p => {
@@ -746,6 +640,7 @@ async function savePurchaseProduct(){
   ['ppName','ppUnit','ppEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('ppLinkedProduct').value = '';
   showMsg('purchaseProductMsg', 'Saved.', true);
+  loadPurchaseProducts();
 }
 function editPurchaseProduct(id){
   const p = purchaseProductsCache.find(x => x.id === id);
@@ -1079,11 +974,11 @@ async function savePurchase(){
   await loadPurchases();
 }
 async function loadPurchases(){
-  await listenUserCollection('purchases','purchases',docs=>{
-    purchasesCache=docs.map(d=>({id:d.id,...d.data()})).filter(p=>!p.deleted)
-      .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || ((b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)));
-    renderPurchases(); recalcPurchaseTotals(); refreshOpenDashboard();
-  },err=>{ console.error('Purchase data realtime load failed:',err); const el=document.getElementById('purchaseMsg'); if(el) showMsg('purchaseMsg','Unable to load purchase data: '+(err.code||err.message||err),false); });
+  const snap = await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').get();
+  purchasesCache = snap.docs.map(d => ({id:d.id, ...d.data()})).filter(p => !p.deleted);
+  renderPurchases();
+  recalcPurchaseTotals();
+  refreshOpenDashboard();
 }
 function renderPurchases(){
   const tbody = document.getElementById('purchasesTable');
@@ -1112,7 +1007,9 @@ async function deletePurchase(id){
   await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).update({
     deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
   });
+  await loadProducts();
   await loadStockMovements();
+  loadPurchases();
 }
 /* Undoes the stock-in effect of a purchase's line items — used when a
    purchase is deleted, and when it's edited (old effect reversed, then the
@@ -1234,17 +1131,17 @@ function cancelEditPurchase(){
 
 /* ---------------- Payments made to suppliers ---------------- */
 async function loadPayments(){
-  await listenUserCollection('payments','payments',docs=>{
-    paymentsCache=docs.map(d=>({id:d.id,...d.data()})).filter(p=>!p.deleted)
-      .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
-    refreshOpenDashboard(); renderPaymentsTable();
-  },err=>console.error('Payments realtime load failed:',err));
+  const snap = await db.collection('users').doc(currentUser.uid).collection('payments').orderBy('date','desc').get();
+  paymentsCache = snap.docs.map(d => ({id:d.id, ...d.data()})).filter(p => !p.deleted);
+  refreshOpenDashboard();
+  renderPaymentsTable();
 }
 async function deletePayment(id){
   if(!confirm('Move this payment to the Recycle Bin? You can restore it within 30 days.')) return;
   await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).update({
     deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
   });
+  await loadPayments();
   if(currentLedgerSupplierId) renderSupplierLedger(currentLedgerSupplierId);
 }
 function editPayment(id){
@@ -1278,6 +1175,7 @@ async function saveEditedPayment(){
     createdAt: existing.createdAt || firebase.firestore.FieldValue.serverTimestamp()
   });
   closeEditPaymentModal();
+  await loadPayments();
   if(currentLedgerSupplierId) renderSupplierLedger(currentLedgerSupplierId);
 }
 
@@ -1683,15 +1581,27 @@ async function sendInvoiceEmail(inv, invoiceId){
 /* ---------------- Invoice history ---------------- */
 let invoicesCache = {};
 async function loadInvoices(){
-  await listenUserCollection('invoices','invoices',docs=>{
-    const ordered=[...docs].sort((a,b)=>((b.data().createdAt?.seconds||0)-(a.data().createdAt?.seconds||0)) || String(b.data().date||'').localeCompare(String(a.data().date||''))).slice(0,100);
-    invoicesCache={}; ordered.forEach(d=>{invoicesCache[d.id]=d.data();});
-    const rows=[];
-    ordered.filter(d=>dateInRange(d.data().date||'', 'invoiceHistFrom', 'invoiceHistTo')).forEach(d=>{
-      const inv=d.data(); const items=(inv.items||[]).filter(li=>li.productId); (items.length?items:[{name:'—',qty:'',unit:''}]).forEach(li=>rows.push(`<tr><td>${esc(inv.invoiceNo||'')}</td><td>${esc(inv.date||'')}</td><td>${esc(inv.customer?.name||'')}</td><td>${esc(li.name||'')}</td><td>${li.qty||''} ${esc(li.unit||'')}</td><td>₹${fmtMoney(inv.grandTotal||0)}</td><td><span class="badge">${inv.emailSent?'Sent':'Not sent'}</span></td><td class="row-actions"><button class="btn small" onclick="redownloadInvoicePdf('${d.id}')">Download PDF</button><a class="btn small" href="invoice-view.html?id=${d.id}" target="_blank">View</a></td></tr>`));
+  const snap = await db.collection('users').doc(currentUser.uid).collection('invoices').orderBy('createdAt','desc').limit(100).get();
+  invoicesCache = {};
+  snap.docs.forEach(d => { invoicesCache[d.id] = d.data(); });
+  const rows = [];
+  snap.docs.filter(d => dateInRange(d.data().date||'', 'invoiceHistFrom', 'invoiceHistTo')).forEach(d => {
+    const inv = d.data();
+    const items = (inv.items||[]).filter(li => li.productId);
+    (items.length ? items : [{name:'—', qty:'', unit:''}]).forEach(li => {
+      rows.push(`<tr>
+        <td>${esc(inv.invoiceNo||'')}</td><td>${esc(inv.date||'')}</td><td>${esc(inv.customer?.name||'')}</td>
+        <td>${esc(li.name||'')}</td><td>${li.qty||''} ${esc(li.unit||'')}</td>
+        <td>₹${fmtMoney(inv.grandTotal||0)}</td>
+        <td><span class="badge">${inv.emailSent ? 'Sent' : 'Not sent'}</span></td>
+        <td class="row-actions">
+          <button class="btn small" onclick="redownloadInvoicePdf('${d.id}')">Download PDF</button>
+          <a class="btn small" href="invoice-view.html?id=${d.id}" target="_blank">View</a>
+        </td>
+      </tr>`);
     });
-    const el=document.getElementById('invoicesTable'); if(el) el.innerHTML=rows.join('') || '<tr><td colspan="8" style="color:var(--muted)">No invoices yet.</td></tr>';
-  },err=>console.error('Invoice history realtime load failed:',err));
+  });
+  document.getElementById('invoicesTable').innerHTML = rows.join('') || '<tr><td colspan="8" style="color:var(--muted)">No invoices yet.</td></tr>';
 }
 
 // PDFs are never stored as files anywhere — every download is generated fresh,
