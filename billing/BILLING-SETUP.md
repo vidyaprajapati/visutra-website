@@ -89,6 +89,43 @@ service cloud.firestore {
       allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 
+    // A single marketplace order between a linked buyer and seller. Item
+    // prices/GST are deliberately NOT trusted from this document at all —
+    // the seller's own client re-reads its Product Master fresh inside a
+    // Firestore transaction when accepting (see order-receive.html), so
+    // nothing written here by the buyer ever reaches an invoice unchecked.
+    match /marketplaceOrders/{orderId} {
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.buyerUid || request.auth.uid == resource.data.sellerUid);
+
+      // Only a buyer with an ACTIVE link to that seller can create an order,
+      // and only in PENDING status (a fresh order, not pre-accepted).
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.buyerUid &&
+        request.resource.data.status == 'PENDING' &&
+        exists(/databases/$(database)/documents/sellerLinks/$(request.resource.data.sellerUid + '_' + request.auth.uid)) &&
+        get(/databases/$(database)/documents/sellerLinks/$(request.resource.data.sellerUid + '_' + request.auth.uid)).data.status == 'ACTIVE';
+
+      allow update: if request.auth != null && (
+        // The seller accepting or rejecting a still-PENDING order. This is
+        // also what makes double-accept impossible: a transaction's write
+        // only commits if resource.data.status is still 'PENDING' at commit
+        // time, so a second, near-simultaneous Accept click always loses.
+        (request.auth.uid == resource.data.sellerUid &&
+         resource.data.status == 'PENDING' &&
+         request.resource.data.status in ['ACCEPTED', 'REJECTED']) ||
+        // The buyer recording that their own Purchase Entry record has been
+        // created for this (already-accepted) order — exactly once, and
+        // touching only these two fields, so a buyer can never rewrite
+        // anything a seller's acceptance produced.
+        (request.auth.uid == resource.data.buyerUid &&
+         resource.data.status == 'ACCEPTED' &&
+         !('buyerPurchaseId' in resource.data) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['buyerPurchaseId', 'buyerPurchaseCreatedAt']))
+      );
+      allow delete: if false;
+    }
+
     match /public_invoices/{invoiceId} {
       allow read: if true;
       allow create, update: if request.auth != null;
@@ -125,7 +162,7 @@ service cloud.firestore {
 
 4. Click **Publish**.
 
-**If you're updating rules on a project that's already live** (not a fresh setup): this block now also includes rules for `sellerLinks` and `buyerDirectory` (new, from the Buyer/Seller linking feature — see below) plus `orders` (from the existing "Order to Supplier" feature, which was missing from this doc even though it was already live — this replacement also fixes that drift). Paste the whole block above over whatever is currently in your Rules tab; nothing here removes access your existing data relies on.
+**If you're updating rules on a project that's already live** (not a fresh setup): this block now also includes rules for `sellerLinks` and `buyerDirectory` (from the Buyer/Seller linking feature), `marketplaceOrders` (from the order-flow feature below), and `orders` (from the existing "Order to Supplier" feature, which was missing from this doc even though it was already live — this replacement also fixes that drift). Paste the whole block above over whatever is currently in your Rules tab; nothing here removes access your existing data relies on.
 
 **No Storage needed.** Earlier versions of this guide had you also enable Firebase Storage to hold the generated invoice PDFs. That's been removed: Google now requires the paid "Blaze" plan just to turn Storage on at all, even at zero usage — which conflicts with keeping this whole setup free. Instead, PDFs are generated fresh on the spot every time someone needs one (the business owner re-downloading from Invoice History, or a buyer clicking "Download PDF" on their emailed link) directly from the invoice data already sitting in Firestore. Nothing is ever uploaded as a file, so there's nothing to pay for.
 
@@ -240,6 +277,20 @@ switches on automatically the moment real config values are in place.
 - The page also has an **Unmapped SKUs** queue: paste in a marketplace SKU you've noticed that isn't defined yet (for now this is a manual "Report" button — nothing parses labels or marketplace orders automatically yet), and it sits in the queue with an occurrence count until you click **Define SKU** and pick the seller + product it belongs to. Defining it once resolves every prior occurrence.
 - No Firestore rules changes were needed for this — `buyerSkuMappings` and `unmappedSkus` are subcollections under the buyer's own `users/{uid}`, which the existing owner-only rule already covers (Part 64 of the spec — "buyer A cannot read buyer B's SKU mappings" — is automatically true here, not something added on top).
 - **Not built yet:** automatic SKU detection from an uploaded label/PDF/barcode, and the two order-placement flows (Product Select Order / Label-Based Auto Order) that would consume this SKU Master — those come with the order-flow phase.
+
+### Order flow: Place Order → Accept → Invoice + Inventory (new)
+
+This is the "Product Select Order" flow — a buyer picks straight from a linked seller's catalog (no SKU mapping required for this path; that's only needed for the not-yet-built Label-Based Auto Order). New pages: `billing/buyer/place-order.html`, `billing/buyer/my-orders.html`, `billing/seller/order-receive.html`. New collection: `marketplaceOrders` — deliberately separate from the existing top-level `orders` collection (the "Order to Supplier" feature), because that one has no product catalog, no acceptance step, and no invoice/inventory automation; it's a different, simpler thing doing a different job, not a duplicate of this one.
+
+- **Buyer places an order**: picks a linked seller, adds catalog items + quantities, submits. The buyer's own Business Profile (name/GSTIN/address/state) is snapshotted onto the order at this point — same pattern the existing "Order to Supplier" feature already uses — so the seller never needs read access into the buyer's private account to invoice them later.
+- **Seller accepts or rejects** from Order Receive. **Accepting runs a single Firestore transaction** that: re-reads each product's current price/GST/HSN/stock directly from the seller's own Product Master (never trusting anything the buyer's order carried), checks stock is sufficient for every line, and only if everything checks out, atomically (a) generates a GST invoice using the **same numbering counter, same document shape, and same public invoice-view.html PDF viewer** as a manually created invoice, (b) deducts stock, and (c) logs a stock movement — or, if anything fails, writes nothing at all. Two people clicking Accept on the same order at the same moment cannot both succeed: the transaction only commits if the order was still PENDING at commit time, so the second attempt is rejected outright, both by the transaction's own optimistic-concurrency check and by the Firestore security rule.
+- **Buyer's Purchase Entry updates automatically**: `my-orders.html` listens in real time, and the moment it sees an order flip to ACCEPTED, it creates (or reuses) a Supplier record for that seller and a Purchase Product per item in the buyer's **existing** Purchase Entry system, then logs one purchase using the exact invoice figures the seller's acceptance produced.
+
+**Two honest limitations worth knowing:**
+
+1. **"Automatic" purchase creation depends on the buyer's browser having been open at some point after acceptance** — not a guaranteed server-side action the moment the seller clicks Accept. There's no Cloud Functions trigger doing this in the background, because Cloud Functions require enrolling in Firebase's paid **Blaze** plan (still free at normal volume, but needs a billing card on file) — the same trade-off this project has already made elsewhere (see the Storage and reCAPTCHA notes above) to stay entirely on the free Spark plan. In practice this just means: the first time the buyer opens **My Orders** after an acceptance, the purchase appears — it doesn't require them to have been watching at the exact moment.
+2. **The Accept transaction runs from the seller's own browser, not a trusted server.** This is genuinely atomic (all the writes above happen together or not at all, and double-accept is blocked) and it never trusts anything from the *buyer's* side — but it does trust the *seller's own* client to read their own Product Master honestly, which is no different from the risk a seller already has today when creating a manual invoice by hand. If you want the stronger guarantee of a server-side Cloud Function (useful mainly if you don't fully trust whoever's logged into the seller's own account, or want acceptance emails sent from a hidden secret instead of client-side EmailJS), that's a well-defined next step, but it requires the Blaze plan — flag it if you want it built.
+3. **Email notifications on order placement/acceptance/rejection are not wired up yet** — the pieces (EmailJS, already used for invoices) are there to add, just not connected to this flow yet.
 9. **They create an invoice** — pick a customer, add line items from the product list, adjust quantity/rate/discount if needed. The system automatically works out whether it's CGST+SGST (same state) or IGST (different state) based on the business's and customer's states, and computes an invoice number in the format `FY/0001` (e.g. `25-26/0007`).
 10. **Save & Download** generates a legally-formatted PDF with all required GST fields and the saved signature embedded, and downloads it to the business owner's device.
 11. **Save, Download & Email** does the same, plus emails the customer a link to view the invoice online (`invoice-view.html`) — opening that link auto-downloads the PDF to their device immediately, with a button to grab it again if needed — both without requiring the customer to log in anywhere.
@@ -260,7 +311,10 @@ switches on automatically the moment real config values are in place.
 - **Server-verified bot protection** — the reCAPTCHA checkbox is a real deterrent but isn't backed by a server-side secret-key check (see Part 4).
 - **Editing username or business type after signup** — currently one-time at signup (or at the profile-completion step for Google sign-ups). The account settings page only supports changing email and password so far.
 - **Multi-user access per business** — right now each Firebase login is its own isolated business; there's no way yet for two people to share access to one business's data.
-- **Ordering from a linked seller's visible catalog** — the buyer/seller linking, product visibility, and now the Buyer SKU Master above are the foundation; picking products and sending an order (with automatic GST invoicing, inventory deduction, etc.) is a later phase, not built yet.
+- **Ordering from a linked seller's visible catalog** — **done**, see the Order Flow section above (Product Select Order only).
 - **Automatic marketplace SKU detection** — the Unmapped SKU queue exists, but nothing yet parses an Amazon/Meesho/Flipkart shipping label or order file to feed it automatically; SKUs are reported manually for now.
+- **Label-Based Auto Order** — the second of the two order-placement methods in the original spec; consumes the Buyer SKU Master + label parsing to auto-build an order from marketplace shipping labels. Needs real label samples to build the parsing reliably; falls back to the already-working Product Select Order in the meantime.
+- **Order/acceptance email notifications** — not wired up yet; the invoice email path (EmailJS) already exists and could be extended to this flow.
+- **Cloud Function-backed order acceptance** — the current Accept step is a client-side Firestore transaction (see the Order Flow section above for exactly what that does and doesn't guarantee). A Cloud Function version is a well-defined upgrade but requires Firebase's paid Blaze plan.
 
 These are all reasonable next steps if this proves useful — just flag it and we can build any of them in.
