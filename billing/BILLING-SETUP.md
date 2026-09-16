@@ -48,20 +48,6 @@ service cloud.firestore {
       allow create, update: if request.auth != null;
       allow delete: if false;
     }
-    match /orders/{orderId} {
-      // Order requests are visible to two people: the buyer who created it
-      // (matched by uid), and the supplier it's addressed to (matched by
-      // their logged-in email against the supplierEmail saved on the order —
-      // NOT publicly readable, unlike public_invoices above. The supplier
-      // must have their own account on this site, signed in with the same
-      // email address the buyer saved for them in Suppliers.
-      allow read: if request.auth != null &&
-        (request.auth.uid == resource.data.buyerUid || request.auth.token.email == resource.data.supplierEmail);
-      allow create: if request.auth != null && request.auth.uid == request.resource.data.buyerUid;
-      allow update: if request.auth != null &&
-        (request.auth.uid == resource.data.buyerUid || request.auth.token.email == resource.data.supplierEmail);
-      allow delete: if request.auth != null && request.auth.uid == resource.data.buyerUid;
-    }
     match /usernames/{username} {
       // Must be readable by anyone (including signed-out visitors), because
       // the sign-in page needs to look up "which email does this username
