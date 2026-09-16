@@ -21,6 +21,11 @@ const firebaseConfig = {
 const EMAILJS_PUBLIC_KEY = "uvFM4OUqc4ZM_r3X4";
 const EMAILJS_SERVICE_ID = "service_7ufblgf";
 const EMAILJS_TEMPLATE_ID = "template_ds08b1e";
+// Separate template for marketplace order notifications (placed/accepted/rejected)
+// — deliberately not the invoice template above, so its wording can stay
+// order-specific. See BILLING-SETUP.md "Order email notifications" for the
+// exact EmailJS template to create and paste the ID in below.
+const EMAILJS_ORDER_TEMPLATE_ID = "PASTE_YOUR_ORDER_TEMPLATE_ID";
 // Google reCAPTCHA v2 ("I'm not a robot" checkbox) — shown on login/signup to
 // deter bots. Get a free site key at https://www.google.com/recaptcha/admin
 // (register your domain "visutra.in", choose reCAPTCHA v2 "Checkbox").

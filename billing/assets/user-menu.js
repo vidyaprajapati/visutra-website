@@ -28,11 +28,7 @@ function mountUserMenu(mountId, user, opts) {
         <div style="padding:10px 14px;font-size:11.5px;color:#6B6255;border-bottom:1px solid #E4D8BD;word-break:break-all">${escapeHtmlUM(user.email || '')}</div>
         <a href="${base}account.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">My Account</a>
         ${opts.showBillingLink ? `<a href="${base}app.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">My Billing Account</a>` : ''}
-        <a href="${base}buyer/my-sellers.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">My Sellers (Buyer)</a>
-        <a href="${base}buyer/buyer-sku-master.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">Buyer SKU Master</a>
-        <a href="${base}buyer/my-orders.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">My Orders (Buyer)</a>
-        <a href="${base}buyer/label-order.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">Label-Based Auto Order (Buyer)</a>
-        <a href="${base}seller/order-receive.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">Order Receive (Seller)</a>
+        <a href="${base}portal.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">Business Portal (Buyer/Seller)</a>
         <a href="#" id="vtLogoutLinkUM" style="display:block;padding:10px 14px;font-size:13px;color:#9E3608;text-decoration:none;border-top:1px solid #E4D8BD">Log out</a>
       </div>
     </div>
