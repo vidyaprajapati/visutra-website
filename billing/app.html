@@ -241,21 +241,10 @@
       </div>
 
       <div class="card">
-        <h2>Link to Buyer Account</h2>
-        <p class="sub">If this customer has signed up for VISUTRA's <b>Buyer features</b> (see their My Account page), link their login email here so they can browse the products you've marked "Buyer Visible" above. Save the customer first, then click Edit on it before linking.</p>
-        <div class="field"><label>Buyer's login email</label>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input id="cBuyerEmail" type="email" placeholder="buyer@example.com" style="flex:1;min-width:220px">
-            <button class="btn small" onclick="linkBuyerAccount()">Link Buyer</button>
-            <button class="btn small danger" onclick="unlinkBuyerAccount()">Unlink</button>
-          </div>
-        </div>
-        <p class="msg" id="buyerLinkMsg"></p>
-      </div>
-
-      <div class="card">
         <table><thead><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Email</th><th>Buyer Link</th><th></th></tr></thead>
         <tbody id="customersTable"></tbody></table>
+        <p class="sub" style="margin-top:10px">To let a customer browse the products you've marked "Buyer Visible" in Product Master, click <b>Link Buyer</b> on their row and enter the email they used to turn on Buyer Features (My Account page) — no need to open Edit first.</p>
+        <p class="msg" id="buyerLinkMsg"></p>
       </div>
     </div>
 
