@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Seller Products | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b id="sellerTitle">Seller Products</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="my-sellers.html">Back to My Sellers</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div style="max-width:900px;margin:0 auto;padding:32px 20px">
+
+  <div class="card">
+    <h2 id="sellerHeading">Products</h2>
+    <p class="sub">Only products this seller has marked Active and Buyer Visible show here. This is a read-only preview — placing an order from this catalog is coming in a later update; for now, order with this seller the way you normally do.</p>
+    <table><thead><tr><th>Product</th><th>Seller SKU</th><th>HSN</th><th>Unit</th><th>Price (incl. GST)</th><th>GST</th><th>Stock</th></tr></thead>
+    <tbody id="productsTable"></tbody></table>
+    <p class="msg" id="pageMsg"></p>
+  </div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+const sellerId = new URLSearchParams(window.location.search).get('sellerId');
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/seller-products.html' + window.location.search); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/seller-products.html' + window.location.search);
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+
+  if(!sellerId){ showMsg('No seller specified.', false); return; }
+  await loadSellerAndProducts();
+});
+
+async function loadSellerAndProducts(){
+  try{
+    const linkSnap = await db.collection('sellerLinks').doc(`${sellerId}_${currentUser.uid}`).get();
+    const sellerName = linkSnap.exists ? (linkSnap.data().sellerName || linkSnap.data().sellerEmail) : 'Seller';
+    document.getElementById('sellerTitle').textContent = sellerName;
+    document.getElementById('sellerHeading').textContent = `${sellerName} — Products`;
+
+    const prodSnap = await db.collection('users').doc(sellerId).collection('products')
+      .where('buyerVisibility', '==', true).get();
+    const products = prodSnap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.active !== false);
+
+    document.getElementById('productsTable').innerHTML = products.map(p => `
+      <tr><td>${esc(p.name)}</td><td>${esc(p.sku||'—')}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td>
+      <td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.gstRate}%</td><td>${p.stock||0}</td></tr>
+    `).join('') || '<tr><td colspan="7" style="color:var(--muted)">No products are visible to you from this seller yet.</td></tr>';
+  }catch(err){
+    showMsg('Could not load this seller\'s products — you may not be linked, or your link may be inactive.', false);
+  }
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function showMsg(text, ok){
+  const el = document.getElementById('pageMsg');
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+</body>
+</html>

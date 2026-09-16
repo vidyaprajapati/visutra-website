@@ -1,1 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Buyer SKU Master | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+</head>
+<body>
 
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Buyer SKU Master</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="my-sellers.html">My Sellers</a>
+    <a class="btn small" href="../app.html">Back to Billing</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div style="max-width:1000px;margin:0 auto;padding:32px 20px">
+
+  <div class="card" id="notBuyerCard" style="display:none">
+    <h2>Buyer Features Not Enabled</h2>
+    <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first, then get linked by a seller from their Customers page.</p>
+  </div>
+
+  <div class="card" id="mappingFormCard">
+    <h2 id="mappingFormTitle">Add SKU Mapping</h2>
+    <p class="sub">Links one of a linked seller's products to whatever SKU each marketplace uses for it, plus your own internal SKU if you use one. A seller's SKU is <b>not</b> globally unique — that's exactly why this maps seller + product together, not the SKU text alone.</p>
+    <div class="grid2">
+      <div class="field"><label>Seller</label><select id="mSeller" onchange="onMappingSellerChange()"><option value="">Select seller…</option></select></div>
+      <div class="field"><label>Seller Product</label><select id="mProduct" onchange="onMappingProductChange()"><option value="">Select seller first…</option></select></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Seller SKU (from the product, read-only)</label><input id="mSellerSku" readonly style="background:var(--ivory);color:var(--muted)"></div>
+      <div class="field"><label>Buyer Internal SKU (optional)</label><input id="mBuyerSku" placeholder="e.g. BUY-WMC-001"></div>
+    </div>
+    <div class="grid3">
+      <div class="field"><label>Amazon SKU</label><input id="mAmazonSku" placeholder="e.g. AMZ-WMC-001"></div>
+      <div class="field"><label>Meesho SKU</label><input id="mMeeshoSku" placeholder="e.g. MEE-WMC-001"></div>
+      <div class="field"><label>Flipkart SKU</label><input id="mFlipkartSku" placeholder="e.g. FLIP-WMC-001"></div>
+    </div>
+    <input type="hidden" id="mEditId">
+    <button class="btn primary" onclick="saveMapping()">Save SKU Mapping</button>
+    <button class="btn small" onclick="resetMappingForm()">Clear</button>
+    <p class="msg" id="mappingMsg"></p>
+  </div>
+
+  <div class="card">
+    <h2>SKU Mappings</h2>
+    <div class="grid3">
+      <div class="field"><label>Search</label><input id="fSearch" placeholder="Seller, product, or any SKU…" oninput="renderMappings()"></div>
+      <div class="field"><label>Seller</label><select id="fSeller" onchange="renderMappings()"><option value="">All sellers</option></select></div>
+      <div class="field"><label>Status</label><select id="fStatus" onchange="renderMappings()">
+        <option value="">All statuses</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option>
+      </select></div>
+    </div>
+    <table><thead><tr><th>Seller</th><th>Product</th><th>Seller SKU</th><th>Buyer SKU</th><th>Amazon</th><th>Meesho</th><th>Flipkart</th><th>Status</th><th></th></tr></thead>
+    <tbody id="mappingsTable"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Report a New Marketplace SKU</h2>
+    <p class="sub">Manual entry for now — paste in a SKU you've noticed on a marketplace order/label that isn't mapped yet. It'll drop into the Unmapped SKUs queue below so you can define it whenever's convenient.</p>
+    <div class="grid3" style="align-items:end">
+      <div class="field"><label>Marketplace</label><select id="rMarketplace"><option value="AMAZON">Amazon</option><option value="MEESHO">Meesho</option><option value="FLIPKART">Flipkart</option></select></div>
+      <div class="field"><label>SKU</label><input id="rSku" placeholder="e.g. AMZ-NEW-123"></div>
+      <div class="field"><button class="btn small" style="width:100%" onclick="reportUnmappedSku()">Report SKU</button></div>
+    </div>
+    <p class="msg" id="reportMsg"></p>
+  </div>
+
+  <div class="card">
+    <h2>Unmapped SKUs <span id="unmappedCount"></span></h2>
+    <p class="sub">Define each of these against a seller + product above before placing an order that uses it — one mapping resolves every occurrence.</p>
+    <table><thead><tr><th>Marketplace</th><th>SKU</th><th>First Detected</th><th>Occurrences</th><th>Status</th><th></th></tr></thead>
+    <tbody id="unmappedTable"></tbody></table>
+  </div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+let sellersCache = [];      // linked ACTIVE sellers: {sellerUid, sellerName}
+let sellerProductsCache = []; // buyer-visible products of whichever seller is currently selected in the form
+let mappingsCache = [];
+let unmappedCache = [];
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/buyer-sku-master.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/buyer-sku-master.html');
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+
+  const data = snap.data() || {};
+  const isBuyer = !!(data.roles && data.roles.buyer);
+  document.getElementById('notBuyerCard').style.display = isBuyer ? 'none' : 'block';
+  document.getElementById('mappingFormCard').style.display = isBuyer ? 'block' : 'none';
+
+  await loadLinkedSellers();
+  await loadMappings();
+  await loadUnmapped();
+});
+
+/* ---------------- Linked sellers + their buyer-visible products ---------------- */
+async function loadLinkedSellers(){
+  const snap = await db.collection('sellerLinks').where('buyerUid', '==', currentUser.uid).get();
+  sellersCache = snap.docs.map(d => d.data()).filter(l => l.status === 'ACTIVE')
+    .map(l => ({ sellerUid: l.sellerUid, sellerName: l.sellerName || l.sellerEmail || 'Seller' }));
+
+  const sel = document.getElementById('mSeller');
+  sel.innerHTML = '<option value="">Select seller…</option>' +
+    sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
+
+  const fSel = document.getElementById('fSeller');
+  fSel.innerHTML = '<option value="">All sellers</option>' +
+    sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
+}
+async function onMappingSellerChange(){
+  const sellerUid = document.getElementById('mSeller').value;
+  const prodSel = document.getElementById('mProduct');
+  document.getElementById('mSellerSku').value = '';
+  sellerProductsCache = [];
+  if(!sellerUid){ prodSel.innerHTML = '<option value="">Select seller first…</option>'; return; }
+  prodSel.innerHTML = '<option value="">Loading…</option>';
+  const snap = await db.collection('users').doc(sellerUid).collection('products').where('buyerVisibility', '==', true).get();
+  sellerProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.active !== false);
+  prodSel.innerHTML = '<option value="">Select product…</option>' +
+    sellerProductsCache.map(p => `<option value="${p.id}">${esc(p.name)}${p.sku ? ' ('+esc(p.sku)+')' : ''}</option>`).join('');
+}
+function onMappingProductChange(){
+  const p = sellerProductsCache.find(x => x.id === document.getElementById('mProduct').value);
+  document.getElementById('mSellerSku').value = p ? (p.sku || '(seller has not set a SKU for this product)') : '';
+}
+
+/* ---------------- Mappings CRUD ---------------- */
+async function loadMappings(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').get();
+  mappingsCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  renderMappings();
+}
+function renderMappings(){
+  const search = document.getElementById('fSearch').value.trim().toLowerCase();
+  const fSeller = document.getElementById('fSeller').value;
+  const fStatus = document.getElementById('fStatus').value;
+  const rows = mappingsCache.filter(m => {
+    if(fSeller && m.sellerId !== fSeller) return false;
+    if(fStatus && m.status !== fStatus) return false;
+    if(search){
+      const hay = [m.sellerName, m.productName, m.sellerSku, m.buyerSku, m.amazonSku, m.meeshoSku, m.flipkartSku].map(x => (x||'').toLowerCase()).join(' ');
+      if(!hay.includes(search)) return false;
+    }
+    return true;
+  });
+  document.getElementById('mappingsTable').innerHTML = rows.map(m => `
+    <tr><td>${esc(m.sellerName)}</td><td>${esc(m.productName)}</td><td>${esc(m.sellerSku||'—')}</td><td>${esc(m.buyerSku||'—')}</td>
+    <td>${esc(m.amazonSku||'—')}</td><td>${esc(m.meeshoSku||'—')}</td><td>${esc(m.flipkartSku||'—')}</td>
+    <td><span class="badge">${esc(m.status)}</span></td>
+    <td class="row-actions">
+      <button class="btn small" onclick="editMapping('${m.id}')">Edit</button>
+      <button class="btn small" onclick="toggleMappingStatus('${m.id}')">${m.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}</button>
+      <button class="btn small danger" onclick="deleteMapping('${m.id}')">Delete</button>
+    </td></tr>
+  `).join('') || '<tr><td colspan="9" style="color:var(--muted)">No SKU mappings yet.</td></tr>';
+}
+async function saveMapping(){
+  const sellerUid = document.getElementById('mSeller').value;
+  const seller = sellersCache.find(s => s.sellerUid === sellerUid);
+  const productId = document.getElementById('mProduct').value;
+  const product = sellerProductsCache.find(p => p.id === productId);
+  if(!seller || !product){ showMsg('mappingMsg', 'Select a seller and one of their products.', false); return; }
+
+  const amazonSku = document.getElementById('mAmazonSku').value.trim();
+  const meeshoSku = document.getElementById('mMeeshoSku').value.trim();
+  const flipkartSku = document.getElementById('mFlipkartSku').value.trim();
+  const buyerSku = document.getElementById('mBuyerSku').value.trim();
+  if(!amazonSku && !meeshoSku && !flipkartSku && !buyerSku){
+    showMsg('mappingMsg', 'Enter at least one SKU (buyer, Amazon, Meesho, or Flipkart).', false);
+    return;
+  }
+
+  const editId = document.getElementById('mEditId').value;
+  const data = {
+    sellerId: sellerUid,
+    sellerName: seller.sellerName,
+    productId,
+    productName: product.name,
+    sellerSku: product.sku || '',
+    buyerSku, amazonSku, meeshoSku, flipkartSku,
+    status: 'ACTIVE',
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const col = db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings');
+  if(editId){
+    await col.doc(editId).set(data, {merge: true});
+  } else {
+    data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+    await col.add(data);
+  }
+
+  // One mapping resolves every occurrence of the SKU(s) it just defined.
+  await Promise.all([
+    resolveUnmappedIfMatching('AMAZON', amazonSku),
+    resolveUnmappedIfMatching('MEESHO', meeshoSku),
+    resolveUnmappedIfMatching('FLIPKART', flipkartSku)
+  ]);
+
+  showMsg('mappingMsg', 'Saved.', true);
+  resetMappingForm();
+  await loadMappings();
+  await loadUnmapped();
+}
+function editMapping(id){
+  const m = mappingsCache.find(x => x.id === id);
+  if(!m) return;
+  document.getElementById('mEditId').value = id;
+  document.getElementById('mSeller').value = m.sellerId;
+  onMappingSellerChange().then(() => {
+    document.getElementById('mProduct').value = m.productId;
+    onMappingProductChange();
+  });
+  document.getElementById('mBuyerSku').value = m.buyerSku || '';
+  document.getElementById('mAmazonSku').value = m.amazonSku || '';
+  document.getElementById('mMeeshoSku').value = m.meeshoSku || '';
+  document.getElementById('mFlipkartSku').value = m.flipkartSku || '';
+  document.getElementById('mappingFormTitle').textContent = 'Edit SKU Mapping';
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+function resetMappingForm(){
+  ['mEditId','mBuyerSku','mAmazonSku','mMeeshoSku','mFlipkartSku','mSellerSku'].forEach(f => document.getElementById(f).value = '');
+  document.getElementById('mSeller').value = '';
+  document.getElementById('mProduct').innerHTML = '<option value="">Select seller first…</option>';
+  document.getElementById('mappingFormTitle').textContent = 'Add SKU Mapping';
+}
+async function toggleMappingStatus(id){
+  const m = mappingsCache.find(x => x.id === id);
+  const next = m.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+  await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(id)
+    .set({status: next, updatedAt: firebase.firestore.FieldValue.serverTimestamp()}, {merge: true});
+  loadMappings();
+}
+async function deleteMapping(id){
+  if(!confirm('Delete this SKU mapping?')) return;
+  await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(id).delete();
+  loadMappings();
+}
+
+/* ---------------- Unmapped SKU queue ---------------- */
+async function reportUnmappedSku(){
+  const marketplace = document.getElementById('rMarketplace').value;
+  const sku = document.getElementById('rSku').value.trim();
+  if(!sku){ showMsg('reportMsg', 'Enter a SKU.', false); return; }
+  const docId = `${marketplace}_${sku}`.replace(/[\/\s]+/g, '_');
+  const ref = db.collection('users').doc(currentUser.uid).collection('unmappedSkus').doc(docId);
+  const today = new Date().toISOString().slice(0, 10);
+  try{
+    await db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if(snap.exists){
+        tx.update(ref, { occurrences: firebase.firestore.FieldValue.increment(1), lastSeen: today });
+      } else {
+        tx.set(ref, { marketplace, sku, firstDetected: today, lastSeen: today, occurrences: 1, status: 'UNMAPPED' });
+      }
+    });
+    document.getElementById('rSku').value = '';
+    showMsg('reportMsg', 'Reported — see it in the Unmapped SKUs queue below.', true);
+    loadUnmapped();
+  }catch(err){
+    showMsg('reportMsg', err.message, false);
+  }
+}
+async function loadUnmapped(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('unmappedSkus').where('status', '==', 'UNMAPPED').get();
+  unmappedCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  unmappedCache.sort((a, b) => (b.occurrences||0) - (a.occurrences||0));
+  document.getElementById('unmappedCount').textContent = unmappedCache.length ? `(${unmappedCache.length})` : '';
+  document.getElementById('unmappedTable').innerHTML = unmappedCache.map(u => `
+    <tr><td>${esc(u.marketplace)}</td><td>${esc(u.sku)}</td><td>${esc(u.firstDetected)}</td><td>${u.occurrences||1}</td>
+    <td><span class="badge">${esc(u.status)}</span></td>
+    <td class="row-actions"><button class="btn small" onclick="defineSku('${esc(u.marketplace)}','${esc(u.sku).replace(/'/g,"\\'")}')">Define SKU</button></td></tr>
+  `).join('') || '<tr><td colspan="6" style="color:var(--muted)">No unmapped SKUs — everything reported so far is defined.</td></tr>';
+}
+function defineSku(marketplace, sku){
+  resetMappingForm();
+  const fieldByMarketplace = { AMAZON: 'mAmazonSku', MEESHO: 'mMeeshoSku', FLIPKART: 'mFlipkartSku' };
+  const fieldId = fieldByMarketplace[marketplace];
+  if(fieldId) document.getElementById(fieldId).value = sku;
+  showMsg('mappingMsg', `Now select the seller and product this ${marketplace} SKU (${sku}) belongs to, then Save.`, true);
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+async function resolveUnmappedIfMatching(marketplace, sku){
+  if(!sku) return;
+  const docId = `${marketplace}_${sku}`.replace(/[\/\s]+/g, '_');
+  const ref = db.collection('users').doc(currentUser.uid).collection('unmappedSkus').doc(docId);
+  const snap = await ref.get();
+  if(snap.exists) await ref.delete();
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function showMsg(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+</body>
+</html>

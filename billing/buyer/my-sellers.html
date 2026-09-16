@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>My Sellers | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>My Sellers</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="../app.html">Back to Billing</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div style="max-width:900px;margin:0 auto;padding:32px 20px">
+
+  <div class="card" id="notBuyerCard" style="display:none">
+    <h2>Buyer Features Not Enabled</h2>
+    <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first — you'll get a login email to share with sellers, who can then link your account.</p>
+  </div>
+
+  <div class="card">
+    <h2>My Sellers</h2>
+    <p class="sub">Sellers who've linked your account. Once linked, you can view the products they've marked visible to you.</p>
+    <table><thead><tr><th>Seller</th><th>Status</th><th></th></tr></thead>
+    <tbody id="sellersTable"></tbody></table>
+    <p class="sub" style="margin-top:10px">Once you've spotted products you want to track, set up <a href="buyer-sku-master.html">Buyer SKU Master</a> to map each one to your Amazon/Meesho/Flipkart SKUs.</p>
+  </div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/my-sellers.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/my-sellers.html');
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+
+  const data = snap.data() || {};
+  document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
+
+  await loadSellers();
+});
+
+async function loadSellers(){
+  const snap = await db.collection('sellerLinks').where('buyerUid', '==', currentUser.uid).get();
+  const links = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(l => l.status === 'ACTIVE');
+  const tbody = document.getElementById('sellersTable');
+  tbody.innerHTML = links.map(l => `
+    <tr><td>${esc(l.sellerName || l.sellerEmail || 'Seller')}</td><td><span class="badge">${esc(l.status)}</span></td>
+    <td class="row-actions"><a class="btn small" href="seller-products.html?sellerId=${encodeURIComponent(l.sellerUid)}">View Products</a></td></tr>
+  `).join('') || '<tr><td colspan="3" style="color:var(--muted)">No sellers have linked your account yet. Share your login email (from My Account) with a seller to get started.</td></tr>';
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+</script>
+</body>
+</html>
