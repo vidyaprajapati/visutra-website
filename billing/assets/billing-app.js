@@ -33,7 +33,6 @@ auth.onAuthStateChanged(async user => {
   document.getElementById('invDate').valueAsDate = new Date();
   document.getElementById('purDate').valueAsDate = new Date();
   document.getElementById('payEntryDate').valueAsDate = new Date();
-  document.getElementById('ordDate').valueAsDate = new Date();
   populateGstrFY();
   onFilingTypeChange();
   initSignaturePad();
@@ -96,10 +95,6 @@ function activateView(viewName){
   if(viewName === 'trash') loadTrash();
 }
 document.querySelectorAll('.nav-link').forEach(link => {
-  // Plain external links styled as nav-links (no data-view — e.g. "Order to
-  // Supplier" which opens its own standalone page) navigate normally instead
-  // of being caught by the in-app tab-switching logic below.
-  if(!link.dataset.view) return;
   link.addEventListener('click', e => {
     e.preventDefault();
     activateView(link.dataset.view);
