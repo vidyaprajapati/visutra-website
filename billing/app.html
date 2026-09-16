@@ -195,6 +195,7 @@
           <div class="field"><label>HSN / SAC code</label><input id="pHsn"></div>
           <div class="field"><label>Unit</label><input id="pUnit" placeholder="e.g. PCS, NOS, KG"></div>
         </div>
+        <div class="field" style="max-width:260px"><label>SKU (optional — used by linked buyers' SKU Master)</label><input id="pSku" placeholder="e.g. WMC-001"></div>
         <div class="grid3">
           <div class="field"><label>Price incl. GST (₹)</label><input id="pPriceIncl" type="number" step="0.01" oninput="updateProductExclusivePreview()"></div>
           <div class="field"><label>GST rate</label>
@@ -213,7 +214,7 @@
 
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price (excl. GST)</th><th>GST</th><th>Price (incl. GST)</th><th>Stock</th><th>Reorder Level</th><th>Active</th><th title="Whether linked buyer accounts can see this product">Buyer Visible</th><th></th></tr></thead>
+        <table><thead><tr><th>Name</th><th>SKU</th><th>HSN</th><th>Unit</th><th>Price (excl. GST)</th><th>GST</th><th>Price (incl. GST)</th><th>Stock</th><th>Reorder Level</th><th>Active</th><th title="Whether linked buyer accounts can see this product">Buyer Visible</th><th></th></tr></thead>
         <tbody id="productsTable"></tbody></table>
         <p class="sub" style="margin-top:10px">Click <b>Active</b>/<b>Buyer Visible</b> on a row to toggle it. A product only shows up in a linked buyer's catalog when it's both Active and Buyer Visible. Link a buyer to your account from <a href="#customers" onclick="activateView('customers')">Customers</a>.</p>
       </div>

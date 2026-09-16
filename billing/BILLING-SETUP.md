@@ -232,6 +232,14 @@ switches on automatically the moment real config values are in place.
 - The linked buyer sees that seller listed under **My Sellers** (from the account dropdown menu), and can open **View Products** to see a read-only list of exactly the products marked both Active and Buyer Visible — nothing else about the seller's account.
 - All of this is enforced in the Firestore rules above, not just in the page's JavaScript — a buyer who isn't linked, or a product that isn't marked visible, simply won't come back from the database no matter what the browser asks for.
 - **Not built yet:** actually placing an order from that catalog (that's a further step — see the "what this does not include yet" list).
+
+### Buyer SKU Master (new)
+
+- A linked buyer can open **Buyer SKU Master** (from the account dropdown menu, or a link on My Sellers) to map each of a seller's products to their own Amazon/Meesho/Flipkart SKUs, plus an optional internal buyer SKU. This deliberately maps **seller + product**, not the SKU text alone — the same SKU text can mean a different product for two different sellers.
+- Sellers can now optionally give a product a **SKU** in the Product Master (new field, alongside HSN/Unit) — this is what shows up as the read-only "Seller SKU" once a buyer picks that product in the mapping form. It's optional; leaving it blank doesn't break anything, buyers just won't have a seller SKU to reference yet.
+- The page also has an **Unmapped SKUs** queue: paste in a marketplace SKU you've noticed that isn't defined yet (for now this is a manual "Report" button — nothing parses labels or marketplace orders automatically yet), and it sits in the queue with an occurrence count until you click **Define SKU** and pick the seller + product it belongs to. Defining it once resolves every prior occurrence.
+- No Firestore rules changes were needed for this — `buyerSkuMappings` and `unmappedSkus` are subcollections under the buyer's own `users/{uid}`, which the existing owner-only rule already covers (Part 64 of the spec — "buyer A cannot read buyer B's SKU mappings" — is automatically true here, not something added on top).
+- **Not built yet:** automatic SKU detection from an uploaded label/PDF/barcode, and the two order-placement flows (Product Select Order / Label-Based Auto Order) that would consume this SKU Master — those come with the order-flow phase.
 9. **They create an invoice** — pick a customer, add line items from the product list, adjust quantity/rate/discount if needed. The system automatically works out whether it's CGST+SGST (same state) or IGST (different state) based on the business's and customer's states, and computes an invoice number in the format `FY/0001` (e.g. `25-26/0007`).
 10. **Save & Download** generates a legally-formatted PDF with all required GST fields and the saved signature embedded, and downloads it to the business owner's device.
 11. **Save, Download & Email** does the same, plus emails the customer a link to view the invoice online (`invoice-view.html`) — opening that link auto-downloads the PDF to their device immediately, with a button to grab it again if needed — both without requiring the customer to log in anywhere.
@@ -252,6 +260,7 @@ switches on automatically the moment real config values are in place.
 - **Server-verified bot protection** — the reCAPTCHA checkbox is a real deterrent but isn't backed by a server-side secret-key check (see Part 4).
 - **Editing username or business type after signup** — currently one-time at signup (or at the profile-completion step for Google sign-ups). The account settings page only supports changing email and password so far.
 - **Multi-user access per business** — right now each Firebase login is its own isolated business; there's no way yet for two people to share access to one business's data.
-- **Ordering from a linked seller's visible catalog** — the buyer/seller linking and product visibility above is the foundation; picking products from that catalog and sending an order (with SKU mapping, automatic GST invoicing, inventory deduction, etc.) is a later phase, not built yet.
+- **Ordering from a linked seller's visible catalog** — the buyer/seller linking, product visibility, and now the Buyer SKU Master above are the foundation; picking products and sending an order (with automatic GST invoicing, inventory deduction, etc.) is a later phase, not built yet.
+- **Automatic marketplace SKU detection** — the Unmapped SKU queue exists, but nothing yet parses an Amazon/Meesho/Flipkart shipping label or order file to feed it automatically; SKUs are reported manually for now.
 
 These are all reasonable next steps if this proves useful — just flag it and we can build any of them in.
