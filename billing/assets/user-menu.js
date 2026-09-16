@@ -30,6 +30,8 @@ function mountUserMenu(mountId, user, opts) {
         ${opts.showBillingLink ? `<a href="${base}app.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">My Billing Account</a>` : ''}
         <a href="${base}buyer/my-sellers.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">My Sellers (Buyer)</a>
         <a href="${base}buyer/buyer-sku-master.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">Buyer SKU Master</a>
+        <a href="${base}buyer/my-orders.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">My Orders (Buyer)</a>
+        <a href="${base}seller/order-receive.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">Order Receive (Seller)</a>
         <a href="#" id="vtLogoutLinkUM" style="display:block;padding:10px 14px;font-size:13px;color:#9E3608;text-decoration:none;border-top:1px solid #E4D8BD">Log out</a>
       </div>
     </div>
