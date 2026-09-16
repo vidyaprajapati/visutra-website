@@ -56,6 +56,15 @@
     <p class="sub">Your account is signed in via Google, with no separate VISUTRA password. Manage your password through your Google Account settings instead.</p>
   </div>
 
+  <div class="card">
+    <h2>Buyer Features</h2>
+    <p class="sub">Turn this on if you want to order from other VISUTRA sellers (like VISUTRA itself, or another supplier who's set up their own account here). Once enabled, give a seller your login email below and ask them to "Link" it from their Customers page — you'll then be able to see the products they've marked visible to you from <a href="buyer/my-sellers.html">My Sellers</a>.</p>
+    <p>Status: <b id="buyerStatusText">Checking…</b></p>
+    <p>Your login email (share this with a seller to get linked): <b id="buyerEmailText"></b></p>
+    <button class="btn primary" id="enableBuyerBtn" onclick="enableBuyerFeatures()">Enable Buyer Features</button>
+    <p class="msg" id="buyerMsg"></p>
+  </div>
+
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -85,7 +94,28 @@ auth.onAuthStateChanged(async user => {
   const hasPasswordProvider = user.providerData.some(p => p.providerId === 'password');
   document.getElementById('passwordCard').classList.toggle('hidden', !hasPasswordProvider);
   document.getElementById('googleOnlyNotice').classList.toggle('hidden', hasPasswordProvider);
+
+  document.getElementById('buyerEmailText').textContent = user.email || '';
+  const buyerEnabled = !!(data.roles && data.roles.buyer);
+  document.getElementById('buyerStatusText').textContent = buyerEnabled ? 'Enabled' : 'Not enabled';
+  document.getElementById('enableBuyerBtn').classList.toggle('hidden', buyerEnabled);
 });
+
+async function enableBuyerFeatures(){
+  const email = (currentUser.email || '').trim().toLowerCase();
+  if(!email){ showMsg('buyerMsg', 'Your account has no email on file — buyer features need one to be found by sellers.', false); return; }
+  try{
+    // Public uid<->email index (contains nothing else) so a seller can look up
+    // "does this email have a buyer account" when linking a customer.
+    await db.collection('buyerDirectory').doc(email).set({uid: currentUser.uid, email}, {merge:true});
+    await db.collection('users').doc(currentUser.uid).set({roles: {buyer: true, seller: true}}, {merge:true});
+    document.getElementById('buyerStatusText').textContent = 'Enabled';
+    document.getElementById('enableBuyerBtn').classList.add('hidden');
+    showMsg('buyerMsg', `Buyer features enabled. Share ${email} with a seller so they can link you.`, true);
+  }catch(err){
+    showMsg('buyerMsg', err.message, false);
+  }
+}
 
 function showMsg(id, text, ok){
   const el = document.getElementById(id);

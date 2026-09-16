@@ -213,8 +213,9 @@
 
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price (excl. GST)</th><th>GST</th><th>Price (incl. GST)</th><th>Stock</th><th>Reorder Level</th><th></th></tr></thead>
+        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Price (excl. GST)</th><th>GST</th><th>Price (incl. GST)</th><th>Stock</th><th>Reorder Level</th><th>Active</th><th title="Whether linked buyer accounts can see this product">Buyer Visible</th><th></th></tr></thead>
         <tbody id="productsTable"></tbody></table>
+        <p class="sub" style="margin-top:10px">Click <b>Active</b>/<b>Buyer Visible</b> on a row to toggle it. A product only shows up in a linked buyer's catalog when it's both Active and Buyer Visible. Link a buyer to your account from <a href="#customers" onclick="activateView('customers')">Customers</a>.</p>
       </div>
 
     </div>
@@ -237,8 +238,22 @@
         <button class="btn primary" onclick="saveCustomer()">Add Customer</button>
         <p class="msg" id="customerMsg"></p>
       </div>
+
       <div class="card">
-        <table><thead><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Email</th><th></th></tr></thead>
+        <h2>Link to Buyer Account</h2>
+        <p class="sub">If this customer has signed up for VISUTRA's <b>Buyer features</b> (see their My Account page), link their login email here so they can browse the products you've marked "Buyer Visible" above. Save the customer first, then click Edit on it before linking.</p>
+        <div class="field"><label>Buyer's login email</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="cBuyerEmail" type="email" placeholder="buyer@example.com" style="flex:1;min-width:220px">
+            <button class="btn small" onclick="linkBuyerAccount()">Link Buyer</button>
+            <button class="btn small danger" onclick="unlinkBuyerAccount()">Unlink</button>
+          </div>
+        </div>
+        <p class="msg" id="buyerLinkMsg"></p>
+      </div>
+
+      <div class="card">
+        <table><thead><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Email</th><th>Buyer Link</th><th></th></tr></thead>
         <tbody id="customersTable"></tbody></table>
       </div>
     </div>

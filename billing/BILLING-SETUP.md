@@ -37,17 +37,75 @@ In the Firebase console, on the left sidebar:
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+
+    match /users/{sellerUid} {
+      allow read, write: if request.auth != null && request.auth.uid == sellerUid;
+
+      // Product Master: the owner can always read/write their own products.
+      // A buyer whose account has an ACTIVE link to this seller (see
+      // sellerLinks below) may read a product only when the seller has
+      // marked it both active and buyer-visible. Everything else about the
+      // seller's account (customers, invoices, purchases, etc.) still falls
+      // through to the generic subcollection rule further down, which stays
+      // owner-only.
+      match /products/{productId} {
+        allow read: if request.auth != null && (
+          request.auth.uid == sellerUid ||
+          (
+            resource.data.active == true &&
+            resource.data.buyerVisibility == true &&
+            exists(/databases/$(database)/documents/sellerLinks/$(sellerUid + '_' + request.auth.uid)) &&
+            get(/databases/$(database)/documents/sellerLinks/$(sellerUid + '_' + request.auth.uid)).data.status == 'ACTIVE'
+          )
+        );
+        allow write: if request.auth != null && request.auth.uid == sellerUid;
+      }
+
       match /{subcollection}/{docId} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+        allow read, write: if request.auth != null && request.auth.uid == sellerUid;
       }
     }
+
+    // A seller <-> buyer relationship, one doc per pair, ID = "{sellerUid}_{buyerUid}"
+    // so the products rule above can look it up directly without a query.
+    // Only the seller can create or change it — a buyer can never grant
+    // themselves access to a seller's private catalog. Both sides can read it
+    // (buyer needs this to list "My Sellers").
+    match /sellerLinks/{linkId} {
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.sellerUid || request.auth.uid == resource.data.buyerUid);
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.sellerUid;
+      allow update: if request.auth != null && request.auth.uid == resource.data.sellerUid;
+      allow delete: if false;
+    }
+
+    // Public uid<->email index so a seller can resolve "does this email have
+    // a buyer account" without exposing anything else about that account.
+    // Only the account owner can create/update their own entry (same
+    // trade-off as usernames below: the mapping itself is not secret).
+    match /buyerDirectory/{email} {
+      allow read: if true;
+      allow create, update: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
     match /public_invoices/{invoiceId} {
       allow read: if true;
       allow create, update: if request.auth != null;
       allow delete: if false;
     }
+
+    // "Order to Supplier" (see order-place.html/order-receive.html): a single
+    // top-level doc per order so the supplier's own logged-in account can be
+    // granted access to that ONE order by matching their email — nothing
+    // else of the buyer's account is exposed.
+    match /orders/{orderId} {
+      allow read: if request.auth != null && (request.auth.uid == resource.data.buyerUid || request.auth.token.email == resource.data.supplierEmail);
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.buyerUid;
+      allow update: if request.auth != null && (request.auth.uid == resource.data.buyerUid || request.auth.token.email == resource.data.supplierEmail);
+      allow delete: if request.auth != null && request.auth.uid == resource.data.buyerUid;
+    }
+
     match /usernames/{username} {
       // Must be readable by anyone (including signed-out visitors), because
       // the sign-in page needs to look up "which email does this username
@@ -66,6 +124,8 @@ service cloud.firestore {
 ```
 
 4. Click **Publish**.
+
+**If you're updating rules on a project that's already live** (not a fresh setup): this block now also includes rules for `sellerLinks` and `buyerDirectory` (new, from the Buyer/Seller linking feature — see below) plus `orders` (from the existing "Order to Supplier" feature, which was missing from this doc even though it was already live — this replacement also fixes that drift). Paste the whole block above over whatever is currently in your Rules tab; nothing here removes access your existing data relies on.
 
 **No Storage needed.** Earlier versions of this guide had you also enable Firebase Storage to hold the generated invoice PDFs. That's been removed: Google now requires the paid "Blaze" plan just to turn Storage on at all, even at zero usage — which conflicts with keeping this whole setup free. Instead, PDFs are generated fresh on the spot every time someone needs one (the business owner re-downloading from Invoice History, or a buyer clicking "Download PDF" on their emailed link) directly from the invoice data already sitting in Firestore. Nothing is ever uploaded as a file, so there's nothing to pay for.
 
@@ -162,7 +222,16 @@ switches on automatically the moment real config values are in place.
 5. **My Account** (`account.html`) lets them change their password (with re-entry of the current password first) and change their email address — a new email only takes effect after they click a confirmation link Firebase sends to that new address, exactly like the original account's email verification.
 6. **They fill in Business Profile** (inside the dashboard) — business name, GSTIN, address, state, and draw their signature on the signature pad. This is separate from their personal account details, and is saved once and reused on every invoice.
 7. **They add Products** — name, HSN code, unit, default price, GST rate. This is their master data, so billing becomes a matter of picking from a list.
-8. **They add Customers** — name, GSTIN (if registered), address, state, email.
+8. **They add Customers** — name, GSTIN (if registered), address, state, email. If a customer is also a VISUTRA buyer account (see below), the seller can **link** it from the Customers tab by entering the buyer's login email — this is what gates catalog visibility, not the customer's stored email field.
+
+### Buyer / Seller product visibility (new)
+
+- Any account can turn on **Buyer Features** from **My Account** — this just registers their login email in a small public lookup table (`buyerDirectory`) so sellers can find them. It doesn't change anything about their own seller-side billing account.
+- A seller links a buyer to one of their Customer Master entries (Customers tab → enter the buyer's login email → **Link Buyer**). This only works if that email has already turned on Buyer Features.
+- Once linked, the seller can mark individual products **Active** and **Buyer Visible** from the Product Master table (two click-to-toggle columns).
+- The linked buyer sees that seller listed under **My Sellers** (from the account dropdown menu), and can open **View Products** to see a read-only list of exactly the products marked both Active and Buyer Visible — nothing else about the seller's account.
+- All of this is enforced in the Firestore rules above, not just in the page's JavaScript — a buyer who isn't linked, or a product that isn't marked visible, simply won't come back from the database no matter what the browser asks for.
+- **Not built yet:** actually placing an order from that catalog (that's a further step — see the "what this does not include yet" list).
 9. **They create an invoice** — pick a customer, add line items from the product list, adjust quantity/rate/discount if needed. The system automatically works out whether it's CGST+SGST (same state) or IGST (different state) based on the business's and customer's states, and computes an invoice number in the format `FY/0001` (e.g. `25-26/0007`).
 10. **Save & Download** generates a legally-formatted PDF with all required GST fields and the saved signature embedded, and downloads it to the business owner's device.
 11. **Save, Download & Email** does the same, plus emails the customer a link to view the invoice online (`invoice-view.html`) — opening that link auto-downloads the PDF to their device immediately, with a button to grab it again if needed — both without requiring the customer to log in anywhere.
@@ -183,5 +252,6 @@ switches on automatically the moment real config values are in place.
 - **Server-verified bot protection** — the reCAPTCHA checkbox is a real deterrent but isn't backed by a server-side secret-key check (see Part 4).
 - **Editing username or business type after signup** — currently one-time at signup (or at the profile-completion step for Google sign-ups). The account settings page only supports changing email and password so far.
 - **Multi-user access per business** — right now each Firebase login is its own isolated business; there's no way yet for two people to share access to one business's data.
+- **Ordering from a linked seller's visible catalog** — the buyer/seller linking and product visibility above is the foundation; picking products from that catalog and sending an order (with SKU mapping, automatic GST invoicing, inventory deduction, etc.) is a later phase, not built yet.
 
 These are all reasonable next steps if this proves useful — just flag it and we can build any of them in.
