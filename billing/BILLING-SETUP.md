@@ -274,6 +274,7 @@ switches on automatically the moment real config values are in place.
 
 - A linked buyer can open **Buyer SKU Master** (from the account dropdown menu, or a link on My Sellers) to map each of a seller's products to their own Amazon/Meesho/Flipkart SKUs, plus an optional internal buyer SKU. This deliberately maps **seller + product**, not the SKU text alone — the same SKU text can mean a different product for two different sellers.
 - Sellers can now optionally give a product a **SKU** in the Product Master (new field, alongside HSN/Unit) — this is what shows up as the read-only "Seller SKU" once a buyer picks that product in the mapping form. It's optional; leaving it blank doesn't break anything, buyers just won't have a seller SKU to reference yet.
+- **Linking a buyer is now a one-click action right on the customer's row** (a **Link Buyer** / **Unlink** button next to Edit/Delete, prompting for the buyer's email) — it does **not** require opening Edit first. An earlier version needed that extra click, which was confusing enough in practice that it's worth calling out: forgetting it produced a "save this customer first" message even for an already-saved customer, because the link action was silently keyed off the edit form's hidden state instead of the row itself.
 - The page also has an **Unmapped SKUs** queue: paste in a marketplace SKU you've noticed that isn't defined yet (for now this is a manual "Report" button — nothing parses labels or marketplace orders automatically yet), and it sits in the queue with an occurrence count until you click **Define SKU** and pick the seller + product it belongs to. Defining it once resolves every prior occurrence.
 - No Firestore rules changes were needed for this — `buyerSkuMappings` and `unmappedSkus` are subcollections under the buyer's own `users/{uid}`, which the existing owner-only rule already covers (Part 64 of the spec — "buyer A cannot read buyer B's SKU mappings" — is automatically true here, not something added on top).
 - **Not built yet:** automatic SKU detection from an uploaded label/PDF/barcode, and the two order-placement flows (Product Select Order / Label-Based Auto Order) that would consume this SKU Master — those come with the order-flow phase.
@@ -286,11 +287,27 @@ This is the "Product Select Order" flow — a buyer picks straight from a linked
 - **Seller accepts or rejects** from Order Receive. **Accepting runs a single Firestore transaction** that: re-reads each product's current price/GST/HSN/stock directly from the seller's own Product Master (never trusting anything the buyer's order carried), checks stock is sufficient for every line, and only if everything checks out, atomically (a) generates a GST invoice using the **same numbering counter, same document shape, and same public invoice-view.html PDF viewer** as a manually created invoice, (b) deducts stock, and (c) logs a stock movement — or, if anything fails, writes nothing at all. Two people clicking Accept on the same order at the same moment cannot both succeed: the transaction only commits if the order was still PENDING at commit time, so the second attempt is rejected outright, both by the transaction's own optimistic-concurrency check and by the Firestore security rule.
 - **Buyer's Purchase Entry updates automatically**: `my-orders.html` listens in real time, and the moment it sees an order flip to ACCEPTED, it creates (or reuses) a Supplier record for that seller and a Purchase Product per item in the buyer's **existing** Purchase Entry system, then logs one purchase using the exact invoice figures the seller's acceptance produced.
 
-**Two honest limitations worth knowing:**
+**Three honest limitations worth knowing:**
 
 1. **"Automatic" purchase creation depends on the buyer's browser having been open at some point after acceptance** — not a guaranteed server-side action the moment the seller clicks Accept. There's no Cloud Functions trigger doing this in the background, because Cloud Functions require enrolling in Firebase's paid **Blaze** plan (still free at normal volume, but needs a billing card on file) — the same trade-off this project has already made elsewhere (see the Storage and reCAPTCHA notes above) to stay entirely on the free Spark plan. In practice this just means: the first time the buyer opens **My Orders** after an acceptance, the purchase appears — it doesn't require them to have been watching at the exact moment.
 2. **The Accept transaction runs from the seller's own browser, not a trusted server.** This is genuinely atomic (all the writes above happen together or not at all, and double-accept is blocked) and it never trusts anything from the *buyer's* side — but it does trust the *seller's own* client to read their own Product Master honestly, which is no different from the risk a seller already has today when creating a manual invoice by hand. If you want the stronger guarantee of a server-side Cloud Function (useful mainly if you don't fully trust whoever's logged into the seller's own account, or want acceptance emails sent from a hidden secret instead of client-side EmailJS), that's a well-defined next step, but it requires the Blaze plan — flag it if you want it built.
-3. **Email notifications on order placement/acceptance/rejection are not wired up yet** — the pieces (EmailJS, already used for invoices) are there to add, just not connected to this flow yet.
+3. **Order/acceptance email notifications are not wired up yet** — the pieces (EmailJS, already used for invoices) are there to add, just not connected to this flow yet.
+
+### Label-Based Auto Order (new)
+
+The second order-placement method, now built from a real Flipkart shipping-label sample. New page: `billing/buyer/label-order.html`. New shared file: `billing/assets/label-sku-extract.js`.
+
+- The buyer uploads one or more marketplace shipping-label PDFs (label + tax invoice, whatever's in the file they'd normally print). Parsing happens entirely in the browser using PDF.js — nothing is uploaded anywhere, same approach as the free Label Cropper tool.
+- **Amazon and Meesho extraction reuses the exact, already-working regex logic from `tools/label-cropper.html`** (copied, not rewritten — that tool already reads these correctly). **Flipkart extraction is new**, built and tested against a real Flipkart label: the SKU is read from the label's own "SKU ID | Description" table, with a second independent fallback anchored on the tax invoice's "| IMEI/SrNo" line, in case a particular Flipkart label layout only prints one of the two.
+- Every detected `{marketplace, SKU, qty}` is checked against the buyer's **Buyer SKU Master** (Phase 2). A match groups it into that seller's Auto Order Summary, consolidating quantities across multiple labels of the same seller + product and keeping the Amazon/Meesho/Flipkart breakdown alongside the total (e.g. "Amazon 5 / Meesho 3 / Flipkart 2 → 10"). No match drops it into the same **Unmapped SKUs** queue used by Buyer SKU Master (Phase 2) — one shared queue, so a SKU found here or reported manually there both resolve together.
+- **An unmapped SKU can never silently join an order.** Only seller groups made entirely of mapped items get a "Place Order to [Seller]" button; unmapped items sit in their own list with a Define SKU link and don't block *other* sellers' already-mapped orders from being placed.
+- **Duplicate-label protection**: each page is fingerprinted (a simple hash of its marketplace + SKU + text), checked against `users/{uid}/processedLabels` before counting it, and only recorded there once an order using it is actually submitted — so re-processing a file you haven't ordered from yet is harmless, but re-uploading a label you've already ordered from won't double the quantity.
+- No Firestore rules changes needed — `processedLabels` is a subcollection under the buyer's own `users/{uid}`, already covered by the existing owner-only rule, same as `buyerSkuMappings` and `unmappedSkus` in Phase 2.
+- Accepted Label Auto orders carry their marketplace breakdown all the way through to the seller's Order Receive screen and the buyer's My Orders screen (both now show it inline), for traceability back to which marketplace order each unit came from.
+
+**Honest limitations:**
+- The Flipkart regex is built and tested against one real sample; if a different Flipkart label layout (different seller template, international shipment, etc.) doesn't match the two patterns above, that SKU falls through to the Unmapped queue rather than failing silently — send another sample if you hit one that doesn't parse, and it can be added as a third tier.
+- `tools/label-cropper.html` (the free tool) has since had two additive changes made to it — Flipkart SKU-stamping and a Detected SKUs panel, both described further down under "Label Cropper: Flipkart stamping + Detected SKUs panel". Its working Amazon/Meesho code paths were never rewritten, only extended.
 9. **They create an invoice** — pick a customer, add line items from the product list, adjust quantity/rate/discount if needed. The system automatically works out whether it's CGST+SGST (same state) or IGST (different state) based on the business's and customer's states, and computes an invoice number in the format `FY/0001` (e.g. `25-26/0007`).
 10. **Save & Download** generates a legally-formatted PDF with all required GST fields and the saved signature embedded, and downloads it to the business owner's device.
 11. **Save, Download & Email** does the same, plus emails the customer a link to view the invoice online (`invoice-view.html`) — opening that link auto-downloads the PDF to their device immediately, with a button to grab it again if needed — both without requiring the customer to log in anywhere.
@@ -312,9 +329,56 @@ This is the "Product Select Order" flow — a buyer picks straight from a linked
 - **Editing username or business type after signup** — currently one-time at signup (or at the profile-completion step for Google sign-ups). The account settings page only supports changing email and password so far.
 - **Multi-user access per business** — right now each Firebase login is its own isolated business; there's no way yet for two people to share access to one business's data.
 - **Ordering from a linked seller's visible catalog** — **done**, see the Order Flow section above (Product Select Order only).
-- **Automatic marketplace SKU detection** — the Unmapped SKU queue exists, but nothing yet parses an Amazon/Meesho/Flipkart shipping label or order file to feed it automatically; SKUs are reported manually for now.
-- **Label-Based Auto Order** — the second of the two order-placement methods in the original spec; consumes the Buyer SKU Master + label parsing to auto-build an order from marketplace shipping labels. Needs real label samples to build the parsing reliably; falls back to the already-working Product Select Order in the meantime.
+- **Automatic marketplace SKU detection** — **done** for Amazon, Meesho, and Flipkart via the Label-Based Auto Order upload flow (see below); there's still no automatic *fetching* of labels from each marketplace's own dashboard/API — you upload the PDF yourself.
+- **Label-Based Auto Order** — **done**, see the Label-Based Auto Order section below (built from a real Flipkart sample; Amazon/Meesho reuse the free Label Cropper tool's proven extraction).
 - **Order/acceptance email notifications** — not wired up yet; the invoice email path (EmailJS) already exists and could be extended to this flow.
 - **Cloud Function-backed order acceptance** — the current Accept step is a client-side Firestore transaction (see the Order Flow section above for exactly what that does and doesn't guarantee). A Cloud Function version is a well-defined upgrade but requires Firebase's paid Blaze plan.
+
+### Order email notifications (new)
+
+Buyer places an order → seller gets emailed. Seller accepts or rejects → buyer gets emailed. Every email is a **notification with a link back into the site** — there's no accept/reject action inside the email itself; the seller still has to actually open Order Receive and click Accept there. That's deliberate: accepting is the sensitive, atomic operation described above, and it should only ever happen through the page that runs that transaction, never from a link click in an inbox.
+
+**One-time setup — a new EmailJS template** (separate from the existing invoice template, so its wording stays order-specific and the invoice template is untouched):
+
+1. In [emailjs.com](https://www.emailjs.com), under **Email Templates**, click **Create New Template**.
+2. Set the **Subject** field to `{{email_subject}}` (a variable, not fixed text) — this is what lets one template cover all three notification types ("New Order Received…", "Order Accepted…", "Order Rejected…") with the exact subject line each one needs.
+3. Set **To email** to `{{to_email}}`.
+4. Body:
+   ```
+   Hi {{to_name}},
+
+   {{headline}}
+
+   {{detail_line}}
+
+   View details: {{view_link}}
+
+   — VISUTRA
+   ```
+5. Copy the template's ID and paste it into `billing/assets/firebase-config.js` as `EMAILJS_ORDER_TEMPLATE_ID` (replacing the `PASTE_YOUR_ORDER_TEMPLATE_ID` placeholder).
+
+**Fails open, same as everything else in this project that depends on config being filled in**: until that placeholder is replaced with a real template ID, order emails are silently skipped — placing/accepting/rejecting an order still works exactly as before, just without the email. Nothing breaks either way.
+
+What each email links to:
+- **New order → seller**: links to `seller/order-receive.html?id=<orderId>`, which opens Order Receive with that exact order's status filter selected and the row scrolled into view and outlined, so the seller lands right on it instead of having to search.
+- **Accepted/Rejected → buyer**: links straight to **the GST bill itself** (`invoice-view.html?id=<invoiceId>`) on acceptance — no sign-in needed, and it auto-downloads the PDF the moment the page opens, so the buyer's email genuinely delivers the bill, not just a status page. Rejection still links to `buyer/my-orders.html?id=<orderId>` (deep-link-and-highlight), since there's no invoice to show.
+
+**Where this fires from, and what's genuinely reliable about it**: sending happens right after each event, from the client that just performed it (buyer's browser after placing an order; seller's browser after Accept/Reject succeeds). It's fire-and-forget — a failed or skipped email never blocks or undoes the underlying order/invoice/inventory changes, which are already saved by the time the email is attempted.
+
+### Label Cropper: Flipkart stamping + Detected SKUs panel (new)
+
+Two additive changes to `tools/label-cropper.html`, the free public tool — Amazon and Meesho's existing, working code paths were never rewritten, only extended:
+
+- **Flipkart SKU-stamping**, matching what Amazon/Meesho already had: a checkbox to reprint the SKU + Qty in larger, clearer text at the bottom of each cropped label.
+- **A "Detected SKUs" panel** under the preview, listing page number, SKU, and quantity for every page — regardless of platform. This runs **whether or not the "print SKU on label" checkbox is on** — that checkbox only controls whether the SKU gets stamped onto the *output* PDF; detection itself always happens right on upload, so the panel shows what was found either way. It includes a link straight to **Label-Based Auto Order** (`billing/buyer/label-order.html`) for turning that same file into an actual order — signing in and being linked to the seller is still required there, same as everywhere else in the buyer flow.
+
+### Site navigation cleanup + Business Portal (new)
+
+Two changes, matching the original spec's Part 3 (single "Free Services for Sellers" nav entry) and Part 5 (a Buyer/Seller portal split), which had been built partially — `free-services.html` already existed with the right nav, but the actual site-wide navigation had never been switched over to point at it.
+
+- **Every marketing page's header, mobile menu, and footer** (`index.html` plus all 15 other top-level pages) had their separate "Free Tools" / "GST Billing" / "Purchase Entry" links replaced with one: **Free Services for Sellers**, linking to `free-services.html`. Nothing else on any of these pages was touched — this was a mechanical, exact-text find-and-replace across the repeated header/footer markup each static page carries its own copy of.
+- **New page `billing/portal.html`** — "Buying, or selling?" — two side-by-side sections, **Buyer** and **Seller**, each listing only that role's own links (Buyer: My Sellers, Place Order, Label-Based Auto Order, Buyer SKU Master, My Orders. Seller: GST Billing, Purchase Entry, Order Receive). This page itself doesn't gate on login — each link it points to already has its own auth guard, exactly like every other link on the site — but if you are logged in, the usual account menu shows in the top-right.
+- `free-services.html`'s **"GST Billing" card now opens `billing/portal.html`** instead of jumping straight into the seller's billing app, since a person clicking it could be a buyer, a seller, or both.
+- The **account dropdown menu** (used everywhere via `user-menu.js`) now has one **"Business Portal (Buyer/Seller)"** link instead of the six separate buyer/seller links that had accumulated there across the phases above — same destinations, just gathered under the one hub page.
 
 These are all reasonable next steps if this proves useful — just flag it and we can build any of them in.
