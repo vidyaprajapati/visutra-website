@@ -60,6 +60,9 @@ let suppliersCache = [];
 let purchaseProductsCache = [];
 let orderLineItems = []; // {productId, name, unit, qty}
 let ordersCache = [];
+let orderRealtimeUnsub = null;
+let supplierRealtimeUnsub = null;
+let purchaseProductRealtimeUnsub = null;
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -76,9 +79,7 @@ auth.onAuthStateChanged(async user => {
   document.getElementById('ordDate').valueAsDate = new Date();
 
   await loadBusinessProfile();
-  const results=await Promise.allSettled([loadSuppliers(), loadPurchaseProducts(), loadOrders()]);
-  const failed=results.filter(r=>r.status==='rejected');
-  if(failed.length) showMsg('orderMsg','Some saved data could not be loaded. Check Firestore access and refresh. '+failed.map(r=>r.reason?.code||r.reason?.message||'Unknown error').join(' | '),false);
+  await Promise.all([loadSuppliers(), loadPurchaseProducts(), loadOrders()]);
   addOrderLineItem();
 });
 
@@ -88,18 +89,20 @@ async function loadBusinessProfile(){
 }
 
 async function loadSuppliers(){
-  const base=db.collection('users').doc(currentUser.uid); let snap=null, last=null;
-  for(const name of ['suppliers','supplierMaster','supplierMasters']){try{const q=await base.collection(name).get();if(!q.empty){snap=q;break;}if(!snap)snap=q;}catch(e){last=e;}}
-  if(last && !snap) throw last;
-  suppliersCache=(snap?snap.docs:[]).map(d=>{const x={id:d.id,...d.data()};return {...x,name:String(x.name||x.businessName||x.supplierName||x.supplier||'').trim()};}).filter(x=>x.name).sort((a,b)=>a.name.localeCompare(b.name));
-  const sel=document.getElementById('ordSupplier'); sel.innerHTML='<option value="">Select supplier…</option>'+suppliersCache.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  if(supplierRealtimeUnsub){try{supplierRealtimeUnsub();}catch(e){}}
+  const base=db.collection('users').doc(currentUser.uid);
+  const names=['suppliers','supplierMaster','supplierMasters']; const states=names.map(n=>({name:n,docs:[],ready:false}));
+  supplierRealtimeUnsub=()=>states.forEach(x=>x.unsub&&x.unsub());
+  states.forEach(state=>{state.unsub=base.collection(state.name).onSnapshot(snap=>{state.docs=snap.docs;state.ready=true;const chosen=states.find(x=>x.docs.length)||states.find(x=>x.ready)||states[0];suppliersCache=chosen.docs.map(d=>{const x={id:d.id,...d.data()};return {...x,name:String(x.name||x.businessName||x.supplierName||x.supplier||'').trim()};}).filter(x=>x.name).sort((a,b)=>a.name.localeCompare(b.name));const sel=document.getElementById('ordSupplier');sel.innerHTML='<option value="">Select supplier…</option>'+suppliersCache.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');},err=>console.error('Supplier realtime load failed',err));});
+  return new Promise(resolve=>{const t=()=>states.some(x=>x.ready)?resolve():setTimeout(t,25);t();});
 }
 
 async function loadPurchaseProducts(){
-  const base=db.collection('users').doc(currentUser.uid); let snap=null,last=null;
-  for(const name of ['purchaseProducts','purchaseProductMaster','purchaseProductMasters']){try{const q=await base.collection(name).get();if(!q.empty){snap=q;break;}if(!snap)snap=q;}catch(e){last=e;}}
-  if(last && !snap) throw last;
-  purchaseProductsCache=(snap?snap.docs:[]).map(d=>{const x={id:d.id,...d.data()};return {...x,name:String(x.name||x.productName||x.product||x.title||'').trim(),unit:x.unit||x.uom||'PCS'};}).filter(x=>x.name).sort((a,b)=>a.name.localeCompare(b.name));
+  if(purchaseProductRealtimeUnsub){try{purchaseProductRealtimeUnsub();}catch(e){}}
+  const base=db.collection('users').doc(currentUser.uid); const names=['purchaseProducts','purchaseProductMaster','purchaseProductMasters']; const states=names.map(n=>({name:n,docs:[],ready:false}));
+  purchaseProductRealtimeUnsub=()=>states.forEach(x=>x.unsub&&x.unsub());
+  states.forEach(state=>{state.unsub=base.collection(state.name).onSnapshot(snap=>{state.docs=snap.docs;state.ready=true;const chosen=states.find(x=>x.docs.length)||states.find(x=>x.ready)||states[0];purchaseProductsCache=chosen.docs.map(d=>{const x={id:d.id,...d.data()};return {...x,name:String(x.name||x.productName||x.product||x.title||'').trim(),unit:x.unit||x.uom||'PCS'};}).filter(x=>x.name).sort((a,b)=>a.name.localeCompare(b.name));document.querySelectorAll('.ord-line-product').forEach((sel,i)=>{const prev=sel.value;fillPurchaseProductOptions(sel);if(prev)sel.value=prev;});});});
+  return new Promise(resolve=>{const t=()=>states.some(x=>x.ready)?resolve():setTimeout(t,25);t();});
 }
 function fillPurchaseProductOptions(sel){
   sel.innerHTML = '<option value="">Select product…</option>' +
@@ -198,20 +201,13 @@ async function sendOrderEmail(orderData, orderId, toEmail){
 }
 
 async function loadOrders(){
-  try{
-    const col=db.collection('orders'); let snap;
-    try{ snap=await col.where('buyerUid','==',currentUser.uid).get(); }
-    catch(e){ snap={docs:[]}; console.error(e); }
-    ordersCache=snap.docs.map(d=>({id:d.id,...d.data()})).filter(o=>o.buyerUid===currentUser.uid || o.buyerId===currentUser.uid || o.userId===currentUser.uid);
-    // Older orders may have buyerId/userId instead of buyerUid. Read those
-    // only when the primary query returned nothing.
-    if(!ordersCache.length){
-      const all=await col.get();
-      ordersCache=all.docs.map(d=>({id:d.id,...d.data()})).filter(o=>o.buyerUid===currentUser.uid || o.buyerId===currentUser.uid || o.userId===currentUser.uid);
-    }
-    ordersCache.sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || String(b.createdAt?.seconds||0).localeCompare(String(a.createdAt?.seconds||0)));
+  if(orderRealtimeUnsub){try{orderRealtimeUnsub();}catch(e){}}
+  const col=db.collection('orders');
+  orderRealtimeUnsub=col.onSnapshot(snap=>{
+    ordersCache=snap.docs.map(d=>({id:d.id,...d.data()})).filter(o=>o.buyerUid===currentUser.uid || o.buyerId===currentUser.uid || o.userId===currentUser.uid)
+      .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || ((b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)));
     renderOrdersTable();
-  }catch(err){console.error('Orders load failed:',err);ordersCache=[];renderOrdersTable();showMsg('orderMsg','Unable to load orders: '+(err.code||err.message||err),false);}
+  },err=>{console.error('Orders realtime load failed:',err);showMsg('orderMsg','Unable to load orders: '+(err.code||err.message||err),false);});
 }
 function renderOrdersTable(){
   const tbody = document.getElementById('ordersTable');

@@ -36,6 +36,8 @@ let currentUser = null;
 let currentOrder = null;
 let supplierBusiness = {};
 let supplierProducts = [];
+let receivedOrdersUnsub = null;
+let orderDetailUnsub = null;
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtMoney(n){ return Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
@@ -169,20 +171,25 @@ async function acceptOrder(){
 
 async function loadOrder(user){
   const params=new URLSearchParams(window.location.search);const id=params.get('id');const content=document.getElementById('content');
+  if(receivedOrdersUnsub){try{receivedOrdersUnsub();}catch(e){} receivedOrdersUnsub=null;}
+  if(orderDetailUnsub){try{orderDetailUnsub();}catch(e){} orderDetailUnsub=null;}
+  document.getElementById('userBox').innerHTML=`${esc(user.email)} <a href="app.html">Back to Billing</a> <button onclick="auth.signOut()">Sign out</button>`;
   if(!id){
-    document.getElementById('userBox').innerHTML=`${esc(user.email)} <a href="app.html">Back to Billing</a> <button onclick="auth.signOut()">Sign out</button>`;
     content.innerHTML='<div class="loading">Loading orders received…</div>';
-    try{const snap=await db.collection('orders').where('supplierEmail','==',user.email).get();const orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    receivedOrdersUnsub=db.collection('orders').where('supplierEmail','==',user.email).onSnapshot(snap=>{
+      const orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || ((b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)));
       const rows=orders.map(o=>{const products=(o.items||[]).map(li=>`${esc(li.name)} (${li.qty||0} ${esc(li.unit||'')})`).join(', ');return `<tr><td>${esc(o.date||'')}</td><td>${esc(fmtDateTime(o.createdAt || o.receivedAt || o.createdOn))}</td><td>${esc(o.fromBusinessName||'')}</td><td>${products}</td><td>${o.status==='accepted'?'<span class="status ok" style="display:inline-block;padding:5px 9px;margin:0">Accepted</span>':'<span class="status warn" style="display:inline-block;padding:5px 9px;margin:0">Pending</span>'}</td><td><a class="btn small" href="order-receive.html?id=${encodeURIComponent(o.id)}">View</a></td></tr>`}).join('');
       content.innerHTML=`<div class="order-card"><span class="badge">Free Service · Orders</span><h1>Orders Received</h1><p style="color:var(--muted);font-size:13px;margin:0 0 18px">Purchase order requests addressed to ${esc(user.email)}.</p><table><thead><tr><th>Date</th><th>Received Time</th><th>From</th><th>Products</th><th>Status</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="6" style="color:var(--muted)">No orders received yet.</td></tr>'}</tbody></table></div>`;
-    }catch(err){console.error(err);content.innerHTML='<div class="errbox">Could not load received orders. Please try again in a moment.</div>';}return;
+    },err=>{console.error(err);content.innerHTML=`<div class="errbox">Could not load received orders: ${esc(err.message||err)}</div>`;});
+    return;
   }
-  try{
-    const snap=await db.collection('orders').doc(id).get();if(!snap.exists){content.innerHTML='<div class="errbox">Order not found.</div>';return;}
+  content.innerHTML='<div class="loading">Loading this order…</div>';
+  orderDetailUnsub=db.collection('orders').doc(id).onSnapshot(async snap=>{
+    if(!snap.exists){content.innerHTML='<div class="errbox">Order not found.</div>';return;}
     const order={id:snap.id,...snap.data()};
     if(String(order.supplierEmail||'').toLowerCase()!==String(user.email||'').toLowerCase() && order.buyerUid!==user.uid){content.innerHTML='<div class="errbox">This order is not addressed to your account.</div>';return;}
-    currentOrder=order;await loadSupplierData();render(order,user);
-  }catch(err){console.error(err);content.innerHTML=`<div class="errbox">Could not load this order: ${esc(err.message||'Please try again.')}</div>`;}
+    try{currentOrder=order;await loadSupplierData();render(order,user);}catch(err){console.error(err);content.innerHTML=`<div class="errbox">Could not load this order: ${esc(err.message||'Please try again.')}</div>`;}
+  },err=>{console.error(err);content.innerHTML=`<div class="errbox">Could not load this order: ${esc(err.message||'Please try again.')}</div>`;});
 }
 
 auth.onAuthStateChanged(user=>{if(!user){window.location.href='login.html?redirect='+encodeURIComponent('order-receive.html'+window.location.search);return;} currentUser=user; loadOrder(user).catch(err=>{console.error(err);document.getElementById('content').innerHTML='<div class="errbox">Could not load this order: '+esc(err.message||err)+'</div>';});});
