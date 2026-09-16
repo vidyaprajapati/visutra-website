@@ -85,8 +85,35 @@ async function loadOrder(user){
   const params = new URLSearchParams(window.location.search);
   const id = params.get('id');
   const content = document.getElementById('content');
-  document.getElementById('userBox').innerHTML = `${esc(user.email)} <button onclick="auth.signOut()">Sign out</button>`;
-  if(!id){ content.innerHTML = '<div class="errbox">No order specified.</div>'; return; }
+  document.getElementById('userBox').innerHTML = `${esc(user.email)} <a href="app.html" style="text-decoration:none;color:var(--ink);border:1px solid var(--thread);background:#fff;border-radius:999px;padding:6px 14px">Back to Billing</a> <button onclick="auth.signOut()">Sign out</button>`;
+
+  // No order id = show the logged-in supplier's received-order list.
+  if(!id){
+    content.innerHTML = '<div class="loading">Loading orders received…</div>';
+    try{
+      const snap = await db.collection('orders').where('supplierEmail','==',user.email).get();
+      const orders = snap.docs.map(d => ({id:d.id, ...d.data()}));
+      orders.sort((a,b) => (b.date||'').localeCompare(a.date||''));
+      const rows = orders.map(o => {
+        const products = (o.items||[]).map(li => `${esc(li.name)} (${li.qty||0} ${esc(li.unit||'')})`).join(', ');
+        return `<tr><td>${esc(o.date||'')}</td><td>${esc(o.fromBusinessName||'')}</td><td>${products}</td><td><a class="btn small" href="order-receive.html?id=${encodeURIComponent(o.id)}">View</a></td></tr>`;
+      }).join('');
+      content.innerHTML = `
+        <div class="order-card">
+          <span class="badge">Free Service · Orders</span>
+          <h1>Orders Received</h1>
+          <p style="color:var(--muted);font-size:13px;margin:0 0 18px">Purchase order requests addressed to ${esc(user.email)}.</p>
+          <table>
+            <thead><tr><th>Date</th><th>From</th><th>Products</th><th></th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="4" style="color:var(--muted)">No orders received yet.</td></tr>'}</tbody>
+          </table>
+        </div>`;
+    }catch(err){
+      console.error('Orders received load error:', err);
+      content.innerHTML = '<div class="errbox">Could not load received orders. Please try again in a moment.</div>';
+    }
+    return;
+  }
 
   let order;
   try{
@@ -111,7 +138,6 @@ async function loadOrder(user){
     content.innerHTML = '<div class="errbox">This order was found, but something on it couldn\'t be displayed. Check the browser console for details, or contact the sender for a fresh copy.</div>';
   }
 }
-
 auth.onAuthStateChanged(user => {
   if(!user){
     window.location.href = 'login.html?redirect=' + encodeURIComponent('order-receive.html' + window.location.search);
