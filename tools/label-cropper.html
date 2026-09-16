@@ -255,18 +255,19 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     <div class="vlc-stage">
       <span class="vlc-stage-tag">Preview — page 1</span>
       <div id="vlcPreviewMount"><div class="vlc-empty">Upload a PDF to see the crop preview here.</div></div>
-      <div id="vlcSkuSummary" style="display:none;margin-top:16px;padding:16px;background:var(--card,#fff);border:1px solid var(--line,#E4D8BD);border-radius:10px">
-        <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted,#6B6255);margin-bottom:10px">Detected SKUs</div>
-        <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
-          <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Page</th>
-          <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">SKU</th>
-          <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Qty</th>
-        </tr></thead><tbody id="vlcSkuSummaryTable"></tbody></table>
-        <p style="font-size:12.5px;color:var(--muted,#6B6255);margin:12px 0 0">This list shows regardless of whether "print SKU on label" is turned on above — it's just what was read off the file. Ready to turn these into an order?
-          <a href="../billing/buyer/label-order.html" target="_blank" style="font-weight:600">Open Label-Based Auto Order →</a>
-          (you'll need to sign in and be linked to the seller first — upload the same file there and it'll map each SKU and build the order for you).</p>
-      </div>
     </div>
+  </div>
+
+  <div id="vlcSkuSummary" style="display:none;margin-top:22px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
+    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:10px">Detected SKUs</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Page</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">SKU</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Qty</th>
+    </tr></thead><tbody id="vlcSkuSummaryTable"></tbody></table>
+    <p style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:12px 0 0">This list shows regardless of whether "print SKU on label" is turned on above — it's just what was read off the file. Ready to turn these into an order?
+      <button class="vlc-btn" style="display:inline-block;width:auto;padding:8px 16px;margin-left:4px" onclick="sendToLabelOrder()">Send to Label-Based Auto Order →</button>
+      (opens signed in, with these SKUs already loaded — no need to upload the file again there).</p>
   </div>
 
   <div class="vlc-footer">
@@ -769,6 +770,7 @@ async function handleFile(file){
   renderSkuSummary();
 }
 
+let lastDetectedRows = [];
 function renderSkuSummary(){
   const rows = [];
   if(currentPlatform === 'amazon'){
@@ -780,6 +782,7 @@ function renderSkuSummary(){
       if(sku && sku !== 'Unknown SKU') rows.push({ page: i+1, sku, qty: pageQtys[i] || 1 });
     });
   }
+  lastDetectedRows = rows;
   const panel = document.getElementById('vlcSkuSummary');
   if(!rows.length){ panel.style.display = 'none'; return; }
   document.getElementById('vlcSkuSummaryTable').innerHTML = rows.map(r =>
@@ -788,6 +791,35 @@ function renderSkuSummary(){
      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.qty}</td></tr>`
   ).join('');
   panel.style.display = 'block';
+}
+
+/* Hands the already-detected SKUs off to Label-Based Auto Order via
+   sessionStorage (same origin, so this works without any server round trip)
+   so the buyer never has to upload the same file a second time there. A
+   lightweight fingerprint per row (marketplace+sku+qty+page+filename) is
+   included for duplicate-order protection on the receiving page — weaker
+   than the full-page-text hash label-order.html uses for its own direct
+   uploads, but sufficient for this one handoff path. */
+function sendToLabelOrder(){
+  if(!lastDetectedRows.length) return;
+  const payload = {
+    platform: currentPlatform,
+    fileName: pdfFile ? pdfFile.name : '',
+    items: lastDetectedRows.map(r => ({
+      marketplace: currentPlatform.toUpperCase(),
+      sku: r.sku,
+      qty: r.qty,
+      pageHash: 'cropper_' + hashText(`${currentPlatform}|${r.sku}|${r.qty}|${r.page}|${pdfFile ? pdfFile.name : ''}`)
+    })),
+    timestamp: Date.now()
+  };
+  try{ sessionStorage.setItem('vlc_detected_skus', JSON.stringify(payload)); }catch(e){}
+  window.location.href = '../billing/buyer/label-order.html?fromCropper=1';
+}
+function hashText(str){
+  let h = 0;
+  for(let i=0;i<str.length;i++){ h = (Math.imul(31,h) + str.charCodeAt(i)) | 0; }
+  return 'h' + (h >>> 0).toString(36);
 }
 
 async function renderPreview(){
