@@ -85,8 +85,14 @@ function renderOrders(){
   const filter = document.getElementById('fStatus').value;
   const rows = filter ? ordersCache.filter(o => o.status === filter) : ordersCache;
   document.getElementById('ordersTable').innerHTML = rows.map(o => {
-    const itemsSummary = (o.items || []).map(i => `${esc(i.productName)} × ${i.qty}`).join('<br>');
+    const itemsSummary = (o.items || []).map(i => {
+      const bd = i.marketplaceBreakdown;
+      const bdText = bd && (bd.amazon || bd.meesho || bd.flipkart)
+        ? ` <span style="color:var(--muted);font-size:11px">(Amazon ${bd.amazon||0} / Meesho ${bd.meesho||0} / Flipkart ${bd.flipkart||0})</span>` : '';
+      return `${esc(i.productName)} × ${i.qty}${bdText}`;
+    }).join('<br>');
     const date = o.createdAt?.toDate ? o.createdAt.toDate().toISOString().slice(0, 10) : '';
+    const typeLabel = o.orderType === 'LABEL_AUTO' ? '<span class="badge">Label Auto</span> ' : '';
     let actions = '';
     if(o.status === 'ACCEPTED' && o.invoiceId){
       actions = `<a class="btn small" href="../invoice-view.html?id=${o.invoiceId}" target="_blank">View Invoice</a>`;
@@ -94,7 +100,7 @@ function renderOrders(){
     } else if(o.status === 'REJECTED'){
       actions = `<span style="color:var(--muted)">${esc(o.rejectionReason || 'No reason given')}</span>`;
     }
-    return `<tr><td>${esc(o.orderNumber)}</td><td>${esc(o.sellerName)}</td><td>${date}</td>
+    return `<tr><td>${typeLabel}${esc(o.orderNumber)}</td><td>${esc(o.sellerName)}</td><td>${date}</td>
       <td>${itemsSummary}</td><td><span class="badge">${esc(o.status)}</span></td>
       <td class="row-actions">${actions}</td></tr>`;
   }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No orders yet — place one from My Sellers.</td></tr>';
