@@ -43,13 +43,16 @@ function fmtDateTime(value){ if(!value) return '—'; let d; if(value && typeof 
 function showStatus(text,type=''){ const el=document.getElementById('status'); if(el){el.className='status '+type; el.innerHTML=text;} }
 
 async function loadSupplierData(){
-  const snap = await db.collection('users').doc(currentUser.uid).get();
-  supplierBusiness = snap.data() || {};
-  let ps;
-  try{ ps = await db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get(); } catch(e){ ps = await db.collection('users').doc(currentUser.uid).collection('products').get(); }
-  supplierProducts = ps.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  if(!currentUser || !currentUser.uid) throw new Error('Your login session is not ready. Please refresh and sign in again.');
+  const snap=await db.collection('users').doc(currentUser.uid).get();
+  supplierBusiness=snap.exists?(snap.data()||{}):{};
+  const base=db.collection('users').doc(currentUser.uid); let ps=null,last=null;
+  for(const name of ['products','productMaster','productMasters']){try{const q=await base.collection(name).get();if(!q.empty){ps=q;break;}if(!ps)ps=q;}catch(e){last=e;}}
+  if(last && !ps) throw last;
+  supplierProducts=(ps?ps.docs:[]).map(d=>({id:d.id,...d.data()}))
+    .map(p=>({...p,name:String(p.name||p.productName||p.product||p.title||'').trim(),hsn:p.hsn||p.hsnCode||'',unit:p.unit||p.uom||'PCS'}))
+    .filter(p=>p.name).sort((a,b)=>a.name.localeCompare(b.name));
 }
-
 function findProduct(orderItem){
   // The order's productId belongs to the buyer's purchase-product master, so
   // supplier-side matching is by product name. Case/space differences are ignored.
@@ -124,7 +127,7 @@ function render(order,user){
   const accepted=order.status==='accepted';
   document.getElementById('content').innerHTML=`<div class="order-card">
     <span class="badge">${accepted?'Order Accepted':'Order Request'}</span>
-    <h1>Order for ${esc(order.supplierName)}</h1><p style="color:var(--muted);font-size:13px;margin:0">Dated ${esc(order.date)}</p><p style="color:var(--muted);font-size:13px;margin:6px 0 0"><b>Order received:</b> ${esc(fmtDateTime(order.createdAt))}</p>
+    <h1>Order for ${esc(order.supplierName)}</h1><p style="color:var(--muted);font-size:13px;margin:0">Dated ${esc(order.date)}</p><p style="color:var(--muted);font-size:13px;margin:6px 0 0"><b>Order received:</b> ${esc(fmtDateTime(order.createdAt || order.receivedAt || order.createdOn))}</p>
     <div class="grid2"><div class="box"><h3>From (Customer)</h3><p><b>${esc(order.fromBusinessName)}</b><br>${esc(order.fromBusinessAddress||'')}<br>${order.fromBusinessPhone?'Phone: '+esc(order.fromBusinessPhone)+'<br>':''}${order.fromBusinessEmail?esc(order.fromBusinessEmail):''}</p></div>
     <div class="box"><h3>To (Supplier)</h3><p><b>${esc(supplierBusiness.businessName||order.supplierName)}</b><br>${esc(supplierBusiness.address||'')}<br>${supplierBusiness.phone?'Phone: '+esc(supplierBusiness.phone)+'<br>':''}${currentUser.email}</p></div></div>
     <table><thead><tr><th>#</th><th>Product</th><th>Qty</th><th>Price incl. GST</th><th>GST</th></tr></thead><tbody>${rows}</tbody></table>
@@ -170,7 +173,7 @@ async function loadOrder(user){
     document.getElementById('userBox').innerHTML=`${esc(user.email)} <a href="app.html">Back to Billing</a> <button onclick="auth.signOut()">Sign out</button>`;
     content.innerHTML='<div class="loading">Loading orders received…</div>';
     try{const snap=await db.collection('orders').where('supplierEmail','==',user.email).get();const orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-      const rows=orders.map(o=>{const products=(o.items||[]).map(li=>`${esc(li.name)} (${li.qty||0} ${esc(li.unit||'')})`).join(', ');return `<tr><td>${esc(o.date||'')}</td><td>${esc(fmtDateTime(o.createdAt))}</td><td>${esc(o.fromBusinessName||'')}</td><td>${products}</td><td>${o.status==='accepted'?'<span class="status ok" style="display:inline-block;padding:5px 9px;margin:0">Accepted</span>':'<span class="status warn" style="display:inline-block;padding:5px 9px;margin:0">Pending</span>'}</td><td><a class="btn small" href="order-receive.html?id=${encodeURIComponent(o.id)}">View</a></td></tr>`}).join('');
+      const rows=orders.map(o=>{const products=(o.items||[]).map(li=>`${esc(li.name)} (${li.qty||0} ${esc(li.unit||'')})`).join(', ');return `<tr><td>${esc(o.date||'')}</td><td>${esc(fmtDateTime(o.createdAt || o.receivedAt || o.createdOn))}</td><td>${esc(o.fromBusinessName||'')}</td><td>${products}</td><td>${o.status==='accepted'?'<span class="status ok" style="display:inline-block;padding:5px 9px;margin:0">Accepted</span>':'<span class="status warn" style="display:inline-block;padding:5px 9px;margin:0">Pending</span>'}</td><td><a class="btn small" href="order-receive.html?id=${encodeURIComponent(o.id)}">View</a></td></tr>`}).join('');
       content.innerHTML=`<div class="order-card"><span class="badge">Free Service · Orders</span><h1>Orders Received</h1><p style="color:var(--muted);font-size:13px;margin:0 0 18px">Purchase order requests addressed to ${esc(user.email)}.</p><table><thead><tr><th>Date</th><th>Received Time</th><th>From</th><th>Products</th><th>Status</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="6" style="color:var(--muted)">No orders received yet.</td></tr>'}</tbody></table></div>`;
     }catch(err){console.error(err);content.innerHTML='<div class="errbox">Could not load received orders. Please try again in a moment.</div>';}return;
   }
@@ -182,7 +185,7 @@ async function loadOrder(user){
   }catch(err){console.error(err);content.innerHTML=`<div class="errbox">Could not load this order: ${esc(err.message||'Please try again.')}</div>`;}
 }
 
-auth.onAuthStateChanged(user=>{if(!user){window.location.href='login.html?redirect='+encodeURIComponent('order-receive.html'+window.location.search);return;} currentUser=user; loadOrder(user);});
+auth.onAuthStateChanged(user=>{if(!user){window.location.href='login.html?redirect='+encodeURIComponent('order-receive.html'+window.location.search);return;} currentUser=user; loadOrder(user).catch(err=>{console.error(err);document.getElementById('content').innerHTML='<div class="errbox">Could not load this order: '+esc(err.message||err)+'</div>';});});
 </script>
 </body>
 </html>

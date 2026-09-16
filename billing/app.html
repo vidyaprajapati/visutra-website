@@ -190,7 +190,7 @@
     <!-- PRODUCTS -->
     <div id="view-products" class="view hidden">
       <div class="card">
-        <h2>Product Master</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h2>Product Master</h2><button class="btn small" onclick="loadProducts()">Refresh List</button></div>
         <p class="sub">Set up each product once with its HSN code and GST rate — you'll just pick from this list when billing. Enter the price <b>including GST</b> (your selling/MRP price) — the taxable value used on invoices is worked out for you automatically.</p>
         <div class="grid3">
           <div class="field"><label>Product name</label><input id="pName"></div>
@@ -224,7 +224,7 @@
     <!-- CUSTOMERS -->
     <div id="view-customers" class="view hidden">
       <div class="card">
-        <h2>Customers</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h2>Customers</h2><button class="btn small" onclick="loadCustomers()">Refresh List</button></div>
         <div class="grid2">
           <div class="field"><label>Customer / business name</label><input id="cName"></div>
           <div class="field"><label>GSTIN (leave blank if unregistered)</label><input id="cGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('cGstin','cGstinMsg','cState')"><p class="msg" id="cGstinMsg"></p></div>
@@ -248,7 +248,7 @@
     <!-- SUPPLIERS -->
     <div id="view-suppliers" class="view hidden">
       <div class="card">
-        <h2>Supplier Master</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h2>Supplier Master</h2><button class="btn small" onclick="loadSuppliers()">Refresh List</button></div>
         <p class="sub">Add each supplier once — you'll pick from this list when recording a purchase. Click "Ledger" on any row to see their full product-wise, date-wise purchase and payment history.</p>
         <div class="grid2">
           <div class="field"><label>Supplier / business name</label><input id="sName"></div>
@@ -273,7 +273,7 @@
     <!-- PURCHASE PRODUCTS -->
     <div id="view-purchase-products" class="view hidden">
       <div class="card">
-        <h2>Purchase Product Master</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><h2>Purchase Product Master</h2><button class="btn small" onclick="loadPurchaseProducts()">Refresh List</button></div>
         <p class="sub">A separate product list just for purchases (name and unit only) — since the purchase (cost) price is different from the selling price in your GST billing Products list, and even varies supplier to supplier, you enter the price and GST rate manually for every purchase instead of a fixed default.</p>
         <div class="grid3">
           <div class="field"><label>Product name</label><input id="ppName"></div>
