@@ -223,12 +223,28 @@ async function saveSignature(){
 
 /* ---------------- Products ---------------- */
 async function loadProducts(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get();
-  productsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
-  renderProducts();
-  renderProductDropdowns();
-  renderStockDropdowns();
-  renderStockTable();
+  const col = db.collection('users').doc(currentUser.uid).collection('products');
+  try {
+    // Use a simple collection read first. This avoids an orderBy dependency
+    // when older product documents were created without a name field.
+    let snap = await col.get();
+    productsCache = snap.docs.map(d => ({id:d.id, ...d.data()}))
+      .filter(p => p && p.name)
+      .sort((a,b) => String(a.name).localeCompare(String(b.name)));
+    renderProducts();
+    renderProductDropdowns();
+    renderStockDropdowns();
+    renderStockTable();
+    if(document.getElementById('productMsg') && productsCache.length === 0){
+      // Do not show an error when the collection is genuinely empty.
+      document.getElementById('productMsg').textContent = '';
+    }
+  } catch(err) {
+    console.error('Product Master load failed:', err);
+    productsCache = [];
+    renderProducts();
+    if(document.getElementById('productMsg')) showMsg('productMsg', 'Unable to load products. Check that Firestore rules allow your signed-in account to read users/' + currentUser.uid + '/products. ' + (err.code || err.message || ''), false);
+  }
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => `
@@ -265,7 +281,7 @@ async function saveProduct(){
   ['pName','pHsn','pUnit','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
   showMsg('productMsg', 'Saved.', true);
-  loadProducts();
+  await loadProducts();
 }
 function editProduct(id){
   const p = productsCache.find(x => x.id === id);
@@ -281,7 +297,7 @@ function editProduct(id){
 async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
   await db.collection('users').doc(currentUser.uid).collection('products').doc(id).delete();
-  loadProducts();
+  await loadProducts();
 }
 
 /* ---------------- Stock Management ---------------- */
@@ -493,10 +509,25 @@ async function applyStockUpload(){
 
 /* ---------------- Customers ---------------- */
 async function loadCustomers(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('customers').orderBy('name').get();
-  customersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
-  renderCustomers();
-  renderCustomerDropdown();
+  const col = db.collection('users').doc(currentUser.uid).collection('customers');
+  try {
+    // Read the collection directly and sort in the browser. This is more
+    // tolerant of older customer records that may not contain every field.
+    let snap = await col.get();
+    customersCache = snap.docs.map(d => ({id:d.id, ...d.data()}))
+      .filter(c => c && c.name)
+      .sort((a,b) => String(a.name).localeCompare(String(b.name)));
+    renderCustomers();
+    renderCustomerDropdown();
+    if(document.getElementById('customerMsg') && customersCache.length === 0){
+      document.getElementById('customerMsg').textContent = '';
+    }
+  } catch(err) {
+    console.error('Customer Master load failed:', err);
+    customersCache = [];
+    renderCustomers();
+    if(document.getElementById('customerMsg')) showMsg('customerMsg', 'Unable to load customers. Check that Firestore rules allow your signed-in account to read users/' + currentUser.uid + '/customers. ' + (err.code || err.message || ''), false);
+  }
 }
 function renderCustomers(){
   document.getElementById('customersTable').innerHTML = customersCache.map(c => `
@@ -524,7 +555,7 @@ async function saveCustomer(){
   ['cName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('cState').value = '';
   showMsg('customerMsg', 'Saved.', true);
-  loadCustomers();
+  await loadCustomers();
 }
 function editCustomer(id){
   const c = customersCache.find(x => x.id === id);
