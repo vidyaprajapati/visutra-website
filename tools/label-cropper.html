@@ -255,6 +255,17 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     <div class="vlc-stage">
       <span class="vlc-stage-tag">Preview — page 1</span>
       <div id="vlcPreviewMount"><div class="vlc-empty">Upload a PDF to see the crop preview here.</div></div>
+      <div id="vlcSkuSummary" style="display:none;margin-top:16px;padding:16px;background:var(--card,#fff);border:1px solid var(--line,#E4D8BD);border-radius:10px">
+        <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted,#6B6255);margin-bottom:10px">Detected SKUs</div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
+          <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Page</th>
+          <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">SKU</th>
+          <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Qty</th>
+        </tr></thead><tbody id="vlcSkuSummaryTable"></tbody></table>
+        <p style="font-size:12.5px;color:var(--muted,#6B6255);margin:12px 0 0">This list shows regardless of whether "print SKU on label" is turned on above — it's just what was read off the file. Ready to turn these into an order?
+          <a href="../billing/buyer/label-order.html" target="_blank" style="font-weight:600">Open Label-Based Auto Order →</a>
+          (you'll need to sign in and be linked to the seller first — upload the same file there and it'll map each SKU and build the order for you).</p>
+      </div>
     </div>
   </div>
 
@@ -517,7 +528,7 @@ async function detectFlipkartSkus(){
 function onFlipkartSkuModeChange(){
   onSettingChange();
   if(document.getElementById('vlcFlipkartSkuStampMode').checked && pdfJsDoc && currentPlatform === 'flipkart' && !pageSkus.length){
-    detectFlipkartSkus();
+    detectFlipkartSkus().then(renderSkuSummary);
   }
 }
 
@@ -620,17 +631,23 @@ document.getElementById('vlcPlatforms').addEventListener('click', e=>{
   document.getElementById('vlcMeeshoGroupField').style.display = currentPlatform === 'meesho' ? 'block' : 'none';
   document.getElementById('vlcFlipkartSkuField').style.display = currentPlatform === 'flipkart' ? 'block' : 'none';
   updateAmazonSkuUiState();
+  document.getElementById('vlcSkuSummary').style.display = 'none';
+  // SKU detection (for the Detected SKUs panel) always runs regardless of the
+  // "print on label" checkboxes — only the actual stamping onto the output
+  // PDF depends on those.
   if(currentPlatform === 'meesho' && pdfJsDoc && !pageCouriers.length){
-    detectCouriers();
-  } else if(currentPlatform === 'flipkart' && pdfJsDoc && document.getElementById('vlcFlipkartSkuStampMode').checked && !pageSkus.length){
-    detectFlipkartSkus();
-  } else if(currentPlatform !== 'meesho'){
+    detectCouriers().then(renderSkuSummary);
+  } else if(currentPlatform === 'flipkart' && pdfJsDoc && !pageSkus.length){
+    detectFlipkartSkus().then(renderSkuSummary);
+  } else if(currentPlatform === 'amazon' && pdfJsDoc && !Object.keys(amazonSkuByLabelIndex).length){
+    detectAmazonSkus().then(renderSkuSummary);
+  } else {
+    renderSkuSummary();
+  }
+  if(currentPlatform !== 'meesho'){
     document.getElementById('vlcCourierPanel').style.display = 'none';
   } else {
     renderCourierPanel();
-  }
-  if(currentPlatform === 'amazon' && pdfJsDoc && document.getElementById('vlcAmazonSkuMode').checked && !Object.keys(amazonSkuByLabelIndex).length){
-    detectAmazonSkus();
   }
 });
 
@@ -646,9 +663,6 @@ function updateAmazonSkuUiState(){
 function onAmazonSkuModeChange(){
   updateAmazonSkuUiState();
   updatePreview();
-  if(document.getElementById('vlcAmazonSkuMode').checked && pdfJsDoc && currentPlatform === 'amazon'){
-    detectAmazonSkus();
-  }
   storePreset(currentPlatform, getAllSettings());
 }
 // Generic handler for any setting (orientation, Meesho SKU-stamp mode) that just
@@ -731,22 +745,49 @@ async function handleFile(file){
   pageCouriers = []; pageSkus = []; pageQtys = []; pageGroups = []; groupOrder = [];
   amazonSkuByLabelIndex = {};
   document.getElementById('vlcCourierPanel').style.display = 'none';
+  document.getElementById('vlcSkuSummary').style.display = 'none';
   await renderPreview();
+  // SKU detection always runs on upload, independent of the "print SKU on
+  // label" checkboxes below — those checkboxes only control whether the
+  // SKU gets stamped onto the OUTPUT pdf; the Detected SKUs panel here is
+  // just showing what was read off the file either way.
   if(currentPlatform === 'meesho'){
-    document.getElementById('vlcStatus').textContent = 'Detecting courier partners…';
+    document.getElementById('vlcStatus').textContent = 'Detecting courier partners & SKUs…';
     await detectCouriers();
     document.getElementById('vlcStatus').textContent = '';
   }
-  if(currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode').checked){
+  if(currentPlatform === 'amazon'){
     document.getElementById('vlcStatus').textContent = 'Reading SKUs from invoice pages…';
     await detectAmazonSkus();
     document.getElementById('vlcStatus').textContent = '';
   }
-  if(currentPlatform === 'flipkart' && document.getElementById('vlcFlipkartSkuStampMode').checked){
+  if(currentPlatform === 'flipkart'){
     document.getElementById('vlcStatus').textContent = 'Reading SKUs from labels…';
     await detectFlipkartSkus();
     document.getElementById('vlcStatus').textContent = '';
   }
+  renderSkuSummary();
+}
+
+function renderSkuSummary(){
+  const rows = [];
+  if(currentPlatform === 'amazon'){
+    Object.keys(amazonSkuByLabelIndex).sort((a,b)=>a-b).forEach(idx => {
+      amazonSkuByLabelIndex[idx].forEach(it => rows.push({ page: parseInt(idx,10)+1, sku: it.sku, qty: it.qty }));
+    });
+  } else {
+    pageSkus.forEach((sku, i) => {
+      if(sku && sku !== 'Unknown SKU') rows.push({ page: i+1, sku, qty: pageQtys[i] || 1 });
+    });
+  }
+  const panel = document.getElementById('vlcSkuSummary');
+  if(!rows.length){ panel.style.display = 'none'; return; }
+  document.getElementById('vlcSkuSummaryTable').innerHTML = rows.map(r =>
+    `<tr><td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.page}</td>
+     <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD);font-family:var(--font-mono,monospace)">${escapeHtml(r.sku)}</td>
+     <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.qty}</td></tr>`
+  ).join('');
+  panel.style.display = 'block';
 }
 
 async function renderPreview(){
