@@ -226,12 +226,27 @@ async function loadProducts(){
   renderStockTable();
 }
 function renderProducts(){
-  document.getElementById('productsTable').innerHTML = productsCache.map(p => `
+  document.getElementById('productsTable').innerHTML = productsCache.map(p => {
+    const isActive = p.active !== false; // missing = treat as active (backward compatible with products created before this field existed)
+    const isVisible = !!p.buyerVisibility;
+    return `
     <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td>
+    <td><button class="btn small" onclick="toggleProductActive('${p.id}', ${!isActive})">${isActive ? 'Active ✓' : 'Inactive'}</button></td>
+    <td><button class="btn small" onclick="toggleBuyerVisibility('${p.id}', ${!isVisible})" title="Whether linked buyer accounts can see this product">${isVisible ? 'Visible ✓' : 'Hidden'}</button></td>
     <td class="row-actions">
       <button class="btn small" onclick="editProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="9" style="color:var(--muted)">No products yet.</td></tr>';
+    </td></tr>`;
+  }).join('') || '<tr><td colspan="11" style="color:var(--muted)">No products yet.</td></tr>';
+}
+/* Quick toggles from the table row — no need to open the edit form for these two flags. */
+async function toggleProductActive(id, newVal){
+  await db.collection('users').doc(currentUser.uid).collection('products').doc(id).update({active: newVal});
+  loadProducts();
+}
+async function toggleBuyerVisibility(id, newVal){
+  await db.collection('users').doc(currentUser.uid).collection('products').doc(id).update({buyerVisibility: newVal});
+  loadProducts();
 }
 function updateProductExclusivePreview(){
   const incl = parseFloat(document.getElementById('pPriceIncl').value) || 0;
@@ -252,7 +267,9 @@ async function saveProduct(){
     price: exclPrice, // stored as the excl.-GST taxable value, used as-is everywhere downstream (invoicing, GSTR-1)
     gstRate,
     reorderLevel: parseFloat(document.getElementById('pReorderLevel').value) || 0,
-    stock: existing ? (existing.stock || 0) : 0 // stock is only ever changed via purchases, monthly uploads, or Adjust Stock — never reset by editing product details
+    stock: existing ? (existing.stock || 0) : 0, // stock is only ever changed via purchases, monthly uploads, or Adjust Stock — never reset by editing product details
+    active: existing ? (existing.active !== false) : true,
+    buyerVisibility: existing ? !!existing.buyerVisibility : false // off by default; turn on per-product from the table once a buyer is linked
   };
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
@@ -496,10 +513,11 @@ async function loadCustomers(){
 function renderCustomers(){
   document.getElementById('customersTable').innerHTML = customersCache.map(c => `
     <tr><td>${esc(c.name)}</td><td>${esc(c.gstin||'—')}</td><td>${esc(c.state||'')}</td><td>${esc(c.email||'')}</td>
+    <td>${c.linkStatus === 'ACTIVE' ? `<span class="badge">Linked · ${esc(c.linkedBuyerEmail||'')}</span>` : '<span style="color:var(--muted)">Not linked</span>'}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editCustomer('${c.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteCustomer('${c.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No customers yet.</td></tr>';
+    </td></tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No customers yet.</td></tr>';
 }
 async function saveCustomer(){
   const id = document.getElementById('cEditId').value;
@@ -515,8 +533,8 @@ async function saveCustomer(){
   };
   if(!data.name){ showMsg('customerMsg', 'Customer name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('customers');
-  if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['cName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
+  if(id){ await col.doc(id).set(data, {merge:true}); } else { await col.add(data); }
+  ['cName','cGstin','cAddress','cEmail','cPhone','cEditId','cBuyerEmail'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('cState').value = '';
   showMsg('customerMsg', 'Saved.', true);
   loadCustomers();
@@ -530,10 +548,65 @@ function editCustomer(id){
   document.getElementById('cState').value = c.stateCode || '';
   document.getElementById('cEmail').value = c.email || '';
   document.getElementById('cPhone').value = c.phone || '';
+  document.getElementById('cBuyerEmail').value = c.linkedBuyerEmail || '';
+  document.getElementById('buyerLinkMsg').textContent = '';
 }
 async function deleteCustomer(id){
   if(!confirm('Delete this customer?')) return;
   await db.collection('users').doc(currentUser.uid).collection('customers').doc(id).delete();
+  loadCustomers();
+}
+
+/* ---------------- Seller -> Buyer linking ----------------
+   Looks up buyerDirectory (a public uid<->email index that a buyer creates
+   for themselves when they turn on Buyer features in My Account) to find
+   the buyer's uid, then records the relationship in two places:
+     - on the customer doc itself (linkedBuyerUid/linkedBuyerEmail/linkStatus)
+     - in a top-level sellerLinks/{sellerUid}_{buyerUid} doc, which is what
+       Firestore security rules check to decide whether that buyer may read
+       this seller's buyer-visible products. */
+async function linkBuyerAccount(){
+  const id = document.getElementById('cEditId').value;
+  if(!id){ showMsg('buyerLinkMsg', 'Save this customer first, then click Edit on it to link a buyer account.', false); return; }
+  const email = document.getElementById('cBuyerEmail').value.trim().toLowerCase();
+  if(!email){ showMsg('buyerLinkMsg', "Enter the buyer's login email.", false); return; }
+
+  showMsg('buyerLinkMsg', 'Looking up buyer account…', true);
+  try{
+    const dirSnap = await db.collection('buyerDirectory').doc(email).get();
+    if(!dirSnap.exists){
+      showMsg('buyerLinkMsg', `No buyer account found for ${email}. Ask them to turn on "Buyer features" on their My Account page first, then try again.`, false);
+      return;
+    }
+    const buyerUid = dirSnap.data().uid;
+    const linkId = `${currentUser.uid}_${buyerUid}`;
+    await db.collection('users').doc(currentUser.uid).collection('customers').doc(id).set({
+      linkedBuyerUid: buyerUid, linkedBuyerEmail: email, linkStatus: 'ACTIVE'
+    }, {merge:true});
+    await db.collection('sellerLinks').doc(linkId).set({
+      sellerUid: currentUser.uid,
+      sellerName: businessData.businessName || currentUser.email,
+      sellerEmail: currentUser.email || '',
+      buyerUid, buyerEmail: email,
+      customerId: id,
+      status: 'ACTIVE',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, {merge:true});
+    showMsg('buyerLinkMsg', `Linked. ${email} can now see any of your products marked Active + Buyer Visible.`, true);
+    loadCustomers();
+  }catch(err){
+    showMsg('buyerLinkMsg', err.message, false);
+  }
+}
+async function unlinkBuyerAccount(){
+  const id = document.getElementById('cEditId').value;
+  const customer = customersCache.find(c => c.id === id);
+  if(!customer || !customer.linkedBuyerUid){ showMsg('buyerLinkMsg', 'This customer is not linked to a buyer account.', false); return; }
+  const linkId = `${currentUser.uid}_${customer.linkedBuyerUid}`;
+  await db.collection('users').doc(currentUser.uid).collection('customers').doc(id).set({linkStatus: 'INACTIVE'}, {merge:true});
+  await db.collection('sellerLinks').doc(linkId).set({status: 'INACTIVE', updatedAt: firebase.firestore.FieldValue.serverTimestamp()}, {merge:true});
+  showMsg('buyerLinkMsg', 'Unlinked. This customer can no longer see your buyer-visible products.', true);
   loadCustomers();
 }
 function renderCustomerDropdown(){

@@ -28,6 +28,7 @@ function mountUserMenu(mountId, user, opts) {
         <div style="padding:10px 14px;font-size:11.5px;color:#6B6255;border-bottom:1px solid #E4D8BD;word-break:break-all">${escapeHtmlUM(user.email || '')}</div>
         <a href="${base}account.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">My Account</a>
         ${opts.showBillingLink ? `<a href="${base}app.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">My Billing Account</a>` : ''}
+        <a href="${base}buyer/my-sellers.html" style="display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none">My Sellers (Buyer)</a>
         <a href="#" id="vtLogoutLinkUM" style="display:block;padding:10px 14px;font-size:13px;color:#9E3608;text-decoration:none;border-top:1px solid #E4D8BD">Log out</a>
       </div>
     </div>
