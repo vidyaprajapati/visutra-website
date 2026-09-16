@@ -1,1 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Order Receive | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+</head>
+<body>
 
+<div class="topbar">
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"><b>Order Receive</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="app.html">Back to Billing</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div style="max-width:1000px;margin:0 auto;padding:32px 20px">
+
+  <div class="card">
+    <h2>Orders From Buyers</h2>
+    <p class="sub">Accepting an order fetches the current price, GST rate and HSN from your own Product Master (never anything the buyer sent), checks stock, then generates a GST invoice, deducts inventory, and logs a stock movement — all in one atomic step, so a double-click or two staff members clicking Accept at the same moment can never double-process the same order.</p>
+    <div class="field" style="max-width:240px"><label>Filter</label><select id="fStatus" onchange="renderOrders()">
+      <option value="PENDING">Pending</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option><option value="">All</option>
+    </select></div>
+    <table><thead><tr><th>Order #</th><th>Buyer</th><th>Date</th><th>Items</th><th>Status</th><th></th></tr></thead>
+    <tbody id="ordersTable"></tbody></table>
+    <p class="msg" id="pageMsg"></p>
+  </div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script src="assets/user-menu.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script>
+let currentUser = null;
+let businessData = {};
+let ordersCache = [];
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = 'login.html?redirect=' + encodeURIComponent('seller/order-receive.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = 'complete-profile.html?redirect=' + encodeURIComponent('seller/order-receive.html');
+    return;
+  }
+
+  currentUser = user;
+  businessData = snap.data() || {};
+  mountUserMenu('userMenuMount', user, { showBillingLink: true });
+
+  if(!businessData.businessName || !businessData.gstin || !businessData.stateCode){
+    showMsg('pageMsg', 'Complete your Business Profile (Billing → Business Profile) before accepting orders — it\'s needed on the GST invoice.', false);
+  }
+
+  loadOrders();
+});
+
+const deepLinkOrderId = new URLSearchParams(window.location.search).get('id');
+
+async function loadOrders(){
+  const snap = await db.collection('marketplaceOrders').where('sellerUid', '==', currentUser.uid).get();
+  ordersCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  ordersCache.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+  if(deepLinkOrderId){
+    const target = ordersCache.find(o => o.id === deepLinkOrderId);
+    if(target) document.getElementById('fStatus').value = target.status;
+  }
+  renderOrders();
+  if(deepLinkOrderId){
+    const row = document.getElementById(`order-row-${deepLinkOrderId}`);
+    if(row){ row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.style.outline = '2px solid var(--ink)'; }
+  }
+}
+function renderOrders(){
+  const filter = document.getElementById('fStatus').value;
+  const rows = filter ? ordersCache.filter(o => o.status === filter) : ordersCache;
+  document.getElementById('ordersTable').innerHTML = rows.map(o => {
+    const itemsSummary = (o.items||[]).map(i => {
+      const bd = i.marketplaceBreakdown;
+      const bdText = bd && (bd.amazon || bd.meesho || bd.flipkart)
+        ? ` <span style="color:var(--muted);font-size:11px">(Amazon ${bd.amazon||0} / Meesho ${bd.meesho||0} / Flipkart ${bd.flipkart||0})</span>` : '';
+      return `${esc(i.productName)} × ${i.qty}${bdText}`;
+    }).join('<br>');
+    const date = o.createdAt?.toDate ? o.createdAt.toDate().toISOString().slice(0,10) : '';
+    const typeLabel = o.orderType === 'LABEL_AUTO' ? '<span class="badge">Label Auto</span> ' : '';
+    let actions = '';
+    if(o.status === 'PENDING'){
+      actions = `<button class="btn small primary" onclick="acceptOrder('${o.id}')">Accept</button>
+                 <button class="btn small danger" onclick="rejectOrder('${o.id}')">Reject</button>`;
+    } else if(o.status === 'ACCEPTED' && o.invoiceId){
+      actions = `<a class="btn small" href="invoice-view.html?id=${o.invoiceId}" target="_blank">View Invoice</a>`;
+    } else if(o.status === 'REJECTED'){
+      actions = `<span style="color:var(--muted)">${esc(o.rejectionReason||'No reason given')}</span>`;
+    }
+    return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}</td><td>${esc(o.buyerBusiness?.businessName || o.buyerEmail)}</td><td>${date}</td>
+      <td>${itemsSummary}</td><td><span class="badge">${esc(o.status)}</span></td>
+      <td class="row-actions">${actions}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No orders here.</td></tr>';
+}
+
+function currentFY(date){
+  const d = date || new Date();
+  const y = d.getFullYear();
+  const startYear = d.getMonth() >= 3 ? y : y - 1;
+  return `${String(startYear).slice(2)}-${String(startYear+1).slice(2)}`;
+}
+
+async function acceptOrder(orderId){
+  if(!confirm('Accept this order? This generates a GST invoice and deducts inventory — it cannot be undone.')) return;
+  if(!businessData.businessName || !businessData.gstin || !businessData.stateCode){
+    showMsg('pageMsg', 'Complete your Business Profile before accepting orders.', false);
+    return;
+  }
+
+  const orderRef = db.collection('marketplaceOrders').doc(orderId);
+  const invoiceRef = db.collection('users').doc(currentUser.uid).collection('invoices').doc();
+  const publicInvoiceRef = db.collection('public_invoices').doc(invoiceRef.id);
+  const counterRef = db.collection('users').doc(currentUser.uid).collection('meta').doc('invoiceCounter');
+  let emailPayload = null; // filled inside the transaction once we know the final numbers, sent after it commits
+
+  try{
+    await db.runTransaction(async tx => {
+      const orderSnap = await tx.get(orderRef);
+      if(!orderSnap.exists) throw new Error('Order not found.');
+      const order = orderSnap.data();
+      if(order.sellerUid !== currentUser.uid) throw new Error('This order is not addressed to you.');
+      if(order.status !== 'PENDING') throw new Error(`This order is already ${(order.status||'').toLowerCase()} — refresh the page.`);
+
+      // Read every product FRESH inside the transaction. Price, GST rate,
+      // HSN, and stock all come from here — never from anything the buyer's
+      // client sent when the order was placed.
+      const productReads = [];
+      for(const item of (order.items || [])){
+        const pRef = db.collection('users').doc(currentUser.uid).collection('products').doc(item.productId);
+        productReads.push({ item, ref: pRef, snap: await tx.get(pRef) });
+      }
+      const counterSnap = await tx.get(counterRef);
+
+      // Validate everything before writing anything — a Firestore transaction
+      // is all-or-nothing, so throwing here leaves zero partial writes.
+      for(const {item, snap} of productReads){
+        if(!snap.exists) throw new Error(`"${item.productName}" no longer exists in your Product Master.`);
+        const p = snap.data();
+        if(p.active === false) throw new Error(`"${p.name}" is marked Inactive — reactivate it in Product Master before accepting.`);
+        if((p.stock || 0) < item.qty) throw new Error(`Insufficient stock for "${p.name}". Available: ${p.stock || 0}, required: ${item.qty}.`);
+      }
+
+      // Invoice numbering reuses the SAME FY-based counter as manual invoices
+      // (users/{uid}/meta/invoiceCounter) — not a separate numbering system.
+      const fy = currentFY(new Date());
+      let counterData = counterSnap.exists ? counterSnap.data() : { fy: '', lastNumber: 0 };
+      if(counterData.fy !== fy) counterData = { fy, lastNumber: 0 };
+      counterData.lastNumber += 1;
+      const invoiceNo = `${fy}/${String(counterData.lastNumber).padStart(4, '0')}`;
+
+      const sameState = order.buyerBusiness?.stateCode && businessData.stateCode && order.buyerBusiness.stateCode === businessData.stateCode;
+      let subtotal = 0, cgst = 0, sgst = 0, igst = 0;
+      const invoiceItems = [];
+      const acceptedItems = [];
+      for(const { item, ref, snap } of productReads){
+        const p = snap.data();
+        const taxable = Math.round(item.qty * p.price * 100) / 100;
+        const gstAmt = Math.round(taxable * (p.gstRate || 0) / 100 * 100) / 100;
+        subtotal += taxable;
+        if(sameState){ cgst += gstAmt / 2; sgst += gstAmt / 2; } else { igst += gstAmt; }
+        invoiceItems.push({ productId: item.productId, name: p.name, hsn: p.hsn || '', unit: p.unit || 'PCS', qty: item.qty, rate: p.price, discount: 0, gstRate: p.gstRate || 0, taxable });
+        acceptedItems.push({ productId: item.productId, productName: p.name, sellerSku: p.sku || item.sellerSku || '', unit: p.unit || 'PCS', qty: item.qty, rate: p.price, gstRate: p.gstRate || 0, taxable, gstAmt, total: taxable + gstAmt, marketplaceBreakdown: item.marketplaceBreakdown || null });
+      }
+      const grandTotal = subtotal + cgst + sgst + igst;
+
+      // Same shape as a manually created invoice — reuses Invoice History,
+      // GSTR-1 filing, and the public invoice-view.html PDF viewer as-is.
+      const invoiceData = {
+        invoiceNo, date: new Date().toISOString().slice(0, 10), reverseCharge: false,
+        business: { ...businessData },
+        customer: {
+          name: order.buyerBusiness?.businessName || '', gstin: order.buyerBusiness?.gstin || '',
+          address: order.buyerBusiness?.address || '', state: order.buyerBusiness?.state || '',
+          stateCode: order.buyerBusiness?.stateCode || '', email: order.buyerBusiness?.email || ''
+        },
+        items: invoiceItems,
+        subtotal, cgst, sgst, igst, grandTotal, sameState: !!sameState,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        emailSent: false,
+        sourceOrderId: orderId, sourceOrderNumber: order.orderNumber
+      };
+
+      /* ---- Writes: all committed together, or none of them are ---- */
+      tx.set(counterRef, counterData);
+      tx.set(invoiceRef, invoiceData);
+      tx.set(publicInvoiceRef, invoiceData);
+      for(const { item, ref, snap } of productReads){
+        tx.update(ref, { stock: firebase.firestore.FieldValue.increment(-item.qty) });
+        const moveRef = db.collection('users').doc(currentUser.uid).collection('stockMovements').doc();
+        tx.set(moveRef, {
+          type: 'sale-out', productId: item.productId, productName: snap.data().name, qty: -item.qty,
+          date: invoiceData.date, note: `Order ${order.orderNumber} — Invoice ${invoiceNo} — sold to ${invoiceData.customer.name}`,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+      tx.update(orderRef, {
+        status: 'ACCEPTED', invoiceId: invoiceRef.id, invoiceNo,
+        items: acceptedItems,
+        invoiceSummary: { subtotal, cgst, sgst, igst, grandTotal },
+        acceptedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+
+      emailPayload = {
+        toEmail: order.buyerEmail, toName: invoiceData.customer.name,
+        subject: `Order Accepted – VISUTRA – Order #${order.orderNumber}`,
+        headline: `Your order to ${businessData.businessName} has been accepted — your GST bill is ready.`,
+        detailLine: `Invoice ${invoiceNo} — Total ₹${grandTotal.toFixed(2)}. Opening the link below downloads the bill automatically — no sign-in needed.`,
+        viewLink: `${window.location.origin}/billing/invoice-view.html?id=${invoiceRef.id}`
+      };
+    });
+
+    showMsg('pageMsg', 'Order accepted — invoice generated and stock updated.', true);
+    if(emailPayload) sendOrderNotification(emailPayload.toEmail, emailPayload.toName, emailPayload.subject, emailPayload.headline, emailPayload.detailLine, emailPayload.viewLink);
+    loadOrders();
+  }catch(err){
+    showMsg('pageMsg', err.message, false);
+  }
+}
+
+async function rejectOrder(orderId){
+  const reason = window.prompt('Optional rejection reason (shown to the buyer):') || '';
+  if(!confirm('Reject this order?')) return;
+  try{
+    await db.collection('marketplaceOrders').doc(orderId).update({
+      status: 'REJECTED', rejectionReason: reason, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    showMsg('pageMsg', 'Order rejected.', true);
+    const order = ordersCache.find(o => o.id === orderId);
+    if(order){
+      sendOrderNotification(
+        order.buyerEmail, order.buyerBusiness?.businessName,
+        `Order Rejected – VISUTRA – Order #${order.orderNumber}`,
+        `Your order to ${businessData.businessName} was rejected.`,
+        reason || 'No reason given.',
+        `${window.location.origin}/billing/buyer/my-orders.html?id=${orderId}`
+      );
+    }
+    loadOrders();
+  }catch(err){
+    showMsg('pageMsg', err.message, false);
+  }
+}
+
+async function sendOrderNotification(toEmail, toName, subject, headline, detailLine, viewLink){
+  if(!toEmail || !EMAILJS_ORDER_TEMPLATE_ID || EMAILJS_ORDER_TEMPLATE_ID.indexOf('PASTE_YOUR') === 0) return;
+  try{
+    emailjs.init(EMAILJS_PUBLIC_KEY);
+    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_ORDER_TEMPLATE_ID, {
+      to_email: toEmail, to_name: toName || toEmail,
+      email_subject: subject, headline, detail_line: detailLine, view_link: viewLink
+    });
+  }catch(err){ console.error('Order notification email failed:', err); }
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function showMsg(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+</body>
+</html>
