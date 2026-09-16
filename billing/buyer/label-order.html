@@ -43,7 +43,8 @@
   </div>
 
   <div class="card" id="summaryCard" style="display:none">
-    <h2>Auto Order Summary</h2>
+    <h2>Today's Order Summary</h2>
+    <p class="sub">Accumulates across every batch of labels you process today — upload a few now, a few more later, it all adds up into one summary per seller. Click Send Order whenever you're ready; it clears after sending, ready for tomorrow.</p>
     <div id="summaryBySeller"></div>
   </div>
 
@@ -63,9 +64,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs
 let currentUser = null;
 let buyerData = {};
 let mappingsCache = [];       // this buyer's ACTIVE buyerSkuMappings
-let detectedItems = [];       // { marketplace, sku, qty, pageHash, alreadyProcessed }
-let sellerGroups = {};        // sellerId -> { sellerId, sellerName, itemsByProduct: { productId -> {productName, sellerSku, qty, breakdown:{amazon,meesho,flipkart}} } }
-let unmappedFound = {};       // "marketplace_sku" -> { marketplace, sku, qty }
+let unmappedFound = {};       // "marketplace_sku" -> { marketplace, sku, qty } — just for this session's upload feedback
+let todayKey = new Date().toISOString().slice(0, 10); // buyer's local date; each day's accumulation is separate
+let todayDraftsCache = {};    // sellerId -> the labelOrderDrafts/{todayKey}_{sellerId} doc, {id, sellerId, sellerName, itemsByProduct, pageHashes}
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -86,6 +87,8 @@ auth.onAuthStateChanged(async user => {
 
   await loadMappings();
   await loadSellerEmails();
+  await loadTodayDrafts();
+  await consumeCropperHandoff();
 });
 
 async function loadMappings(){
@@ -107,15 +110,29 @@ function findMapping(marketplace, sku){
   return mappingsCache.find(m => (m[field] || '').trim().toLowerCase() === skuLower) || null;
 }
 
+/* Picks up SKUs detected on the free Label Cropper tool (sessionStorage,
+   same-origin handoff — see tools/label-cropper.html's "Send to Label-Based
+   Auto Order" button) so the buyer never has to upload that same file here
+   a second time. Consumed once and cleared, so refreshing this page doesn't
+   reprocess it again. */
+async function consumeCropperHandoff(){
+  let raw;
+  try{ raw = sessionStorage.getItem('vlc_detected_skus'); }catch(e){ return; }
+  if(!raw) return;
+  sessionStorage.removeItem('vlc_detected_skus');
+  let payload;
+  try{ payload = JSON.parse(raw); }catch(e){ return; }
+  if(!payload || !Array.isArray(payload.items) || !payload.items.length) return;
+  showMsg('uploadMsg', `Loaded ${payload.items.length} SKU(s) detected on Label Cropper (${payload.fileName || 'uploaded file'}) — no re-upload needed.`, true);
+  await processHits(payload.items);
+}
+
 async function processFiles(){
   const files = document.getElementById('labelFiles').files;
   if(!files.length){ showMsg('uploadMsg', 'Choose at least one PDF.', false); return; }
   showMsg('uploadMsg', 'Reading labels…', true);
 
-  detectedItems = [];
-  sellerGroups = {};
-  unmappedFound = {};
-
+  const hits = [];
   for(const file of files){
     try{
       const buf = await file.arrayBuffer();
@@ -124,11 +141,10 @@ async function processFiles(){
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
         const text = content.items.map(it => it.str).join(' ');
-        const hits = extractAllMarketplaceItems(text);
-        for(const hit of hits){
+        const pageHits = extractAllMarketplaceItems(text);
+        for(const hit of pageHits){
           const pageHash = hashText(`${hit.marketplace}|${hit.sku}|${text.slice(0, 200)}`);
-          const already = await isAlreadyProcessed(pageHash);
-          detectedItems.push({ ...hit, pageHash, alreadyProcessed: already, fileName: file.name, pageNum: i });
+          hits.push({ ...hit, pageHash });
         }
       }
     }catch(err){
@@ -137,32 +153,39 @@ async function processFiles(){
     }
   }
 
-  if(!detectedItems.length){
+  if(!hits.length){
     showMsg('uploadMsg', 'No marketplace SKU could be detected in the uploaded file(s). You can still map and order manually from Product Select Order.', false);
-    renderUnmapped();
-    renderSummary();
     return;
   }
+  await processHits(hits, files.length);
+}
 
-  for(const item of detectedItems){
-    if(item.alreadyProcessed) continue; // already counted in a previously submitted order — skip silently, shown as a note below
-    const mapping = findMapping(item.marketplace, item.sku);
+/* Shared by both the direct file upload above and the Label Cropper
+   handoff — takes a flat list of {marketplace, sku, qty, pageHash} and
+   merges each into today's running per-seller draft (or the Unmapped SKUs
+   queue if it isn't mapped yet). */
+async function processHits(hits, fileCount){
+  unmappedFound = {};
+  let mergedCount = 0, skippedCount = 0;
+  for(const hit of hits){
+    if(await isAlreadyProcessed(hit.pageHash)){ skippedCount++; continue; } // already part of a SENT order
+    const mapping = findMapping(hit.marketplace, hit.sku);
     if(mapping){
-      addToSellerGroup(mapping, item);
+      const wasNew = await mergeItemIntoDraft(mapping, hit);
+      if(wasNew) mergedCount++; else skippedCount++; // already sitting in today's unsent draft
     } else {
-      const key = `${item.marketplace}_${item.sku}`;
-      if(!unmappedFound[key]) unmappedFound[key] = { marketplace: item.marketplace, sku: item.sku, qty: 0 };
-      unmappedFound[key].qty += item.qty;
-      await reportUnmappedSku(item.marketplace, item.sku); // also drops it into the persistent Unmapped SKUs queue on Buyer SKU Master
+      const key = `${hit.marketplace}_${hit.sku}`;
+      if(!unmappedFound[key]) unmappedFound[key] = { marketplace: hit.marketplace, sku: hit.sku, qty: 0 };
+      unmappedFound[key].qty += hit.qty;
+      await reportUnmappedSku(hit.marketplace, hit.sku); // also drops it into the persistent Unmapped SKUs queue on Buyer SKU Master
     }
   }
 
-  const skippedCount = detectedItems.filter(i => i.alreadyProcessed).length;
-  const msg = `Found ${detectedItems.length} item(s) across ${files.length} file(s).` +
-    (skippedCount ? ` ${skippedCount} already processed in an earlier order — not counted again.` : '');
+  const msg = `Found ${hits.length} item(s)` + (fileCount ? ` across ${fileCount} file(s)` : '') + `. ${mergedCount} added to today's summary.` +
+    (skippedCount ? ` ${skippedCount} already counted (sent earlier, or already in today's summary).` : '');
   showMsg('uploadMsg', msg, true);
   renderUnmapped();
-  renderSummary();
+  await loadTodayDrafts();
 }
 
 async function isAlreadyProcessed(pageHash){
@@ -172,17 +195,43 @@ async function isAlreadyProcessed(pageHash){
   }catch(err){ return false; }
 }
 
-function addToSellerGroup(mapping, item){
-  const g = sellerGroups[mapping.sellerId] || (sellerGroups[mapping.sellerId] = {
-    sellerId: mapping.sellerId, sellerName: mapping.sellerName, itemsByProduct: {}, pageHashes: []
+/* Merges one detected item into today's running draft for its seller
+   (users/{buyerUid}/labelOrderDrafts/{todayKey}_{sellerId}). Returns true if
+   it was newly added, false if this exact label page was already merged in
+   earlier today (so re-processing the same file twice in one day doesn't
+   double the quantity before it's even been sent). */
+async function mergeItemIntoDraft(mapping, hit){
+  const draftId = `${todayKey}_${mapping.sellerId}`;
+  const ref = db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').doc(draftId);
+  let added = false;
+  await db.runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    const data = snap.exists ? snap.data() : {
+      date: todayKey, sellerId: mapping.sellerId, sellerName: mapping.sellerName,
+      itemsByProduct: {}, pageHashes: []
+    };
+    if((data.pageHashes || []).includes(hit.pageHash)) return; // already merged in today, before it was sent
+    added = true;
+    const p = data.itemsByProduct[mapping.productId] || {
+      productName: mapping.productName, sellerSku: mapping.sellerSku,
+      qty: 0, breakdown: { amazon: 0, meesho: 0, flipkart: 0 }
+    };
+    p.qty += hit.qty;
+    p.breakdown[hit.marketplace.toLowerCase()] = (p.breakdown[hit.marketplace.toLowerCase()] || 0) + hit.qty;
+    data.itemsByProduct[mapping.productId] = p;
+    data.pageHashes = [...(data.pageHashes || []), hit.pageHash];
+    data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+    tx.set(ref, data);
   });
-  const p = g.itemsByProduct[mapping.productId] || (g.itemsByProduct[mapping.productId] = {
-    productId: mapping.productId, productName: mapping.productName, sellerSku: mapping.sellerSku,
-    qty: 0, breakdown: { amazon: 0, meesho: 0, flipkart: 0 }
-  });
-  p.qty += item.qty;
-  p.breakdown[item.marketplace.toLowerCase()] += item.qty;
-  g.pageHashes.push(item.pageHash);
+  return added;
+}
+
+async function loadTodayDrafts(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts')
+    .where('date', '==', todayKey).get();
+  todayDraftsCache = {};
+  snap.docs.forEach(d => { todayDraftsCache[d.data().sellerId] = { id: d.id, ...d.data() }; });
+  renderSummary();
 }
 
 /* Same queue as Buyer SKU Master's "Report a new marketplace SKU" — one
@@ -215,10 +264,10 @@ function renderUnmapped(){
 }
 
 function renderSummary(){
-  const sellerIds = Object.keys(sellerGroups);
+  const sellerIds = Object.keys(todayDraftsCache);
   document.getElementById('summaryCard').style.display = sellerIds.length ? 'block' : 'none';
   document.getElementById('summaryBySeller').innerHTML = sellerIds.map(sid => {
-    const g = sellerGroups[sid];
+    const g = todayDraftsCache[sid];
     const products = Object.values(g.itemsByProduct);
     const rows = products.map(p => `
       <tr><td>${esc(p.productName)}</td><td>${esc(p.sellerSku||'—')}</td>
@@ -229,7 +278,7 @@ function renderSummary(){
       <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">${esc(g.sellerName)}</h3>
       <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Total Qty</th></tr></thead>
       <tbody>${rows}</tbody></table>
-      <button class="btn primary" style="margin-top:10px" onclick="placeAutoOrder('${sid}')">Place Order to ${esc(g.sellerName)}</button>
+      <button class="btn primary" style="margin-top:10px" onclick="placeAutoOrder('${sid}')">Send Order to ${esc(g.sellerName)}</button>
       <p class="msg" id="autoOrderMsg-${sid}"></p>
     </div>`;
   }).join('') || '<p class="sub">No fully-mapped items to order yet.</p>';
@@ -240,12 +289,12 @@ async function placeAutoOrder(sellerId){
     showMsg(`autoOrderMsg-${sellerId}`, 'Complete your Business Profile (Billing → Business Profile) before placing an order.', false);
     return;
   }
-  const g = sellerGroups[sellerId];
+  const g = todayDraftsCache[sellerId];
   if(!g) return;
-  showMsg(`autoOrderMsg-${sellerId}`, 'Placing order…', true);
+  showMsg(`autoOrderMsg-${sellerId}`, 'Sending order…', true);
   try{
-    const items = Object.values(g.itemsByProduct).map(p => ({
-      productId: p.productId, productName: p.productName, sellerSku: p.sellerSku, qty: p.qty,
+    const items = Object.entries(g.itemsByProduct).map(([productId, p]) => ({
+      productId, productName: p.productName, sellerSku: p.sellerSku, qty: p.qty,
       marketplaceBreakdown: { ...p.breakdown }
     }));
     const orderRef = db.collection('marketplaceOrders').doc();
@@ -266,10 +315,16 @@ async function placeAutoOrder(sellerId){
 
     // Mark every label page that contributed to THIS submitted order as
     // processed, so re-uploading the same PDF later won't double-count it.
-    await Promise.all(g.pageHashes.map(hash =>
+    await Promise.all((g.pageHashes || []).map(hash =>
       db.collection('users').doc(currentUser.uid).collection('processedLabels').doc(hash)
         .set({ orderId: orderRef.id, processedAt: firebase.firestore.FieldValue.serverTimestamp() })
     ));
+
+    // Today's draft for this seller has now been sent — clear it so tomorrow
+    // (or the next batch today) starts fresh rather than double-counting.
+    await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').doc(g.id).delete();
+    delete todayDraftsCache[sellerId];
+    renderSummary();
 
     showMsg(`autoOrderMsg-${sellerId}`, `Order ${orderNumber} sent to ${g.sellerName}. Track it from My Orders.`, true);
     sendOrderNotification(
@@ -279,8 +334,6 @@ async function placeAutoOrder(sellerId){
       items.map(i => `${i.productName} × ${i.qty}`).join(', '),
       `${window.location.origin}/billing/seller/order-receive.html?id=${orderRef.id}`
     );
-    delete sellerGroups[sellerId];
-    renderSummary();
   }catch(err){
     showMsg(`autoOrderMsg-${sellerId}`, err.message, false);
   }
