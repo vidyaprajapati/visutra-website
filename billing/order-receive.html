@@ -3,16 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Order Received | VISUTRA</title>
+<title>Order Request | VISUTRA</title>
 <meta name="robots" content="noindex, nofollow">
 <link rel="icon" href="../favicon.svg">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  :root{--ink:#1F1B16;--paprika:#C1440E;--green:#197A50;--ivory:#F7F1E3;--thread:#E4D8BD;--muted:#6B6255;--soft:#F8F5EE}
-  *{box-sizing:border-box} body{margin:0;font-family:'IBM Plex Sans',sans-serif;background:var(--ivory);color:var(--ink)}
-  .wrap{max-width:980px;margin:0 auto;padding:24px 20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;gap:15px}.top a{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);font-weight:700}.top img{height:28px;width:auto}.user{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:10px;flex-wrap:wrap}.user a,.user button{font:inherit;border:1px solid var(--thread);background:#fff;border-radius:999px;padding:7px 14px;cursor:pointer;color:var(--ink);text-decoration:none}
-  .order-card{background:#fff;border:1px solid var(--thread);border-radius:14px;padding:32px}.badge{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:5px 11px;border-radius:999px;background:var(--ivory);color:var(--muted);margin-bottom:14px}h1{font-size:26px;margin:0 0 4px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:22px 0}.box h3{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 8px}.box p{margin:0;font-size:14px;line-height:1.55}table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:10px}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--thread)}th{font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-transform:uppercase;color:var(--muted)}.note{margin-top:20px;padding:14px 16px;background:var(--ivory);border-radius:10px;font-size:13.5px}.loading,.errbox{text-align:center;padding:60px 20px;color:var(--muted)}.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:24px;flex-wrap:wrap}.btn{border:1px solid var(--thread);background:#fff;color:var(--ink);border-radius:999px;padding:10px 18px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block}.btn.primary{background:var(--green);border-color:var(--green);color:#fff}.btn.small{padding:7px 14px;font-size:12px}.btn:disabled{opacity:.55;cursor:not-allowed}.status{margin-top:18px;padding:13px 16px;border-radius:10px;background:var(--soft);font-size:13px}.status.ok{background:#EAF6EF;color:#17633F}.status.warn{background:#FFF5DD;color:#76540D}.status.err{background:#FCEDEC;color:#8D281D}.smalltext{font-size:12px;color:var(--muted);line-height:1.5}
-  @media(max-width:700px){.grid2{grid-template-columns:1fr}.order-card{padding:20px}.top{align-items:flex-start;flex-direction:column}}
+  :root{--ink:#1F1B16;--paprika:#C1440E;--indigo:#2E4374;--ivory:#F7F1E3;--thread:#E4D8BD;--muted:#6B6255;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'IBM Plex Sans',sans-serif;background:var(--ivory);color:var(--ink)}
+  .wrap{max-width:760px;margin:0 auto;padding:32px 20px}
+  .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+  .top a{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);font-weight:700}
+  .top img{height:28px;width:auto}
+  .top .user{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:10px}
+  .top .user button{font:inherit;border:1px solid var(--thread);background:#fff;border-radius:999px;padding:6px 14px;cursor:pointer;color:var(--ink)}
+  .order-card{background:#fff;border:1px solid var(--thread);border-radius:14px;padding:32px}
+  .badge{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:4px 10px;border-radius:999px;background:var(--ivory);color:var(--muted);margin-bottom:14px}
+  h1{font-size:20px;margin:0 0 4px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:20px 0}
+  .box h3{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 8px}
+  .box p{margin:0;font-size:14px;line-height:1.5}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:10px}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--thread)}
+  th{font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-transform:uppercase;color:var(--muted)}
+  .note{margin-top:20px;padding:14px 16px;background:var(--ivory);border-radius:10px;font-size:13.5px}
+  .loading,.errbox{text-align:center;padding:60px 20px;color:var(--muted)}
+  .disclaimer{font-size:12px;color:var(--muted);margin-top:24px}
 </style>
 </head>
 <body>
@@ -28,171 +44,81 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="assets/firebase-config.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
-let currentUser = null;
-let currentOrder = null;
-let supplierBusiness = {};
-let supplierProducts = [];
-let receivedOrdersUnsub = null;
-let orderDetailUnsub = null;
-
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function fmtMoney(n){ return Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
-function fmtDateTime(value){ if(!value) return '—'; let d; if(value && typeof value.toDate==='function') d=value.toDate(); else if(value && value.seconds) d=new Date(value.seconds*1000); else d=new Date(value); if(Number.isNaN(d.getTime())) return '—'; return d.toLocaleString('en-IN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true}); }
-function showStatus(text,type=''){ const el=document.getElementById('status'); if(el){el.className='status '+type; el.innerHTML=text;} }
 
-async function loadSupplierData(){
-  if(!currentUser || !currentUser.uid) throw new Error('Your login session is not ready. Please refresh and sign in again.');
-  const snap=await db.collection('users').doc(currentUser.uid).get();
-  supplierBusiness=snap.exists?(snap.data()||{}):{};
-  const base=db.collection('users').doc(currentUser.uid); let ps=null,last=null;
-  for(const name of ['products','productMaster','productMasters']){try{const q=await base.collection(name).get();if(!q.empty){ps=q;break;}if(!ps)ps=q;}catch(e){last=e;}}
-  if(last && !ps) throw last;
-  supplierProducts=(ps?ps.docs:[]).map(d=>({id:d.id,...d.data()}))
-    .map(p=>({...p,name:String(p.name||p.productName||p.product||p.title||'').trim(),hsn:p.hsn||p.hsnCode||'',unit:p.unit||p.uom||'PCS'}))
-    .filter(p=>p.name).sort((a,b)=>a.name.localeCompare(b.name));
-}
-function findProduct(orderItem){
-  // The order's productId belongs to the buyer's purchase-product master, so
-  // supplier-side matching is by product name. Case/space differences are ignored.
-  const key = String(orderItem.name||'').trim().toLowerCase().replace(/\s+/g,' ');
-  return supplierProducts.find(p=>String(p.name||'').trim().toLowerCase().replace(/\s+/g,' ')===key);
-}
+function render(order, user){
+  document.getElementById('userBox').innerHTML = `${esc(user.email)} <button onclick="auth.signOut()">Sign out</button>`;
+  const items = (order.items||[]).map((li,i) => `<tr>
+    <td>${i+1}</td><td>${esc(li.name)}</td><td>${li.qty||0} ${esc(li.unit||'')}</td>
+  </tr>`).join('');
 
-function enrichOrderItems(order){
-  return (order.items||[]).map(li=>{
-    const p=findProduct(li);
-    if(!p) return {...li, supplierProduct:null};
-    const gstRate=Number(p.gstRate||0);
-    const rateExcl=Number(p.price||0);
-    const rateIncl= gstRate ? rateExcl*(1+gstRate/100) : rateExcl;
-    return {...li,supplierProduct:p,hsn:p.hsn||'',gstRate,rate:rateExcl,rateIncl};
-  });
-}
+  document.getElementById('content').innerHTML = `
+    <div class="order-card">
+      <span class="badge">Order Request</span>
+      <h1>Order for ${esc(order.supplierName)}</h1>
+      <p style="color:var(--muted);font-size:13px;margin:0">Dated ${esc(order.date)}</p>
 
-async function nextInvoiceNumber(invoiceDate){
-  const d=new Date(invoiceDate+'T00:00:00');
-  const fyStart=d.getMonth()>=3 ? d.getFullYear() : d.getFullYear()-1;
-  const fy=String(fyStart).slice(-2)+'-'+String(fyStart+1).slice(-2);
-  const counterRef=db.collection('users').doc(currentUser.uid).collection('meta').doc('invoiceCounter');
-  const number=await db.runTransaction(async tx=>{
-    const snap=await tx.get(counterRef); const data=snap.exists?snap.data():{};
-    const lastFy=data.fy||''; const next=lastFy===fy ? Number(data.next||1) : 1;
-    tx.set(counterRef,{fy,next:next+1},{merge:true}); return next;
-  });
-  return `${fy}/${String(number).padStart(4,'0')}`;
-}
+      <div class="grid2">
+        <div class="box"><h3>From</h3>
+          <p><b>${esc(order.fromBusinessName)}</b><br>${esc(order.fromBusinessAddress||'')}<br>
+          ${order.fromBusinessPhone ? 'Phone: '+esc(order.fromBusinessPhone)+'<br>' : ''}${order.fromBusinessEmail ? esc(order.fromBusinessEmail) : ''}</p>
+        </div>
+        <div class="box"><h3>To (Supplier)</h3>
+          <p><b>${esc(order.supplierName)}</b></p>
+        </div>
+      </div>
 
-function buildInvoicePDF(inv){
-  const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'pt',format:'a4'}); const pageW=doc.internal.pageSize.getWidth(); let y=40;
-  doc.setFont('helvetica','bold');doc.setFontSize(16);doc.text('TAX INVOICE',pageW/2,y,{align:'center'});y+=14;
-  doc.setFontSize(9);doc.setFont('helvetica','normal');doc.text('Original for Recipient',pageW/2,y,{align:'center'});y+=24;
-  doc.setFont('helvetica','bold');doc.setFontSize(11);doc.text(inv.business.businessName||'',40,y);doc.setFont('helvetica','normal');doc.setFontSize(9.5);y+=14;
-  const addr=doc.splitTextToSize(inv.business.address||'',250);doc.text(addr,40,y);y+=addr.length*12;
-  if(inv.business.gstin) {doc.text(`GSTIN: ${inv.business.gstin}`,40,y);y+=12;}
-  doc.text(`State: ${inv.business.state||''} (${inv.business.stateCode||''})`,40,y);
-  let yR=78;doc.setFont('helvetica','bold');doc.text('Invoice No:',330,yR);doc.setFont('helvetica','normal');doc.text(inv.invoiceNo,410,yR);yR+=14;
-  doc.setFont('helvetica','bold');doc.text('Invoice Date:',330,yR);doc.setFont('helvetica','normal');doc.text(inv.date,410,yR);yR+=14;
-  doc.setFont('helvetica','bold');doc.text('Reverse charge:',330,yR);doc.setFont('helvetica','normal');doc.text('No',410,yR);yR+=14;
-  doc.setFont('helvetica','bold');doc.text('Place of supply:',330,yR);doc.setFont('helvetica','normal');doc.text(`${inv.customer.state||''} (${inv.customer.stateCode||''})`,410,yR);
-  y=Math.max(y,yR)+26;doc.setDrawColor(200);doc.line(40,y,pageW-40,y);y+=18;
-  doc.setFont('helvetica','bold');doc.setFontSize(10);doc.text('Bill To:',40,y);y+=14;doc.setFont('helvetica','normal');doc.setFontSize(9.5);
-  doc.text(inv.customer.name||'',40,y);y+=12;const ca=doc.splitTextToSize(inv.customer.address||'',300);doc.text(ca,40,y);y+=ca.length*12;
-  if(inv.customer.gstin) {doc.text(`GSTIN: ${inv.customer.gstin}`,40,y);y+=12;} doc.text(`State: ${inv.customer.state||''}`,40,y);y+=22;
-  const head=inv.sameState?[['#','Description','HSN','Qty','Unit','Rate','Taxable','GST%','CGST','SGST','Total']]:[['#','Description','HSN','Qty','Unit','Rate','Taxable','GST%','IGST','Total']];
-  const body=inv.items.map((li,i)=>{const tax=li.taxable*(li.gstRate||0)/100;if(inv.sameState){const h=tax/2;return[i+1,li.name,li.hsn,li.qty,li.unit,fmtMoney(li.rate),fmtMoney(li.taxable),`${li.gstRate||0}%`,fmtMoney(h),fmtMoney(h),fmtMoney(li.taxable+tax)];}return[i+1,li.name,li.hsn,li.qty,li.unit,fmtMoney(li.rate),fmtMoney(li.taxable),`${li.gstRate||0}%`,fmtMoney(tax),fmtMoney(li.taxable+tax)];});
-  doc.autoTable({head,body,startY:y,styles:{fontSize:8.5,cellPadding:4},headStyles:{fillColor:[46,67,116]},margin:{left:40,right:40}});y=doc.lastAutoTable.finalY+20;
-  const tx=pageW-220;doc.setFontSize(9.5);doc.text('Taxable Value:',tx,y);doc.text(fmtMoney(inv.subtotal),pageW-40,y,{align:'right'});y+=14;
-  if(inv.sameState){doc.text('CGST:',tx,y);doc.text(fmtMoney(inv.cgst),pageW-40,y,{align:'right'});y+=14;doc.text('SGST:',tx,y);doc.text(fmtMoney(inv.sgst),pageW-40,y,{align:'right'});y+=14;}else{doc.text('IGST:',tx,y);doc.text(fmtMoney(inv.igst),pageW-40,y,{align:'right'});y+=14;}
-  doc.setFont('helvetica','bold');doc.setFontSize(11);doc.text('Grand Total:',tx,y);doc.text('Rs. '+fmtMoney(inv.grandTotal),pageW-40,y,{align:'right'});y+=34;
-  doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.text('Tax is payable on reverse charge basis: No',40,y);doc.text('This is a computer-generated invoice.',40,y+12);
-  const sigY=y-10;doc.setFontSize(9);doc.text(`For ${inv.business.businessName||''}`,pageW-160,sigY,{align:'center'});
-  if(inv.business.signature){try{doc.addImage(inv.business.signature,'PNG',pageW-210,sigY+8,100,40);}catch(e){}}doc.text('Authorized Signatory',pageW-160,sigY+56,{align:'center'});
-  return doc.output('blob');
-}
+      <table>
+        <thead><tr><th>#</th><th>Product</th><th>Qty</th></tr></thead>
+        <tbody>${items}</tbody>
+      </table>
 
-function downloadBlob(blob,filename){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+      ${order.note ? `<div class="note"><b>Note:</b> ${esc(order.note)}</div>` : ''}
 
-async function sendInvoiceEmail(inv,invoiceId){
-  emailjs.init(EMAILJS_PUBLIC_KEY);const viewLink=`${window.location.origin}/billing/invoice-view.html?id=${invoiceId}`;
-  return emailjs.send(EMAILJS_SERVICE_ID,EMAILJS_TEMPLATE_ID,{to_email:inv.customer.email,to_name:inv.customer.name,invoice_no:inv.invoiceNo,invoice_date:inv.date,business_name:inv.business.businessName,grand_total:fmtMoney(inv.grandTotal),view_link:viewLink});
-}
-
-function render(order,user){
-  currentOrder=order;document.getElementById('userBox').innerHTML=`${esc(user.email)} <a href="app.html">Back to Billing</a> <button onclick="auth.signOut()">Sign out</button>`;
-  const items=enrichOrderItems(order);
-  const missing=items.filter(x=>!x.supplierProduct);
-  const rows=items.map((li,i)=>{const p=li.supplierProduct;return `<tr><td>${i+1}</td><td>${esc(li.name)}</td><td>${li.qty||0} ${esc(li.unit||'')}</td><td>${p?'₹'+fmtMoney(li.rateIncl):'<span style="color:#8D281D">Not in Product Master</span>'}</td><td>${p?esc(p.gstRate||0)+'%':'—'}</td></tr>`}).join('');
-  const accepted=order.status==='accepted';
-  document.getElementById('content').innerHTML=`<div class="order-card">
-    <span class="badge">${accepted?'Order Accepted':'Order Request'}</span>
-    <h1>Order for ${esc(order.supplierName)}</h1><p style="color:var(--muted);font-size:13px;margin:0">Dated ${esc(order.date)}</p><p style="color:var(--muted);font-size:13px;margin:6px 0 0"><b>Order received:</b> ${esc(fmtDateTime(order.createdAt || order.receivedAt || order.createdOn))}</p>
-    <div class="grid2"><div class="box"><h3>From (Customer)</h3><p><b>${esc(order.fromBusinessName)}</b><br>${esc(order.fromBusinessAddress||'')}<br>${order.fromBusinessPhone?'Phone: '+esc(order.fromBusinessPhone)+'<br>':''}${order.fromBusinessEmail?esc(order.fromBusinessEmail):''}</p></div>
-    <div class="box"><h3>To (Supplier)</h3><p><b>${esc(supplierBusiness.businessName||order.supplierName)}</b><br>${esc(supplierBusiness.address||'')}<br>${supplierBusiness.phone?'Phone: '+esc(supplierBusiness.phone)+'<br>':''}${currentUser.email}</p></div></div>
-    <table><thead><tr><th>#</th><th>Product</th><th>Qty</th><th>Price incl. GST</th><th>GST</th></tr></thead><tbody>${rows}</tbody></table>
-    ${order.note?`<div class="note"><b>Note:</b> ${esc(order.note)}</div>`:''}
-    <p class="smalltext" style="margin-top:20px">Invoice pricing is taken automatically from the supplier's <b>Product Master</b>. The supplier's Product Master must contain every ordered product before the order can be accepted.</p>
-    <div class="actions">${accepted?`<a class="btn" href="invoice-view.html?id=${encodeURIComponent(order.invoiceId||'')}">View GST Bill</a>`:`<button class="btn primary" id="acceptBtn" onclick="acceptOrder()" ${missing.length?'disabled':''}>Accept Order & Generate GST Bill</button>`}</div>
-    ${missing.length&&!accepted?`<div class="status warn">${missing.map(x=>`<b>${esc(x.name)}</b>`).join(', ')} ${missing.length===1?'is':'are'} not available in your Product Master. Add ${missing.length===1?'this product':'these products'} first, then reopen this order.</div>`:''}
-    <div id="status"></div>
-  </div>`;
-  if(accepted){ showStatus(`GST Bill <b>${esc(order.invoiceNo||'')}</b> was generated and sent to ${esc(order.fromBusinessEmail||'the customer')}.`,'ok'); }
-}
-
-async function acceptOrder(){
-  if(!currentOrder||currentOrder.status==='accepted') return;
-  const btn=document.getElementById('acceptBtn');btn.disabled=true;btn.textContent='Generating GST Bill…';showStatus('Checking Product Master and preparing the GST bill…');
-  try{
-    const items=enrichOrderItems(currentOrder);const missing=items.filter(x=>!x.supplierProduct);if(missing.length) throw new Error('Add all ordered products to your Product Master before accepting this order.');
-    if(!supplierBusiness.businessName) throw new Error('Complete your Business Profile before accepting orders.');
-    if(!supplierBusiness.state) throw new Error('Select your business state in Business Profile before accepting orders.');
-    if(!currentOrder.fromBusinessEmail) throw new Error('The customer email is missing from this order. Ask the customer to create a new order after saving their email.');
-    const invoiceDate=currentOrder.date||new Date().toISOString().slice(0,10);const invoiceNo=await nextInvoiceNumber(invoiceDate);
-    const sameState=String(supplierBusiness.stateCode||'') && String(currentOrder.fromBusinessStateCode||'') ? String(supplierBusiness.stateCode)===String(currentOrder.fromBusinessStateCode) : String(supplierBusiness.state||'').trim().toLowerCase()===String(currentOrder.fromBusinessState||'').trim().toLowerCase();
-    const invItems=items.map(li=>({productId:li.supplierProduct.id,name:li.supplierProduct.name,hsn:li.supplierProduct.hsn||'',unit:li.unit||li.supplierProduct.unit||'PCS',qty:Number(li.qty||0),rate:Number(li.rate||0),discount:0,gstRate:Number(li.gstRate||0),taxable:Number(li.rate||0)*Number(li.qty||0)}));
-    const subtotal=invItems.reduce((a,x)=>a+x.taxable,0);const totalTax=invItems.reduce((a,x)=>a+x.taxable*x.gstRate/100,0);const cgst=sameState?totalTax/2:0;const sgst=sameState?totalTax/2:0;const igst=sameState?0:totalTax;const grand=subtotal+totalTax;
-    const invoiceData={invoiceNo,date:invoiceDate,reverseCharge:false,business:{...supplierBusiness},customer:{name:currentOrder.fromBusinessName||'Customer',gstin:currentOrder.fromBusinessGstin||'',address:currentOrder.fromBusinessAddress||'',state:currentOrder.fromBusinessState||'',stateCode:currentOrder.fromBusinessStateCode||'',email:currentOrder.fromBusinessEmail},items:invItems,subtotal,cgst,sgst,igst,grandTotal:grand,sameState,createdAt:firebase.firestore.FieldValue.serverTimestamp(),emailSent:false,sourceOrderId:currentOrder.id};
-    const ref=await db.collection('users').doc(currentUser.uid).collection('invoices').add(invoiceData);
-    await db.collection('public_invoices').doc(ref.id).set(invoiceData);
-    const pdf=buildInvoicePDF(invoiceData);downloadBlob(pdf,`Invoice-${invoiceNo.replace('/','-')}.pdf`);
-    showStatus('GST bill generated. Sending it to the customer…');
-    let emailOk=false;
-    try{await sendInvoiceEmail(invoiceData,ref.id);emailOk=true;await ref.set({emailSent:true},{merge:true});}catch(emailErr){console.error('Invoice email failed',emailErr);}
-    await db.collection('orders').doc(currentOrder.id).update({status:'accepted',acceptedAt:firebase.firestore.FieldValue.serverTimestamp(),acceptedByUid:currentUser.uid,invoiceId:ref.id,invoiceNo});
-    currentOrder={...currentOrder,status:'accepted',invoiceId:ref.id,invoiceNo};
-    if(emailOk){showStatus(`Order accepted. GST Bill <b>${esc(invoiceNo)}</b> generated, downloaded, and emailed to <b>${esc(invoiceData.customer.email)}</b>. <a href="invoice-view.html?id=${encodeURIComponent(ref.id)}">View bill</a>`,'ok');}
-    else{showStatus(`Order accepted and GST Bill <b>${esc(invoiceNo)}</b> generated/downloaded, but the email could not be sent. You can <a href="invoice-view.html?id=${encodeURIComponent(ref.id)}">view the bill</a> and send it again later.`,'warn');}
-    btn.textContent='Order Accepted';
-  }catch(err){console.error('Accept order error',err);showStatus(esc(err.message||'Could not accept this order.'),'err');btn.disabled=false;btn.textContent='Accept Order & Generate GST Bill';}
+      <p class="disclaimer">This is a purchase order request, not a GST invoice — pricing and GST will be settled separately when the purchase is recorded.</p>
+    </div>
+  `;
 }
 
 async function loadOrder(user){
-  const params=new URLSearchParams(window.location.search);const id=params.get('id');const content=document.getElementById('content');
-  if(receivedOrdersUnsub){try{receivedOrdersUnsub();}catch(e){} receivedOrdersUnsub=null;}
-  if(orderDetailUnsub){try{orderDetailUnsub();}catch(e){} orderDetailUnsub=null;}
-  document.getElementById('userBox').innerHTML=`${esc(user.email)} <a href="app.html">Back to Billing</a> <button onclick="auth.signOut()">Sign out</button>`;
-  if(!id){
-    content.innerHTML='<div class="loading">Loading orders received…</div>';
-    receivedOrdersUnsub=db.collection('orders').where('supplierEmail','==',user.email).onSnapshot(snap=>{
-      const orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || ((b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)));
-      const rows=orders.map(o=>{const products=(o.items||[]).map(li=>`${esc(li.name)} (${li.qty||0} ${esc(li.unit||'')})`).join(', ');return `<tr><td>${esc(o.date||'')}</td><td>${esc(fmtDateTime(o.createdAt || o.receivedAt || o.createdOn))}</td><td>${esc(o.fromBusinessName||'')}</td><td>${products}</td><td>${o.status==='accepted'?'<span class="status ok" style="display:inline-block;padding:5px 9px;margin:0">Accepted</span>':'<span class="status warn" style="display:inline-block;padding:5px 9px;margin:0">Pending</span>'}</td><td><a class="btn small" href="order-receive.html?id=${encodeURIComponent(o.id)}">View</a></td></tr>`}).join('');
-      content.innerHTML=`<div class="order-card"><span class="badge">Free Service · Orders</span><h1>Orders Received</h1><p style="color:var(--muted);font-size:13px;margin:0 0 18px">Purchase order requests addressed to ${esc(user.email)}.</p><table><thead><tr><th>Date</th><th>Received Time</th><th>From</th><th>Products</th><th>Status</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="6" style="color:var(--muted)">No orders received yet.</td></tr>'}</tbody></table></div>`;
-    },err=>{console.error(err);content.innerHTML=`<div class="errbox">Could not load received orders: ${esc(err.message||err)}</div>`;});
+  const params = new URLSearchParams(window.location.search);
+  const id = params.get('id');
+  const content = document.getElementById('content');
+  document.getElementById('userBox').innerHTML = `${esc(user.email)} <button onclick="auth.signOut()">Sign out</button>`;
+  if(!id){ content.innerHTML = '<div class="errbox">No order specified.</div>'; return; }
+
+  let order;
+  try{
+    const snap = await db.collection('orders').doc(id).get();
+    if(!snap.exists){ content.innerHTML = '<div class="errbox">Order not found.</div>'; return; }
+    order = snap.data();
+  }catch(err){
+    console.error('Order load error:', err);
+    const isPermission = err && err.code === 'permission-denied';
+    content.innerHTML = `<div class="errbox">
+      ${isPermission
+        ? `This order isn't addressed to <b>${esc(user.email)}</b>. If you think this is a mistake, ask the sender to check the email saved for you as their supplier, or sign out and sign back in with the correct email.`
+        : 'Could not load this order. Please try the link again in a moment, or contact the sender for a fresh copy.'}
+    </div>`;
     return;
   }
-  content.innerHTML='<div class="loading">Loading this order…</div>';
-  orderDetailUnsub=db.collection('orders').doc(id).onSnapshot(async snap=>{
-    if(!snap.exists){content.innerHTML='<div class="errbox">Order not found.</div>';return;}
-    const order={id:snap.id,...snap.data()};
-    if(String(order.supplierEmail||'').toLowerCase()!==String(user.email||'').toLowerCase() && order.buyerUid!==user.uid){content.innerHTML='<div class="errbox">This order is not addressed to your account.</div>';return;}
-    try{currentOrder=order;await loadSupplierData();render(order,user);}catch(err){console.error(err);content.innerHTML=`<div class="errbox">Could not load this order: ${esc(err.message||'Please try again.')}</div>`;}
-  },err=>{console.error(err);content.innerHTML=`<div class="errbox">Could not load this order: ${esc(err.message||'Please try again.')}</div>`;});
+
+  try{
+    render(order, user);
+  }catch(err){
+    console.error('Order render error:', err, order);
+    content.innerHTML = '<div class="errbox">This order was found, but something on it couldn\'t be displayed. Check the browser console for details, or contact the sender for a fresh copy.</div>';
+  }
 }
 
-auth.onAuthStateChanged(user=>{if(!user){window.location.href='login.html?redirect='+encodeURIComponent('order-receive.html'+window.location.search);return;} currentUser=user; loadOrder(user).catch(err=>{console.error(err);document.getElementById('content').innerHTML='<div class="errbox">Could not load this order: '+esc(err.message||err)+'</div>';});});
+auth.onAuthStateChanged(user => {
+  if(!user){
+    window.location.href = 'login.html?redirect=' + encodeURIComponent('order-receive.html' + window.location.search);
+    return;
+  }
+  loadOrder(user);
+});
 </script>
 </body>
 </html>
