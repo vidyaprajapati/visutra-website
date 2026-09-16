@@ -151,6 +151,7 @@ async function sendOrderToSupplier(){
     supplierId: supId, supplierName: supplier.name, supplierEmail: supplier.email, date: dateVal, items, note,
     fromBusinessName: businessData.businessName || '', fromBusinessPhone: businessData.phone || '',
     fromBusinessAddress: businessData.address || '', fromBusinessEmail: currentUser.email || '',
+    fromBusinessGstin: businessData.gstin || '', fromBusinessState: businessData.state || '', fromBusinessStateCode: businessData.stateCode || '',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
 
