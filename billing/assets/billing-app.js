@@ -38,13 +38,12 @@ auth.onAuthStateChanged(async user => {
   onFilingTypeChange();
   initSignaturePad();
   await loadProfile();
-  await loadProducts();
-  await loadCustomers();
-  await loadSuppliers();
-  await loadPurchaseProducts();
-  await loadPayments();
-  await loadSkuMappings();
-  await loadStockMovements();
+  // Load every master independently. One unavailable/legacy collection must
+  // never stop the remaining tables from rendering.
+  await Promise.allSettled([
+    loadProducts(), loadCustomers(), loadSuppliers(), loadPurchaseProducts(),
+    loadPayments(), loadSkuMappings(), loadStockMovements()
+  ]);
   addLineItem();
   addPurchaseLineItem();
   loadInvoices();
@@ -222,28 +221,42 @@ async function saveSignature(){
 }
 
 /* ---------------- Products ---------------- */
-async function loadProducts(){
-  const col = db.collection('users').doc(currentUser.uid).collection('products');
-  try {
-    // Use a simple collection read first. This avoids an orderBy dependency
-    // when older product documents were created without a name field.
-    let snap = await col.get();
-    productsCache = snap.docs.map(d => ({id:d.id, ...d.data()}))
-      .filter(p => p && p.name)
-      .sort((a,b) => String(a.name).localeCompare(String(b.name)));
-    renderProducts();
-    renderProductDropdowns();
-    renderStockDropdowns();
-    renderStockTable();
-    if(document.getElementById('productMsg') && productsCache.length === 0){
-      // Do not show an error when the collection is genuinely empty.
-      document.getElementById('productMsg').textContent = '';
+async function readUserCollection(candidates){
+  // Read the first available collection that contains documents. This keeps
+  // the app compatible with data created by older VISUTRA versions where the
+  // master collection names were slightly different.
+  const base = db.collection('users').doc(currentUser.uid);
+  let lastError = null;
+  for (const name of candidates) {
+    try {
+      const snap = await base.collection(name).get();
+      if (!snap.empty) return {name, snap};
+      // Remember an empty collection but keep checking legacy names.
+      if (!lastError) lastError = null;
+    } catch (err) {
+      lastError = err;
     }
+  }
+  if (lastError) throw lastError;
+  return {name:candidates[0], snap:{empty:true, docs:[]}};
+}
+
+function normaliseProductDoc(d){
+  const x={id:d.id,...d.data()};
+  const name=x.name || x.productName || x.product || x.title || x.description || '';
+  return {...x,name:String(name).trim(),hsn:x.hsn || x.hsnCode || x.hsnSac || '',unit:x.unit || x.uom || 'PCS'};
+}
+async function loadProducts(){
+  try {
+    const result=await readUserCollection(['products','productMaster','productMasters']);
+    productsCache=result.snap.docs.map(normaliseProductDoc).filter(p=>p.name)
+      .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+    renderProducts(); renderProductDropdowns(); renderStockDropdowns(); renderStockTable();
+    if(document.getElementById('productMsg')) document.getElementById('productMsg').textContent='';
   } catch(err) {
-    console.error('Product Master load failed:', err);
-    productsCache = [];
-    renderProducts();
-    if(document.getElementById('productMsg')) showMsg('productMsg', 'Unable to load products. Check that Firestore rules allow your signed-in account to read users/' + currentUser.uid + '/products. ' + (err.code || err.message || ''), false);
+    console.error('Product Master load failed:',err);
+    productsCache=[]; renderProducts();
+    if(document.getElementById('productMsg')) showMsg('productMsg','Unable to load Product Master: '+(err.code||err.message||err),false);
   }
 }
 function renderProducts(){
@@ -508,25 +521,21 @@ async function applyStockUpload(){
 }
 
 /* ---------------- Customers ---------------- */
+function normaliseCustomerDoc(d){
+  const x={id:d.id,...d.data()};
+  return {...x,name:String(x.name||x.customerName||x.businessName||x.customer||x.title||'').trim()};
+}
 async function loadCustomers(){
-  const col = db.collection('users').doc(currentUser.uid).collection('customers');
   try {
-    // Read the collection directly and sort in the browser. This is more
-    // tolerant of older customer records that may not contain every field.
-    let snap = await col.get();
-    customersCache = snap.docs.map(d => ({id:d.id, ...d.data()}))
-      .filter(c => c && c.name)
-      .sort((a,b) => String(a.name).localeCompare(String(b.name)));
-    renderCustomers();
-    renderCustomerDropdown();
-    if(document.getElementById('customerMsg') && customersCache.length === 0){
-      document.getElementById('customerMsg').textContent = '';
-    }
+    const result=await readUserCollection(['customers','customerMaster','customerMasters']);
+    customersCache=result.snap.docs.map(normaliseCustomerDoc).filter(c=>c.name)
+      .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+    renderCustomers(); renderCustomerDropdown();
+    if(document.getElementById('customerMsg')) document.getElementById('customerMsg').textContent='';
   } catch(err) {
-    console.error('Customer Master load failed:', err);
-    customersCache = [];
-    renderCustomers();
-    if(document.getElementById('customerMsg')) showMsg('customerMsg', 'Unable to load customers. Check that Firestore rules allow your signed-in account to read users/' + currentUser.uid + '/customers. ' + (err.code || err.message || ''), false);
+    console.error('Customer Master load failed:',err);
+    customersCache=[]; renderCustomers();
+    if(document.getElementById('customerMsg')) showMsg('customerMsg','Unable to load Customer Master: '+(err.code||err.message||err),false);
   }
 }
 function renderCustomers(){
@@ -579,12 +588,20 @@ function renderCustomerDropdown(){
 }
 
 /* ---------------- Suppliers (purchase side, separate master from Customers) ---------------- */
+function normaliseSupplierDoc(d){
+  const x={id:d.id,...d.data()};
+  return {...x,name:String(x.name||x.businessName||x.supplierName||x.supplier||x.title||'').trim()};
+}
 async function loadSuppliers(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
-  suppliersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
-  renderSuppliers();
-  renderSupplierDropdown();
-  renderPayablesOverview();
+  try{
+    const result=await readUserCollection(['suppliers','supplierMaster','supplierMasters']);
+    suppliersCache=result.snap.docs.map(normaliseSupplierDoc).filter(x=>x.name)
+      .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  }catch(err){
+    console.error('Supplier Master load failed:',err); suppliersCache=[];
+    if(document.getElementById('supplierMsg')) showMsg('supplierMsg','Unable to load Supplier Master: '+(err.code||err.message||err),false);
+  }
+  renderSuppliers(); renderSupplierDropdown(); renderPayablesOverview();
 }
 function renderSuppliers(){
   document.getElementById('suppliersTable').innerHTML = suppliersCache.map(s => `
@@ -642,11 +659,20 @@ function renderSupplierDropdown(){
 }
 
 /* ---------------- Purchase Product Master (separate from the GST billing Products list — purchase price differs from selling price) ---------------- */
+function normalisePurchaseProductDoc(d){
+  const x={id:d.id,...d.data()};
+  return {...x,name:String(x.name||x.productName||x.product||x.title||'').trim(),unit:x.unit||x.uom||'PCS'};
+}
 async function loadPurchaseProducts(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').orderBy('name').get();
-  purchaseProductsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
-  renderPurchaseProducts();
-  renderPurchaseProductDropdowns();
+  try{
+    const result=await readUserCollection(['purchaseProducts','purchaseProductMaster','purchaseProductMasters']);
+    purchaseProductsCache=result.snap.docs.map(normalisePurchaseProductDoc).filter(x=>x.name)
+      .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  }catch(err){
+    console.error('Purchase Product Master load failed:',err); purchaseProductsCache=[];
+    if(document.getElementById('purchaseProductMsg')) showMsg('purchaseProductMsg','Unable to load Purchase Product Master: '+(err.code||err.message||err),false);
+  }
+  renderPurchaseProducts(); renderPurchaseProductDropdowns();
 }
 function renderPurchaseProducts(){
   document.getElementById('purchaseProductsTable').innerHTML = purchaseProductsCache.map(p => {
@@ -1005,11 +1031,16 @@ async function savePurchase(){
   await loadPurchases();
 }
 async function loadPurchases(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').get();
-  purchasesCache = snap.docs.map(d => ({id:d.id, ...d.data()})).filter(p => !p.deleted);
-  renderPurchases();
-  recalcPurchaseTotals();
-  refreshOpenDashboard();
+  try{
+    const col=db.collection('users').doc(currentUser.uid).collection('purchases');
+    let snap; try{snap=await col.orderBy('date','desc').get();}catch(e){snap=await col.get();}
+    purchasesCache=snap.docs.map(d=>({id:d.id,...d.data()})).filter(p=>!p.deleted)
+      .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+  }catch(err){
+    console.error('Purchase data load failed:',err); purchasesCache=[];
+    const el=document.getElementById('purchaseMsg'); if(el) showMsg('purchaseMsg','Unable to load purchase data: '+(err.code||err.message||err),false);
+  }
+  renderPurchases(); recalcPurchaseTotals(); refreshOpenDashboard();
 }
 function renderPurchases(){
   const tbody = document.getElementById('purchasesTable');
