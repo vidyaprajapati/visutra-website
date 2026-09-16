@@ -14,6 +14,34 @@ let skuMappingsCache = [];
 let stockUploadSheets = []; // {fileName, sheetName, headers, rows} — rows is an array of arrays, header row excluded
 let stockAggregation = []; // {rawKey, displayKey, totalQty} built from stockUploadSheets after column mapping
 
+// Firestore real-time listeners. Saved data should appear/update automatically;
+// the user should never need a Refresh button just to see their saved data.
+const realtimeUnsubs = {};
+function stopRealtime(key){ if(realtimeUnsubs[key]){ try{realtimeUnsubs[key](); }catch(e){} delete realtimeUnsubs[key]; } }
+function listenUserCollectionCandidates(key, candidates, onDocs, onError){
+  stopRealtime(key);
+  const base=db.collection('users').doc(currentUser.uid);
+  const states=candidates.map(name=>({name,docs:[],error:null,ready:false}));
+  let resolved=false;
+  const apply=()=>{
+    // Prefer the first collection in the list that currently has data. If all
+    // are empty, use the first successfully-read collection.
+    const chosen=states.find(x=>x.docs.length) || states.find(x=>x.ready && !x.error) || states[0];
+    const docs=chosen.docs;
+    try{ onDocs(docs, chosen.name); }catch(e){ console.error('Realtime render failed',e); }
+  };
+  const unsubs=states.map((state,i)=>base.collection(state.name).onSnapshot(snap=>{
+    state.docs=snap.docs; state.ready=true; state.error=null; apply();
+  },err=>{ state.error=err; state.ready=true; apply(); if(onError) onError(err); }));
+  realtimeUnsubs[key]=()=>unsubs.forEach(u=>{try{u();}catch(e){}});
+  // Resolve after the first snapshot/error so existing startup code can await it.
+  return new Promise(resolve=>{
+    const check=()=>{ if(!resolved && states.some(x=>x.ready)){ resolved=true; resolve(); } else if(!resolved) setTimeout(check,25); };
+    check();
+  });
+}
+function listenUserCollection(key, name, onDocs, onError){ return listenUserCollectionCandidates(key,[name],onDocs,onError); }
+
 /* ---------------- Auth guard ---------------- */
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -247,17 +275,14 @@ function normaliseProductDoc(d){
   return {...x,name:String(name).trim(),hsn:x.hsn || x.hsnCode || x.hsnSac || '',unit:x.unit || x.uom || 'PCS'};
 }
 async function loadProducts(){
-  try {
-    const result=await readUserCollection(['products','productMaster','productMasters']);
-    productsCache=result.snap.docs.map(normaliseProductDoc).filter(p=>p.name)
-      .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  await listenUserCollectionCandidates('products',['products','productMaster','productMasters'],docs=>{
+    productsCache=docs.map(d=>normaliseProductDoc(d)).filter(p=>p.name).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
     renderProducts(); renderProductDropdowns(); renderStockDropdowns(); renderStockTable();
     if(document.getElementById('productMsg')) document.getElementById('productMsg').textContent='';
-  } catch(err) {
-    console.error('Product Master load failed:',err);
-    productsCache=[]; renderProducts();
+  },err=>{
+    console.error('Product Master realtime load failed:',err);
     if(document.getElementById('productMsg')) showMsg('productMsg','Unable to load Product Master: '+(err.code||err.message||err),false);
-  }
+  });
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => `
@@ -360,11 +385,12 @@ async function loadSkuMappings(){
   skuMappingsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
 }
 async function loadStockMovements(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('stockMovements').orderBy('createdAt','desc').limit(200).get();
-  stockMovementsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
-  renderStockMovementsTable();
+  await listenUserCollection('stockMovements','stockMovements',docs=>{
+    stockMovementsCache=docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>((b.createdAt?.seconds||0)-(a.createdAt?.seconds||0))).slice(0,200);
+    renderStockMovementsTable();
+  },err=>console.error('Stock movement realtime load failed:',err));
 }
-/* Shared by purchase stock-in and manual adjustment: bumps a product's stock
+/* Shared by purchase stock-in stock-in and manual adjustment: bumps a product's stock
    by qty (can be negative) and logs the movement for the history table. */
 async function addStockMovement(type, productId, qty, date, note){
   const product = productsCache.find(p => p.id === productId);
@@ -526,17 +552,14 @@ function normaliseCustomerDoc(d){
   return {...x,name:String(x.name||x.customerName||x.businessName||x.customer||x.title||'').trim()};
 }
 async function loadCustomers(){
-  try {
-    const result=await readUserCollection(['customers','customerMaster','customerMasters']);
-    customersCache=result.snap.docs.map(normaliseCustomerDoc).filter(c=>c.name)
-      .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  await listenUserCollectionCandidates('customers',['customers','customerMaster','customerMasters'],docs=>{
+    customersCache=docs.map(normaliseCustomerDoc).filter(c=>c.name).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
     renderCustomers(); renderCustomerDropdown();
     if(document.getElementById('customerMsg')) document.getElementById('customerMsg').textContent='';
-  } catch(err) {
-    console.error('Customer Master load failed:',err);
-    customersCache=[]; renderCustomers();
+  },err=>{
+    console.error('Customer Master realtime load failed:',err);
     if(document.getElementById('customerMsg')) showMsg('customerMsg','Unable to load Customer Master: '+(err.code||err.message||err),false);
-  }
+  });
 }
 function renderCustomers(){
   document.getElementById('customersTable').innerHTML = customersCache.map(c => `
@@ -593,15 +616,10 @@ function normaliseSupplierDoc(d){
   return {...x,name:String(x.name||x.businessName||x.supplierName||x.supplier||x.title||'').trim()};
 }
 async function loadSuppliers(){
-  try{
-    const result=await readUserCollection(['suppliers','supplierMaster','supplierMasters']);
-    suppliersCache=result.snap.docs.map(normaliseSupplierDoc).filter(x=>x.name)
-      .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
-  }catch(err){
-    console.error('Supplier Master load failed:',err); suppliersCache=[];
-    if(document.getElementById('supplierMsg')) showMsg('supplierMsg','Unable to load Supplier Master: '+(err.code||err.message||err),false);
-  }
-  renderSuppliers(); renderSupplierDropdown(); renderPayablesOverview();
+  await listenUserCollectionCandidates('suppliers',['suppliers','supplierMaster','supplierMasters'],docs=>{
+    suppliersCache=docs.map(normaliseSupplierDoc).filter(x=>x.name).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+    renderSuppliers(); renderSupplierDropdown(); renderPayablesOverview();
+  },err=>console.error('Supplier Master realtime load failed:',err));
 }
 function renderSuppliers(){
   document.getElementById('suppliersTable').innerHTML = suppliersCache.map(s => `
@@ -664,15 +682,10 @@ function normalisePurchaseProductDoc(d){
   return {...x,name:String(x.name||x.productName||x.product||x.title||'').trim(),unit:x.unit||x.uom||'PCS'};
 }
 async function loadPurchaseProducts(){
-  try{
-    const result=await readUserCollection(['purchaseProducts','purchaseProductMaster','purchaseProductMasters']);
-    purchaseProductsCache=result.snap.docs.map(normalisePurchaseProductDoc).filter(x=>x.name)
-      .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
-  }catch(err){
-    console.error('Purchase Product Master load failed:',err); purchaseProductsCache=[];
-    if(document.getElementById('purchaseProductMsg')) showMsg('purchaseProductMsg','Unable to load Purchase Product Master: '+(err.code||err.message||err),false);
-  }
-  renderPurchaseProducts(); renderPurchaseProductDropdowns();
+  await listenUserCollectionCandidates('purchaseProducts',['purchaseProducts','purchaseProductMaster','purchaseProductMasters'],docs=>{
+    purchaseProductsCache=docs.map(normalisePurchaseProductDoc).filter(x=>x.name).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+    renderPurchaseProducts(); renderPurchaseProductDropdowns();
+  },err=>console.error('Purchase Product Master realtime load failed:',err));
 }
 function renderPurchaseProducts(){
   document.getElementById('purchaseProductsTable').innerHTML = purchaseProductsCache.map(p => {
@@ -1031,16 +1044,11 @@ async function savePurchase(){
   await loadPurchases();
 }
 async function loadPurchases(){
-  try{
-    const col=db.collection('users').doc(currentUser.uid).collection('purchases');
-    let snap; try{snap=await col.orderBy('date','desc').get();}catch(e){snap=await col.get();}
-    purchasesCache=snap.docs.map(d=>({id:d.id,...d.data()})).filter(p=>!p.deleted)
-      .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
-  }catch(err){
-    console.error('Purchase data load failed:',err); purchasesCache=[];
-    const el=document.getElementById('purchaseMsg'); if(el) showMsg('purchaseMsg','Unable to load purchase data: '+(err.code||err.message||err),false);
-  }
-  renderPurchases(); recalcPurchaseTotals(); refreshOpenDashboard();
+  await listenUserCollection('purchases','purchases',docs=>{
+    purchasesCache=docs.map(d=>({id:d.id,...d.data()})).filter(p=>!p.deleted)
+      .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')) || ((b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)));
+    renderPurchases(); recalcPurchaseTotals(); refreshOpenDashboard();
+  },err=>{ console.error('Purchase data realtime load failed:',err); const el=document.getElementById('purchaseMsg'); if(el) showMsg('purchaseMsg','Unable to load purchase data: '+(err.code||err.message||err),false); });
 }
 function renderPurchases(){
   const tbody = document.getElementById('purchasesTable');
@@ -1193,10 +1201,11 @@ function cancelEditPurchase(){
 
 /* ---------------- Payments made to suppliers ---------------- */
 async function loadPayments(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('payments').orderBy('date','desc').get();
-  paymentsCache = snap.docs.map(d => ({id:d.id, ...d.data()})).filter(p => !p.deleted);
-  refreshOpenDashboard();
-  renderPaymentsTable();
+  await listenUserCollection('payments','payments',docs=>{
+    paymentsCache=docs.map(d=>({id:d.id,...d.data()})).filter(p=>!p.deleted)
+      .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')));
+    refreshOpenDashboard(); renderPaymentsTable();
+  },err=>console.error('Payments realtime load failed:',err));
 }
 async function deletePayment(id){
   if(!confirm('Move this payment to the Recycle Bin? You can restore it within 30 days.')) return;
@@ -1643,27 +1652,15 @@ async function sendInvoiceEmail(inv, invoiceId){
 /* ---------------- Invoice history ---------------- */
 let invoicesCache = {};
 async function loadInvoices(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('invoices').orderBy('createdAt','desc').limit(100).get();
-  invoicesCache = {};
-  snap.docs.forEach(d => { invoicesCache[d.id] = d.data(); });
-  const rows = [];
-  snap.docs.filter(d => dateInRange(d.data().date||'', 'invoiceHistFrom', 'invoiceHistTo')).forEach(d => {
-    const inv = d.data();
-    const items = (inv.items||[]).filter(li => li.productId);
-    (items.length ? items : [{name:'—', qty:'', unit:''}]).forEach(li => {
-      rows.push(`<tr>
-        <td>${esc(inv.invoiceNo||'')}</td><td>${esc(inv.date||'')}</td><td>${esc(inv.customer?.name||'')}</td>
-        <td>${esc(li.name||'')}</td><td>${li.qty||''} ${esc(li.unit||'')}</td>
-        <td>₹${fmtMoney(inv.grandTotal||0)}</td>
-        <td><span class="badge">${inv.emailSent ? 'Sent' : 'Not sent'}</span></td>
-        <td class="row-actions">
-          <button class="btn small" onclick="redownloadInvoicePdf('${d.id}')">Download PDF</button>
-          <a class="btn small" href="invoice-view.html?id=${d.id}" target="_blank">View</a>
-        </td>
-      </tr>`);
+  await listenUserCollection('invoices','invoices',docs=>{
+    const ordered=[...docs].sort((a,b)=>((b.data().createdAt?.seconds||0)-(a.data().createdAt?.seconds||0)) || String(b.data().date||'').localeCompare(String(a.data().date||''))).slice(0,100);
+    invoicesCache={}; ordered.forEach(d=>{invoicesCache[d.id]=d.data();});
+    const rows=[];
+    ordered.filter(d=>dateInRange(d.data().date||'', 'invoiceHistFrom', 'invoiceHistTo')).forEach(d=>{
+      const inv=d.data(); const items=(inv.items||[]).filter(li=>li.productId); (items.length?items:[{name:'—',qty:'',unit:''}]).forEach(li=>rows.push(`<tr><td>${esc(inv.invoiceNo||'')}</td><td>${esc(inv.date||'')}</td><td>${esc(inv.customer?.name||'')}</td><td>${esc(li.name||'')}</td><td>${li.qty||''} ${esc(li.unit||'')}</td><td>₹${fmtMoney(inv.grandTotal||0)}</td><td><span class="badge">${inv.emailSent?'Sent':'Not sent'}</span></td><td class="row-actions"><button class="btn small" onclick="redownloadInvoicePdf('${d.id}')">Download PDF</button><a class="btn small" href="invoice-view.html?id=${d.id}" target="_blank">View</a></td></tr>`));
     });
-  });
-  document.getElementById('invoicesTable').innerHTML = rows.join('') || '<tr><td colspan="8" style="color:var(--muted)">No invoices yet.</td></tr>';
+    const el=document.getElementById('invoicesTable'); if(el) el.innerHTML=rows.join('') || '<tr><td colspan="8" style="color:var(--muted)">No invoices yet.</td></tr>';
+  },err=>console.error('Invoice history realtime load failed:',err));
 }
 
 // PDFs are never stored as files anywhere — every download is generated fresh,
