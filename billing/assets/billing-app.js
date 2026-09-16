@@ -17,30 +17,70 @@ let stockAggregation = []; // {rawKey, displayKey, totalQty} built from stockUpl
 // Firestore real-time listeners. Saved data should appear/update automatically;
 // the user should never need a Refresh button just to see their saved data.
 const realtimeUnsubs = {};
-function stopRealtime(key){ if(realtimeUnsubs[key]){ try{realtimeUnsubs[key](); }catch(e){} delete realtimeUnsubs[key]; } }
+function stopRealtime(key){
+  if(realtimeUnsubs[key]){ try{realtimeUnsubs[key]();}catch(e){} delete realtimeUnsubs[key]; }
+}
+
+// Reliable real-time collection loader.
+// IMPORTANT: wait for the initial snapshot from ALL candidate collections before
+// selecting one. The previous implementation could render an empty legacy
+// collection first and leave the UI apparently blank until a later write.
 function listenUserCollectionCandidates(key, candidates, onDocs, onError){
   stopRealtime(key);
-  const base=db.collection('users').doc(currentUser.uid);
-  const states=candidates.map(name=>({name,docs:[],error:null,ready:false}));
-  let resolved=false;
-  const apply=()=>{
-    // Prefer the first collection in the list that currently has data. If all
-    // are empty, use the first successfully-read collection.
-    const chosen=states.find(x=>x.docs.length) || states.find(x=>x.ready && !x.error) || states[0];
-    const docs=chosen.docs;
-    try{ onDocs(docs, chosen.name); }catch(e){ console.error('Realtime render failed',e); }
+  if(!currentUser || !currentUser.uid) return Promise.reject(new Error('User authentication is not ready.'));
+
+  const base = db.collection('users').doc(currentUser.uid);
+  const states = candidates.map(name => ({name, docs:null, error:null, unsub:null}));
+  let finished = false;
+  let resolveReady;
+  const readyPromise = new Promise(resolve => { resolveReady = resolve; });
+
+  const renderChosen = () => {
+    // Prefer a collection that actually contains documents. If several contain
+    // data, use the first candidate (the canonical name) consistently.
+    const chosen = states.find(x => Array.isArray(x.docs) && x.docs.length > 0)
+                || states.find(x => Array.isArray(x.docs) && !x.error)
+                || states[0];
+    if(!chosen) return;
+    try { onDocs(chosen.docs || [], chosen.name); }
+    catch(e){ console.error('Realtime render failed:', e); }
   };
-  const unsubs=states.map((state,i)=>base.collection(state.name).onSnapshot(snap=>{
-    state.docs=snap.docs; state.ready=true; state.error=null; apply();
-  },err=>{ state.error=err; state.ready=true; apply(); if(onError) onError(err); }));
-  realtimeUnsubs[key]=()=>unsubs.forEach(u=>{try{u();}catch(e){}});
-  // Resolve after the first snapshot/error so existing startup code can await it.
-  return new Promise(resolve=>{
-    const check=()=>{ if(!resolved && states.some(x=>x.ready)){ resolved=true; resolve(); } else if(!resolved) setTimeout(check,25); };
-    check();
+
+  const checkInitial = () => {
+    if(finished) return;
+    if(states.every(x => x.docs !== null || x.error)){
+      finished = true;
+      renderChosen();
+      resolveReady();
+    }
+  };
+
+  states.forEach(state => {
+    state.unsub = base.collection(state.name).onSnapshot(snap => {
+      state.docs = snap.docs;
+      state.error = null;
+      checkInitial();
+      // After initial selection, only the selected collection should drive the
+      // UI. This also handles real-time additions/edits/deletes.
+      if(finished){
+        const anyData = states.find(x => Array.isArray(x.docs) && x.docs.length > 0);
+        if(anyData === state) renderChosen();
+      }
+    }, err => {
+      state.error = err;
+      state.docs = [];
+      if(onError) onError(err, state.name);
+      checkInitial();
+    });
   });
+
+  realtimeUnsubs[key] = () => states.forEach(x => { try{ if(x.unsub) x.unsub(); }catch(e){} });
+  return readyPromise;
 }
-function listenUserCollection(key, name, onDocs, onError){ return listenUserCollectionCandidates(key,[name],onDocs,onError); }
+
+function listenUserCollection(key, name, onDocs, onError){
+  return listenUserCollectionCandidates(key,[name],onDocs,onError);
+}
 
 /* ---------------- Auth guard ---------------- */
 auth.onAuthStateChanged(async user => {
@@ -319,7 +359,6 @@ async function saveProduct(){
   ['pName','pHsn','pUnit','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
   showMsg('productMsg', 'Saved.', true);
-  await loadProducts();
 }
 function editProduct(id){
   const p = productsCache.find(x => x.id === id);
@@ -587,7 +626,6 @@ async function saveCustomer(){
   ['cName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('cState').value = '';
   showMsg('customerMsg', 'Saved.', true);
-  await loadCustomers();
 }
 function editCustomer(id){
   const c = customersCache.find(x => x.id === id);
@@ -602,7 +640,6 @@ function editCustomer(id){
 async function deleteCustomer(id){
   if(!confirm('Delete this customer?')) return;
   await db.collection('users').doc(currentUser.uid).collection('customers').doc(id).delete();
-  loadCustomers();
 }
 function renderCustomerDropdown(){
   const sel = document.getElementById('invCustomer');
@@ -648,7 +685,6 @@ async function saveSupplier(){
   ['sName','sGstin','sAddress','sEmail','sPhone','sEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('sState').value = '';
   showMsg('supplierMsg', 'Saved.', true);
-  loadSuppliers();
 }
 function editSupplier(id){
   const s = suppliersCache.find(x => x.id === id);
@@ -710,7 +746,6 @@ async function savePurchaseProduct(){
   ['ppName','ppUnit','ppEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('ppLinkedProduct').value = '';
   showMsg('purchaseProductMsg', 'Saved.', true);
-  loadPurchaseProducts();
 }
 function editPurchaseProduct(id){
   const p = purchaseProductsCache.find(x => x.id === id);
@@ -1077,9 +1112,7 @@ async function deletePurchase(id){
   await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).update({
     deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
   });
-  await loadProducts();
   await loadStockMovements();
-  loadPurchases();
 }
 /* Undoes the stock-in effect of a purchase's line items — used when a
    purchase is deleted, and when it's edited (old effect reversed, then the
@@ -1212,7 +1245,6 @@ async function deletePayment(id){
   await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).update({
     deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
   });
-  await loadPayments();
   if(currentLedgerSupplierId) renderSupplierLedger(currentLedgerSupplierId);
 }
 function editPayment(id){
@@ -1246,7 +1278,6 @@ async function saveEditedPayment(){
     createdAt: existing.createdAt || firebase.firestore.FieldValue.serverTimestamp()
   });
   closeEditPaymentModal();
-  await loadPayments();
   if(currentLedgerSupplierId) renderSupplierLedger(currentLedgerSupplierId);
 }
 
