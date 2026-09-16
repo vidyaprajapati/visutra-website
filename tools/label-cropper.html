@@ -233,6 +233,14 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         <p class="vlc-help" style="margin-top:8px">Meesho prints the SKU in very small text in the Product Details block. With this on, the same SKU and Qty are read off that block and reprinted in bigger, clearer text at the bottom of the cropped label — e.g. "SKU: VST-WFAT-7-8.5-FA32 x1".</p>
       </div>
 
+      <div class="vlc-field" id="vlcFlipkartSkuField" style="display:none">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="vlcFlipkartSkuStampMode" onchange="onFlipkartSkuModeChange()" style="width:auto">
+          <span>Also print SKU &amp; Qty in larger text at the bottom of each label</span>
+        </label>
+        <p class="vlc-help" style="margin-top:8px">Flipkart prints the SKU in a small "SKU ID | Description" table on the label (and again on the tax invoice, next to "IMEI/SrNo"). With this on, that SKU and Qty are read off and reprinted in bigger, clearer text at the bottom of the cropped label — e.g. "SKU: VST-WA-FA30-6_7.5 x1".</p>
+      </div>
+
       <button class="vlc-btn accent" id="vlcProcessBtn" onclick="processPdf()" disabled>Crop &amp; download PDF</button>
       <div class="vlc-status" id="vlcStatus"></div>
 
@@ -457,6 +465,62 @@ function renderCourierPanel(){
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function escapeAttr(s){ return String(s).replace(/'/g, "\\'"); }
 
+/* ---------------- Flipkart SKU + Qty extraction ----------------
+   Built and tested against a real Flipkart shipping-label PDF. Two
+   independent anchors are tried — either is enough on its own, since the
+   label section and the tax-invoice section both print the SKU in a
+   stable, distinct spot:
+
+   1) The label's own "SKU ID | Description" table:
+        "SKU ID | Description QTY 1 VST-WA-FA30-6_7.5 | Visutra Top Loading
+         Washing Machine Cover Grey 1"
+   2) The tax invoice's product line, which always prints the SKU
+      immediately before "| IMEI/SrNo":
+        "... WA-FA30-6_7.5 | VST-WA-FA30-6_7.5 | IMEI/SrNo: [[]] HSN: 63049291
+         | IGST: 5.00% | CESS: 0.00% 1 230.00 ..." */
+function extractFlipkartSkuQty(text){
+  const headerMatch = text.match(/SKU\s*ID\s*\|\s*Description/i);
+  if(headerMatch){
+    let after = text.slice(headerMatch.index + headerMatch[0].length);
+    after = after.replace(/^\s*QTY\s*/i, '');
+    after = after.replace(/^\s*\d+\s+/, ''); // drop the row's leading index number
+    const skuMatch = after.match(/^\s*([A-Za-z0-9][A-Za-z0-9\-_.]{2,60}?)\s*\|/);
+    if(skuMatch){
+      const sku = skuMatch[1].trim();
+      const afterSku = after.slice(skuMatch[0].length);
+      const qtyMatch = afterSku.match(/\b(\d{1,3})\b/);
+      return { sku, qty: qtyMatch ? (parseInt(qtyMatch[1], 10) || 1) : 1 };
+    }
+  }
+  const imeiMatch = text.match(/\|\s*([A-Za-z0-9][A-Za-z0-9\-_.]{2,60})\s*\|\s*IMEI\s*\/?\s*SrNo/i);
+  if(imeiMatch){
+    const sku = imeiMatch[1].trim();
+    const after = text.slice(imeiMatch.index + imeiMatch[0].length);
+    const cessMatch = after.match(/CESS\s*:\s*[\d.]+\s*%/i);
+    const searchZone = cessMatch ? after.slice(cessMatch.index + cessMatch[0].length) : after;
+    const qtyMatch = searchZone.match(/\b(\d{1,3})\b/);
+    return { sku, qty: qtyMatch ? (parseInt(qtyMatch[1], 10) || 1) : 1 };
+  }
+  return { sku: 'Unknown SKU', qty: 1 };
+}
+async function detectFlipkartSkus(){
+  pageSkus = []; pageQtys = [];
+  for(let i=1;i<=pdfJsDoc.numPages;i++){
+    const page = await pdfJsDoc.getPage(i);
+    const content = await page.getTextContent();
+    const text = content.items.map(it=>it.str).join(' ');
+    const skuQty = extractFlipkartSkuQty(text);
+    pageSkus.push(skuQty.sku);
+    pageQtys.push(skuQty.qty);
+  }
+}
+function onFlipkartSkuModeChange(){
+  onSettingChange();
+  if(document.getElementById('vlcFlipkartSkuStampMode').checked && pdfJsDoc && currentPlatform === 'flipkart' && !pageSkus.length){
+    detectFlipkartSkus();
+  }
+}
+
 /* ---------------- Amazon SKU + Qty extraction (alternating label/invoice pages) ---------------- */
 // 0-based label-page-index -> array of { sku, qty } for every line item on that order's invoice,
 // e.g. amazonSkuByLabelIndex[0] = [{ sku:'led-clr-55', qty:2 }]
@@ -538,6 +602,7 @@ function applyPreset(p){
   document.getElementById('vlcGroupBySku').checked = groupBySku;
   document.getElementById('vlcMeeshoSkuStampMode').checked = stored ? !!stored.meeshoSkuStampMode : false;
   document.getElementById('vlcAmazonSkuMode').checked = stored ? (stored.amazonSkuMode !== false) : true;
+  document.getElementById('vlcFlipkartSkuStampMode').checked = stored ? !!stored.flipkartSkuStampMode : false;
   setMode(preset.mode || 'single');
   updateLabels();
   updateAmazonSkuUiState();
@@ -553,9 +618,12 @@ document.getElementById('vlcPlatforms').addEventListener('click', e=>{
   applyPreset(currentPlatform);
   document.getElementById('vlcAmazonSkuField').style.display = currentPlatform === 'amazon' ? 'block' : 'none';
   document.getElementById('vlcMeeshoGroupField').style.display = currentPlatform === 'meesho' ? 'block' : 'none';
+  document.getElementById('vlcFlipkartSkuField').style.display = currentPlatform === 'flipkart' ? 'block' : 'none';
   updateAmazonSkuUiState();
   if(currentPlatform === 'meesho' && pdfJsDoc && !pageCouriers.length){
     detectCouriers();
+  } else if(currentPlatform === 'flipkart' && pdfJsDoc && document.getElementById('vlcFlipkartSkuStampMode').checked && !pageSkus.length){
+    detectFlipkartSkus();
   } else if(currentPlatform !== 'meesho'){
     document.getElementById('vlcCourierPanel').style.display = 'none';
   } else {
@@ -630,7 +698,8 @@ function getAllSettings(){
     groupByCourier: document.getElementById('vlcGroupByCourier') ? document.getElementById('vlcGroupByCourier').checked : true,
     groupBySku: document.getElementById('vlcGroupBySku') ? document.getElementById('vlcGroupBySku').checked : false,
     meeshoSkuStampMode: document.getElementById('vlcMeeshoSkuStampMode') ? document.getElementById('vlcMeeshoSkuStampMode').checked : false,
-    amazonSkuMode: document.getElementById('vlcAmazonSkuMode') ? document.getElementById('vlcAmazonSkuMode').checked : true
+    amazonSkuMode: document.getElementById('vlcAmazonSkuMode') ? document.getElementById('vlcAmazonSkuMode').checked : true,
+    flipkartSkuStampMode: document.getElementById('vlcFlipkartSkuStampMode') ? document.getElementById('vlcFlipkartSkuStampMode').checked : false
   };
 }
 function getCropValues(){
@@ -671,6 +740,11 @@ async function handleFile(file){
   if(currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode').checked){
     document.getElementById('vlcStatus').textContent = 'Reading SKUs from invoice pages…';
     await detectAmazonSkus();
+    document.getElementById('vlcStatus').textContent = '';
+  }
+  if(currentPlatform === 'flipkart' && document.getElementById('vlcFlipkartSkuStampMode').checked){
+    document.getElementById('vlcStatus').textContent = 'Reading SKUs from labels…';
+    await detectFlipkartSkus();
     document.getElementById('vlcStatus').textContent = '';
   }
 }
@@ -774,7 +848,12 @@ async function processPdf(courierFilter){
     const isLandscape = document.getElementById('vlcOrientLandscape').checked;
     const amazonSkuMode = currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode').checked;
     const meeshoSkuStampMode = currentPlatform === 'meesho' && document.getElementById('vlcMeeshoSkuStampMode') && document.getElementById('vlcMeeshoSkuStampMode').checked;
-    const skuFont = (amazonSkuMode || meeshoSkuStampMode) ? await outDoc.embedFont(PDFLib.StandardFonts.Helvetica) : null;
+    const flipkartSkuStampMode = currentPlatform === 'flipkart' && document.getElementById('vlcFlipkartSkuStampMode') && document.getElementById('vlcFlipkartSkuStampMode').checked;
+    if(flipkartSkuStampMode && pageSkus.length !== srcPages.length){
+      status.textContent = 'Reading SKUs from labels…';
+      await detectFlipkartSkus();
+    }
+    const skuFont = (amazonSkuMode || meeshoSkuStampMode || flipkartSkuStampMode) ? await outDoc.embedFont(PDFLib.StandardFonts.Helvetica) : null;
 
     // Meesho: process pages grouped by the active filter(s) — courier partner,
     // SKU, or both (courier first, then SKU) — or filtered to just one group
@@ -860,6 +939,18 @@ async function processPdf(courierFilter){
           // this reprints the same SKU + Qty bigger and bolder right at the very
           // bottom edge of the cropped label (the bottom-margin cut line you set
           // with the sliders above), not floating higher up on the label.
+          const label = `SKU: ${pageSkus[i]} x${pageQtys[i] || 1}`;
+          const fontSize = Math.max(9, Math.min(13, pageH * 0.028));
+          const textWidth = skuFont.widthOfTextAtSize(label, fontSize);
+          const x = Math.max(4, (pageW - textWidth) / 2);
+          newPage.drawText(label, {
+            x, y: 3, size: fontSize, font: skuFont, color: PDFLib.rgb(0,0,0)
+          });
+        }
+        if(flipkartSkuStampMode && pageSkus[i] && pageSkus[i] !== 'Unknown SKU'){
+          // Same idea as the Meesho stamp above: Flipkart's own SKU table on
+          // the label is small print, so this reprints it bigger and bolder
+          // at the bottom edge of the cropped label.
           const label = `SKU: ${pageSkus[i]} x${pageQtys[i] || 1}`;
           const fontSize = Math.max(9, Math.min(13, pageH * 0.028));
           const textWidth = skuFont.widthOfTextAtSize(label, fontSize);
