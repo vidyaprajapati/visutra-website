@@ -230,14 +230,14 @@ function renderProducts(){
     const isActive = p.active !== false; // missing = treat as active (backward compatible with products created before this field existed)
     const isVisible = !!p.buyerVisibility;
     return `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td>
+    <tr><td>${esc(p.name)}</td><td>${esc(p.sku||'—')}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td>
     <td><button class="btn small" onclick="toggleProductActive('${p.id}', ${!isActive})">${isActive ? 'Active ✓' : 'Inactive'}</button></td>
     <td><button class="btn small" onclick="toggleBuyerVisibility('${p.id}', ${!isVisible})" title="Whether linked buyer accounts can see this product">${isVisible ? 'Visible ✓' : 'Hidden'}</button></td>
     <td class="row-actions">
       <button class="btn small" onclick="editProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteProduct('${p.id}')">Delete</button>
     </td></tr>`;
-  }).join('') || '<tr><td colspan="11" style="color:var(--muted)">No products yet.</td></tr>';
+  }).join('') || '<tr><td colspan="12" style="color:var(--muted)">No products yet.</td></tr>';
 }
 /* Quick toggles from the table row — no need to open the edit form for these two flags. */
 async function toggleProductActive(id, newVal){
@@ -264,6 +264,7 @@ async function saveProduct(){
     name: document.getElementById('pName').value.trim(),
     hsn: document.getElementById('pHsn').value.trim(),
     unit: document.getElementById('pUnit').value.trim() || 'PCS',
+    sku: document.getElementById('pSku').value.trim(),
     price: exclPrice, // stored as the excl.-GST taxable value, used as-is everywhere downstream (invoicing, GSTR-1)
     gstRate,
     reorderLevel: parseFloat(document.getElementById('pReorderLevel').value) || 0,
@@ -274,7 +275,7 @@ async function saveProduct(){
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['pName','pHsn','pUnit','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
+  ['pName','pHsn','pUnit','pSku','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
   showMsg('productMsg', 'Saved.', true);
   loadProducts();
@@ -285,6 +286,7 @@ function editProduct(id){
   document.getElementById('pName').value = p.name;
   document.getElementById('pHsn').value = p.hsn;
   document.getElementById('pUnit').value = p.unit;
+  document.getElementById('pSku').value = p.sku || '';
   document.getElementById('pPriceIncl').value = (p.price * (1 + (p.gstRate||0)/100)).toFixed(2);
   document.getElementById('pGst').value = p.gstRate;
   document.getElementById('pReorderLevel').value = p.reorderLevel || 0;
