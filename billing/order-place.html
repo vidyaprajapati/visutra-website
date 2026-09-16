@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Order to Supplier | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"><b>Order to Supplier</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="app.html">Back to Billing</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div style="max-width:900px;margin:0 auto;padding:32px 20px">
+
+  <div class="card">
+    <h2>Order to Supplier</h2>
+    <p class="sub">Pick a supplier and the products you want to order (from your Purchase Product Master), then send it. Your supplier gets a link to view the order — no login needed on their end — and an email with the same link, if you've saved their email address.</p>
+    <div class="grid2">
+      <div class="field"><label>Supplier</label><select id="ordSupplier"></select></div>
+      <div class="field"><label>Order date</label><input id="ordDate" type="date"></div>
+    </div>
+    <table class="line-items">
+      <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th></th></tr></thead>
+      <tbody id="orderLineItemsTable"></tbody>
+    </table>
+    <button class="btn small" style="margin-top:10px" onclick="addOrderLineItem()">+ Add line item</button>
+    <div class="field" style="margin-top:16px"><label>Note (optional)</label><input id="ordNote" placeholder="e.g. Need this by Friday"></div>
+    <div style="margin-top:14px"><button class="btn primary" onclick="sendOrderToSupplier()">Send Order to Supplier</button></div>
+    <p class="msg" id="orderMsg"></p>
+  </div>
+
+  <div class="card">
+    <h2>Orders Sent</h2>
+    <table><thead><tr><th>Date</th><th>Supplier</th><th>Products</th><th></th></tr></thead>
+    <tbody id="ordersTable"></tbody></table>
+  </div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script src="assets/user-menu.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script>
+let currentUser = null;
+let businessData = {};
+let suppliersCache = [];
+let purchaseProductsCache = [];
+let orderLineItems = []; // {productId, name, unit, qty}
+let ordersCache = [];
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = 'login.html?redirect=' + encodeURIComponent('order-place.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = 'complete-profile.html?redirect=' + encodeURIComponent('order-place.html');
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true });
+  document.getElementById('ordDate').valueAsDate = new Date();
+
+  await loadBusinessProfile();
+  await loadSuppliers();
+  await loadPurchaseProducts();
+  addOrderLineItem();
+  loadOrders();
+});
+
+async function loadBusinessProfile(){
+  const snap = await db.collection('users').doc(currentUser.uid).get();
+  businessData = snap.data() || {};
+}
+
+async function loadSuppliers(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  suppliersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  const sel = document.getElementById('ordSupplier');
+  sel.innerHTML = '<option value="">Select supplier…</option>' +
+    suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+}
+
+async function loadPurchaseProducts(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').orderBy('name').get();
+  purchaseProductsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+}
+function fillPurchaseProductOptions(sel){
+  sel.innerHTML = '<option value="">Select product…</option>' +
+    purchaseProductsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+}
+
+function addOrderLineItem(){
+  orderLineItems.push({productId:'', name:'', unit:'PCS', qty:1});
+  renderOrderLineItems();
+}
+function removeOrderLineItem(idx){
+  orderLineItems.splice(idx, 1);
+  renderOrderLineItems();
+}
+function renderOrderLineItems(){
+  const tbody = document.getElementById('orderLineItemsTable');
+  tbody.innerHTML = orderLineItems.map((li, i) => `<tr>
+    <td><select class="ord-line-product" onchange="onOrderProductPick(${i}, this.value)"></select></td>
+    <td><input type="number" min="0" step="1" value="${li.qty}" style="width:70px" onchange="updateOrderLine(${i},'qty',this.value)"></td>
+    <td>${esc(li.unit)}</td>
+    <td><button class="btn small danger" onclick="removeOrderLineItem(${i})">✕</button></td>
+  </tr>`).join('');
+  tbody.querySelectorAll('.ord-line-product').forEach((sel, i) => {
+    fillPurchaseProductOptions(sel);
+    sel.value = orderLineItems[i].productId;
+  });
+}
+function onOrderProductPick(idx, productId){
+  const p = purchaseProductsCache.find(x => x.id === productId);
+  if(!p) return;
+  orderLineItems[idx] = { productId, name:p.name, unit:p.unit, qty: orderLineItems[idx].qty || 1 };
+  renderOrderLineItems();
+}
+function updateOrderLine(idx, field, value){
+  orderLineItems[idx][field] = parseFloat(value) || 0;
+  renderOrderLineItems();
+}
+
+async function sendOrderToSupplier(){
+  const supId = document.getElementById('ordSupplier').value;
+  const supplier = suppliersCache.find(s => s.id === supId);
+  if(!supplier){ showMsg('orderMsg', 'Select a supplier first.', false); return; }
+  if(!supplier.email){ showMsg('orderMsg', 'This supplier has no email saved. Add one in Suppliers first — the supplier logs in with that exact email to view the order, so it\'s required.', false); return; }
+  const items = orderLineItems.filter(li => li.productId && li.qty > 0);
+  if(!items.length){ showMsg('orderMsg', 'Add at least one product with a quantity.', false); return; }
+
+  const dateVal = document.getElementById('ordDate').value || new Date().toISOString().slice(0,10);
+  const note = document.getElementById('ordNote').value.trim();
+  const orderData = {
+    buyerUid: currentUser.uid,
+    supplierId: supId, supplierName: supplier.name, supplierEmail: supplier.email, date: dateVal, items, note,
+    fromBusinessName: businessData.businessName || '', fromBusinessPhone: businessData.phone || '',
+    fromBusinessAddress: businessData.address || '', fromBusinessEmail: currentUser.email || '',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+
+  showMsg('orderMsg', 'Sending order…', true);
+  // Single top-level doc (not a private subcollection) so the supplier's own
+  // logged-in account can be granted read access to this ONE order via
+  // Firestore rules matching their email — nothing else of yours is exposed.
+  const ref = await db.collection('orders').add(orderData);
+
+  const viewLink = `${window.location.origin}/billing/order-receive.html?id=${ref.id}`;
+  let emailNote = '';
+  try{
+    await sendOrderEmail(orderData, ref.id, supplier.email);
+    emailNote = ` and emailed to ${supplier.email}`;
+  }catch(err){
+    emailNote = ' — emailing to the supplier failed, but the link below still works';
+  }
+  showMsg('orderMsg', `Order sent${emailNote}. Link: ${viewLink} — the supplier needs to be logged in with ${supplier.email} to open it.`, true);
+
+  orderLineItems = [];
+  addOrderLineItem();
+  document.getElementById('ordNote').value = '';
+  loadOrders();
+}
+async function sendOrderEmail(orderData, orderId, toEmail){
+  emailjs.init(EMAILJS_PUBLIC_KEY);
+  const viewLink = `${window.location.origin}/billing/order-receive.html?id=${orderId}`;
+  // Reuses the same EmailJS service/template as invoice emails, since this
+  // project doesn't have a separate "order request" template set up — the
+  // wording in the email itself (e.g. "Invoice") may not perfectly fit an
+  // order request. If that reads oddly, create a second EmailJS template
+  // worded for orders and point this call at its template ID instead.
+  return emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+    to_email: toEmail,
+    to_name: orderData.supplierName,
+    invoice_no: 'Order request',
+    invoice_date: orderData.date,
+    business_name: orderData.fromBusinessName,
+    grand_total: '',
+    view_link: viewLink
+  });
+}
+
+async function loadOrders(){
+  // Avoids needing a composite index: filter by buyerUid only, sort client-side.
+  const snap = await db.collection('orders').where('buyerUid','==',currentUser.uid).get();
+  ordersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  ordersCache.sort((a,b) => (b.date||'').localeCompare(a.date||''));
+  renderOrdersTable();
+}
+function renderOrdersTable(){
+  const tbody = document.getElementById('ordersTable');
+  tbody.innerHTML = ordersCache.map(o => {
+    const itemsSummary = (o.items||[]).map(li => `${esc(li.name)} (${li.qty} ${esc(li.unit)})`).join(', ');
+    return `<tr>
+      <td>${esc(o.date)}</td>
+      <td>${esc(o.supplierName)}</td>
+      <td>${itemsSummary}</td>
+      <td class="row-actions"><a class="btn small" href="order-receive.html?id=${o.id}" target="_blank">View</a></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No orders sent yet.</td></tr>';
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function showMsg(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+</body>
+</html>
