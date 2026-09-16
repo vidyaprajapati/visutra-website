@@ -56,6 +56,7 @@
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
 <script src="../assets/label-sku-extract.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js".replace('pdf.min.js', 'pdf.worker.min.js');
 
@@ -84,11 +85,20 @@ auth.onAuthStateChanged(async user => {
   document.getElementById('notBuyerCard').style.display = isBuyer ? 'none' : 'block';
 
   await loadMappings();
+  await loadSellerEmails();
 });
 
 async function loadMappings(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').get();
   mappingsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(m => m.status === 'ACTIVE');
+}
+let sellerEmailById = {}; // sellerUid -> sellerEmail, for the order-placed email
+async function loadSellerEmails(){
+  const snap = await db.collection('sellerLinks').where('buyerUid', '==', currentUser.uid).get();
+  snap.docs.forEach(d => {
+    const l = d.data();
+    if(l.status === 'ACTIVE') sellerEmailById[l.sellerUid] = l.sellerEmail || '';
+  });
 }
 function findMapping(marketplace, sku){
   const field = { AMAZON: 'amazonSku', MEESHO: 'meeshoSku', FLIPKART: 'flipkartSku' }[marketplace];
@@ -262,11 +272,29 @@ async function placeAutoOrder(sellerId){
     ));
 
     showMsg(`autoOrderMsg-${sellerId}`, `Order ${orderNumber} sent to ${g.sellerName}. Track it from My Orders.`, true);
+    sendOrderNotification(
+      sellerEmailById[sellerId], g.sellerName,
+      `New Order Received – VISUTRA – Order #${orderNumber}`,
+      `You've received a new label-based order from ${buyerData.businessName || currentUser.email}.`,
+      items.map(i => `${i.productName} × ${i.qty}`).join(', '),
+      `${window.location.origin}/billing/seller/order-receive.html?id=${orderRef.id}`
+    );
     delete sellerGroups[sellerId];
     renderSummary();
   }catch(err){
     showMsg(`autoOrderMsg-${sellerId}`, err.message, false);
   }
+}
+
+async function sendOrderNotification(toEmail, toName, subject, headline, detailLine, viewLink){
+  if(!toEmail || !EMAILJS_ORDER_TEMPLATE_ID || EMAILJS_ORDER_TEMPLATE_ID.indexOf('PASTE_YOUR') === 0) return;
+  try{
+    emailjs.init(EMAILJS_PUBLIC_KEY);
+    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_ORDER_TEMPLATE_ID, {
+      to_email: toEmail, to_name: toName || toEmail,
+      email_subject: subject, headline, detail_line: detailLine, view_link: viewLink
+    });
+  }catch(err){ console.error('Order notification email failed:', err); }
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

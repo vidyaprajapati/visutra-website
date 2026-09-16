@@ -50,6 +50,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 let currentUser = null;
 let buyerData = {};
@@ -83,7 +84,7 @@ auth.onAuthStateChanged(async user => {
 async function loadLinkedSellers(){
   const snap = await db.collection('sellerLinks').where('buyerUid', '==', currentUser.uid).get();
   sellersCache = snap.docs.map(d => d.data()).filter(l => l.status === 'ACTIVE')
-    .map(l => ({ sellerUid: l.sellerUid, sellerName: l.sellerName || l.sellerEmail || 'Seller' }));
+    .map(l => ({ sellerUid: l.sellerUid, sellerName: l.sellerName || l.sellerEmail || 'Seller', sellerEmail: l.sellerEmail || '' }));
   document.getElementById('oSeller').innerHTML = '<option value="">Select seller…</option>' +
     sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
 }
@@ -166,12 +167,34 @@ async function placeOrder(){
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     showMsg('orderMsg', `Order ${orderNumber} sent to ${seller.sellerName}. Track it from My Orders.`, true);
+    sendOrderNotification(
+      seller.sellerEmail, seller.sellerName,
+      `New Order Received – VISUTRA – Order #${orderNumber}`,
+      `You've received a new order from ${buyerData.businessName || currentUser.email}.`,
+      items.map(i => `${i.productName} × ${i.qty}`).join(', '),
+      `${window.location.origin}/billing/seller/order-receive.html?id=${orderRef.id}`
+    );
     cart = {};
     renderCart();
     document.getElementById('oNote').value = '';
   }catch(err){
     showMsg('orderMsg', err.message, false);
   }
+}
+
+/* Fire-and-forget order email — an unfilled EMAILJS_ORDER_TEMPLATE_ID (setup
+   not done yet) or a send failure never blocks the order itself, which is
+   already saved in Firestore by the time this runs. See BILLING-SETUP.md
+   "Order email notifications" for the template to create in EmailJS. */
+async function sendOrderNotification(toEmail, toName, subject, headline, detailLine, viewLink){
+  if(!toEmail || !EMAILJS_ORDER_TEMPLATE_ID || EMAILJS_ORDER_TEMPLATE_ID.indexOf('PASTE_YOUR') === 0) return;
+  try{
+    emailjs.init(EMAILJS_PUBLIC_KEY);
+    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_ORDER_TEMPLATE_ID, {
+      to_email: toEmail, to_name: toName || toEmail,
+      email_subject: subject, headline, detail_line: detailLine, view_link: viewLink
+    });
+  }catch(err){ console.error('Order notification email failed:', err); }
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

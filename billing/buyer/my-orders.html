@@ -67,10 +67,21 @@ auth.onAuthStateChanged(async user => {
     .onSnapshot(handleOrdersSnapshot, err => showMsg('pageMsg', err.message, false));
 });
 
+const deepLinkOrderId = new URLSearchParams(window.location.search).get('id');
+let deepLinkApplied = false;
+
 async function handleOrdersSnapshot(snap){
   ordersCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
   ordersCache.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+  if(deepLinkOrderId && !deepLinkApplied){
+    const target = ordersCache.find(o => o.id === deepLinkOrderId);
+    if(target) document.getElementById('fStatus').value = target.status;
+  }
   renderOrders();
+  if(deepLinkOrderId && !deepLinkApplied){
+    const row = document.getElementById(`order-row-${deepLinkOrderId}`);
+    if(row){ row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.style.outline = '2px solid var(--ink)'; deepLinkApplied = true; }
+  }
 
   // Sweep for any accepted order that hasn't produced a Buyer Purchase yet.
   for(const order of ordersCache){
@@ -100,7 +111,7 @@ function renderOrders(){
     } else if(o.status === 'REJECTED'){
       actions = `<span style="color:var(--muted)">${esc(o.rejectionReason || 'No reason given')}</span>`;
     }
-    return `<tr><td>${typeLabel}${esc(o.orderNumber)}</td><td>${esc(o.sellerName)}</td><td>${date}</td>
+    return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}</td><td>${esc(o.sellerName)}</td><td>${date}</td>
       <td>${itemsSummary}</td><td><span class="badge">${esc(o.status)}</span></td>
       <td class="row-actions">${actions}</td></tr>`;
   }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No orders yet — place one from My Sellers.</td></tr>';
