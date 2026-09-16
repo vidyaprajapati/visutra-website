@@ -69,7 +69,10 @@ async function loadSellers(){
   const tbody = document.getElementById('sellersTable');
   tbody.innerHTML = links.map(l => `
     <tr><td>${esc(l.sellerName || l.sellerEmail || 'Seller')}</td><td><span class="badge">${esc(l.status)}</span></td>
-    <td class="row-actions"><a class="btn small" href="seller-products.html?sellerId=${encodeURIComponent(l.sellerUid)}">View Products</a></td></tr>
+    <td class="row-actions">
+      <a class="btn small" href="seller-products.html?sellerId=${encodeURIComponent(l.sellerUid)}">View Products</a>
+      <a class="btn small primary" href="place-order.html?sellerId=${encodeURIComponent(l.sellerUid)}">Place Order</a>
+    </td></tr>
   `).join('') || '<tr><td colspan="3" style="color:var(--muted)">No sellers have linked your account yet. Share your login email (from My Account) with a seller to get started.</td></tr>';
 }
 

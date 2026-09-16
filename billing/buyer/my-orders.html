@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>My Orders | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>My Orders</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="place-order.html">Place Order</a>
+    <a class="btn small" href="../app.html">Back to Billing</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div style="max-width:1000px;margin:0 auto;padding:32px 20px">
+
+  <div class="card">
+    <h2>My Orders</h2>
+    <p class="sub">Updates live — no need to refresh when a seller accepts or rejects. Once a seller accepts, a matching entry is created automatically in your own <a href="../app.html?view=purchases">Purchase Entry</a> (a Supplier record for that seller and a Purchase Product per item are created the first time, if they don't already exist).</p>
+    <div class="field" style="max-width:240px"><label>Filter</label><select id="fStatus" onchange="renderOrders()">
+      <option value="">All</option><option value="PENDING">Pending</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option>
+    </select></div>
+    <table><thead><tr><th>Order #</th><th>Seller</th><th>Date</th><th>Items</th><th>Status</th><th></th></tr></thead>
+    <tbody id="ordersTable"></tbody></table>
+    <p class="msg" id="pageMsg"></p>
+  </div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+let ordersCache = [];
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/my-orders.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/my-orders.html');
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+
+  // Real-time: as soon as a linked seller accepts/rejects, this page updates
+  // itself and (for an acceptance) creates the matching Buyer Purchase record
+  // without needing a refresh — provided this page (or my-sellers.html /
+  // place-order.html, which don't listen) happens to be open when it happens.
+  // If the buyer is offline at that moment, it still catches up and creates
+  // the purchase the next time this page loads, via the same code path.
+  db.collection('marketplaceOrders').where('buyerUid', '==', currentUser.uid)
+    .onSnapshot(handleOrdersSnapshot, err => showMsg('pageMsg', err.message, false));
+});
+
+async function handleOrdersSnapshot(snap){
+  ordersCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  ordersCache.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+  renderOrders();
+
+  // Sweep for any accepted order that hasn't produced a Buyer Purchase yet.
+  for(const order of ordersCache){
+    if(order.status === 'ACCEPTED' && !order.buyerPurchaseId){
+      try{ await ensureBuyerPurchaseForOrder(order); }
+      catch(err){ console.error('Could not auto-create purchase for', order.id, err); }
+    }
+  }
+}
+
+function renderOrders(){
+  const filter = document.getElementById('fStatus').value;
+  const rows = filter ? ordersCache.filter(o => o.status === filter) : ordersCache;
+  document.getElementById('ordersTable').innerHTML = rows.map(o => {
+    const itemsSummary = (o.items || []).map(i => `${esc(i.productName)} × ${i.qty}`).join('<br>');
+    const date = o.createdAt?.toDate ? o.createdAt.toDate().toISOString().slice(0, 10) : '';
+    let actions = '';
+    if(o.status === 'ACCEPTED' && o.invoiceId){
+      actions = `<a class="btn small" href="../invoice-view.html?id=${o.invoiceId}" target="_blank">View Invoice</a>`;
+      if(o.buyerPurchaseId) actions += ` <span class="badge">In Purchase Entry</span>`;
+    } else if(o.status === 'REJECTED'){
+      actions = `<span style="color:var(--muted)">${esc(o.rejectionReason || 'No reason given')}</span>`;
+    }
+    return `<tr><td>${esc(o.orderNumber)}</td><td>${esc(o.sellerName)}</td><td>${date}</td>
+      <td>${itemsSummary}</td><td><span class="badge">${esc(o.status)}</span></td>
+      <td class="row-actions">${actions}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No orders yet — place one from My Sellers.</td></tr>';
+}
+
+/* ---------------- Auto Buyer Purchase (Part 53-57 of the spec) ----------------
+   Uses the EXISTING Purchase Entry architecture (suppliers / purchaseProducts /
+   purchases) rather than a separate purchase system: a Supplier record for the
+   seller and a Purchase Product per ordered item are created the first time
+   they're needed (matched by sellerUid / sellerProductId so repeats reuse the
+   same records), then one purchase entry is written using the EXACT invoice
+   values the seller's acceptance produced — never re-derived or estimated. */
+async function ensureBuyerPurchaseForOrder(order){
+  const supplierId = await ensureSupplierForSeller(order.sellerUid, order.sellerName);
+  const items = [];
+  for(const item of order.items){
+    const purchaseProductId = await ensurePurchaseProductForSellerItem(order.sellerUid, item);
+    items.push({
+      productId: purchaseProductId, name: item.productName, unit: item.unit || 'PCS',
+      qty: item.qty, rate: item.rate || 0, gstRate: item.gstRate || 0,
+      taxable: item.taxable || 0, gstAmt: item.gstAmt || 0, total: item.total || 0,
+      priceMode: 'excl'
+    });
+  }
+  const summary = order.invoiceSummary || {};
+  const purchaseData = {
+    supplierId, supplierName: order.sellerName,
+    date: order.acceptedAt?.toDate ? order.acceptedAt.toDate().toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+    items,
+    subtotal: summary.subtotal || 0,
+    gstTotal: (summary.cgst || 0) + (summary.sgst || 0) + (summary.igst || 0),
+    grandTotal: summary.grandTotal || 0,
+    orderId: order.id, orderNumber: order.orderNumber, invoiceId: order.invoiceId, invoiceNo: order.invoiceNo,
+    autoCreatedFromOrder: true,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const purRef = await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
+
+  // Narrow, rule-guarded update: a buyer may only set buyerPurchaseId once,
+  // on an already-ACCEPTED order, and only that one field (+ timestamp) — see
+  // BILLING-SETUP.md for the exact rule. This is what prevents this sweep
+  // from ever creating a second purchase for the same order.
+  await db.collection('marketplaceOrders').doc(order.id).update({
+    buyerPurchaseId: purRef.id,
+    buyerPurchaseCreatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+async function ensureSupplierForSeller(sellerUid, sellerName){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers')
+    .where('sellerUid', '==', sellerUid).limit(1).get();
+  if(!snap.empty) return snap.docs[0].id;
+  const ref = await db.collection('users').doc(currentUser.uid).collection('suppliers').add({
+    name: sellerName, sellerUid, gstin: '', address: '', stateCode: '', state: '', email: '', phone: '',
+    autoCreatedFromOrder: true
+  });
+  return ref.id;
+}
+async function ensurePurchaseProductForSellerItem(sellerUid, item){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts')
+    .where('sellerUid', '==', sellerUid).where('sellerProductId', '==', item.productId).limit(1).get();
+  if(!snap.empty) return snap.docs[0].id;
+  const ref = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').add({
+    name: item.productName, unit: item.unit || 'PCS', linkedProductId: null,
+    sellerUid, sellerProductId: item.productId, autoCreatedFromOrder: true
+  });
+  return ref.id;
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function showMsg(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+</body>
+</html>

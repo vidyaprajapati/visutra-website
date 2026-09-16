@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Place Order | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Place Order</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="my-sellers.html">My Sellers</a>
+    <a class="btn small" href="my-orders.html">My Orders</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div style="max-width:900px;margin:0 auto;padding:32px 20px">
+
+  <div class="card">
+    <h2>Product Select Order</h2>
+    <p class="sub">Pick a linked seller, choose products from their catalog, and send the order. The price shown here is the seller's current price — the seller's own Product Master price at the moment they accept is what actually goes on the GST invoice, so if it's changed in between, the invoice may differ slightly from this preview.</p>
+    <div class="field" style="max-width:360px"><label>Seller</label><select id="oSeller" onchange="onSellerChange()"><option value="">Select seller…</option></select></div>
+  </div>
+
+  <div class="card" id="catalogCard" style="display:none">
+    <h2>Catalog</h2>
+    <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Price (incl. GST)</th><th>Stock</th><th>Qty</th><th></th></tr></thead>
+    <tbody id="catalogTable"></tbody></table>
+  </div>
+
+  <div class="card" id="cartCard" style="display:none">
+    <h2>Order Summary</h2>
+    <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Qty</th><th></th></tr></thead>
+    <tbody id="cartTable"></tbody></table>
+    <div class="field" style="margin-top:14px;max-width:400px"><label>Note (optional)</label><input id="oNote" placeholder="e.g. Need this by Friday"></div>
+    <button class="btn primary" style="margin-top:10px" onclick="placeOrder()">Place Order to Seller</button>
+    <p class="msg" id="orderMsg"></p>
+  </div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+let buyerData = {};
+let sellersCache = [];
+let catalogCache = [];
+let cart = {}; // productId -> qty
+const preselectSellerId = new URLSearchParams(window.location.search).get('sellerId');
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/place-order.html' + window.location.search); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/place-order.html' + window.location.search);
+    return;
+  }
+
+  currentUser = user;
+  buyerData = snap.data() || {};
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+
+  if(!buyerData.businessName || !buyerData.stateCode){
+    showMsg('orderMsg', 'Complete your Business Profile (name, address, state) in Billing before placing orders — it\'s needed for the GST invoice the seller will raise. ', false);
+  }
+
+  await loadLinkedSellers();
+  if(preselectSellerId){ document.getElementById('oSeller').value = preselectSellerId; await onSellerChange(); }
+});
+
+async function loadLinkedSellers(){
+  const snap = await db.collection('sellerLinks').where('buyerUid', '==', currentUser.uid).get();
+  sellersCache = snap.docs.map(d => d.data()).filter(l => l.status === 'ACTIVE')
+    .map(l => ({ sellerUid: l.sellerUid, sellerName: l.sellerName || l.sellerEmail || 'Seller' }));
+  document.getElementById('oSeller').innerHTML = '<option value="">Select seller…</option>' +
+    sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
+}
+
+async function onSellerChange(){
+  const sellerUid = document.getElementById('oSeller').value;
+  cart = {};
+  renderCart();
+  if(!sellerUid){ document.getElementById('catalogCard').style.display = 'none'; return; }
+  document.getElementById('catalogCard').style.display = 'block';
+  document.getElementById('catalogTable').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr>';
+  const snap = await db.collection('users').doc(sellerUid).collection('products').where('buyerVisibility', '==', true).get();
+  catalogCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.active !== false);
+  renderCatalog();
+}
+function renderCatalog(){
+  document.getElementById('catalogTable').innerHTML = catalogCache.map(p => `
+    <tr><td>${esc(p.name)}</td><td>${esc(p.sku||'—')}</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td>
+    <td><input type="number" min="0" step="1" style="width:70px" id="qty-${p.id}" value="${cart[p.id]||''}" placeholder="0"></td>
+    <td><button class="btn small" onclick="addToCart('${p.id}')">Add</button></td></tr>
+  `).join('') || '<tr><td colspan="6" style="color:var(--muted)">No products are visible to you from this seller yet.</td></tr>';
+}
+function addToCart(productId){
+  const qty = parseFloat(document.getElementById(`qty-${productId}`).value);
+  if(!qty || qty <= 0){ showMsg('orderMsg', 'Enter a quantity greater than zero.', false); return; }
+  cart[productId] = qty;
+  renderCart();
+}
+function removeFromCart(productId){
+  delete cart[productId];
+  renderCart();
+}
+function renderCart(){
+  const ids = Object.keys(cart);
+  document.getElementById('cartCard').style.display = ids.length ? 'block' : 'none';
+  document.getElementById('cartTable').innerHTML = ids.map(id => {
+    const p = catalogCache.find(x => x.id === id);
+    if(!p) return '';
+    return `<tr><td>${esc(p.name)}</td><td>${esc(p.sku||'—')}</td><td>${cart[id]}</td>
+      <td><button class="btn small danger" onclick="removeFromCart('${id}')">✕</button></td></tr>`;
+  }).join('');
+}
+
+async function placeOrder(){
+  const sellerUid = document.getElementById('oSeller').value;
+  const seller = sellersCache.find(s => s.sellerUid === sellerUid);
+  const ids = Object.keys(cart);
+  if(!seller || !ids.length){ showMsg('orderMsg', 'Select a seller and add at least one product.', false); return; }
+  if(!buyerData.businessName || !buyerData.stateCode){ showMsg('orderMsg', 'Complete your Business Profile (Billing → Business Profile) before placing an order.', false); return; }
+
+  showMsg('orderMsg', 'Placing order…', true);
+  try{
+    // Snapshot the buyer's own business details onto the order itself — the
+    // buyer already has full read/write rights to their own data, so this is
+    // written by the buyer at creation time, exactly like the existing
+    // "Order to Supplier" flow snapshots fromBusinessName/etc. The seller
+    // will only ever read these fields off the order doc, never reaching
+    // into the buyer's private profile directly.
+    const items = ids.map(id => {
+      const p = catalogCache.find(x => x.id === id);
+      return { productId: id, productName: p.name, sellerSku: p.sku || '', unit: p.unit || 'PCS', qty: cart[id] };
+    });
+    const orderRef = db.collection('marketplaceOrders').doc();
+    const orderNumber = `VIS-ORD-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${orderRef.id.slice(-6).toUpperCase()}`;
+    await orderRef.set({
+      orderNumber,
+      orderType: 'PRODUCT_SELECT',
+      buyerUid: currentUser.uid,
+      buyerEmail: currentUser.email || '',
+      buyerBusiness: {
+        businessName: buyerData.businessName || '', gstin: buyerData.gstin || '',
+        address: buyerData.address || '', state: buyerData.state || '', stateCode: buyerData.stateCode || '',
+        email: currentUser.email || ''
+      },
+      sellerUid, sellerName: seller.sellerName,
+      items,
+      note: document.getElementById('oNote').value.trim(),
+      status: 'PENDING',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    showMsg('orderMsg', `Order ${orderNumber} sent to ${seller.sellerName}. Track it from My Orders.`, true);
+    cart = {};
+    renderCart();
+    document.getElementById('oNote').value = '';
+  }catch(err){
+    showMsg('orderMsg', err.message, false);
+  }
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function showMsg(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+</body>
+</html>
