@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Business Portal | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+<style>
+.vp-wrap{max-width:980px;margin:0 auto;padding:40px 20px 70px}
+.vp-head{text-align:center;margin-bottom:34px}
+.vp-head h1{font-family:var(--display);font-size:clamp(26px,4vw,36px);margin:0 0 8px}
+.vp-portals{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+.vp-portal{background:var(--card);border:1.5px solid var(--ink);border-radius:var(--radius,14px);padding:26px}
+.vp-portal h2{font-family:var(--display);font-size:20px;margin:0 0 6px}
+.vp-portal .vp-tag{font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:14px}
+.vp-portal p.vp-desc{color:var(--ink-soft,#6B6255);font-size:13.5px;margin:0 0 18px}
+.vp-links{display:flex;flex-direction:column;gap:8px}
+.vp-links a{display:block;padding:11px 14px;border:1px solid var(--line,#E4D8BD);border-radius:10px;text-decoration:none;color:inherit;font-size:14px;font-weight:600}
+.vp-links a:hover{background:var(--ivory,#FBF4E4)}
+.vp-links a span{display:block;font-weight:400;font-size:12px;color:var(--ink-soft,#6B6255);margin-top:2px}
+@media(max-width:720px){.vp-portals{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"><b>Business Portal</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="../free-services.html">Free Services for Sellers</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div class="vp-wrap">
+  <div class="vp-head">
+    <div class="eyebrow">VISUTRA BUSINESS PORTAL</div>
+    <h1>Buying, or selling?</h1>
+    <p class="sub">Pick the side you're here for. If you do both, both sections apply to your one account — sign in once and everything below just works, one login needed on either side.</p>
+  </div>
+
+  <div class="vp-portals">
+    <div class="vp-portal">
+      <div class="vp-tag">Buyer</div>
+      <h2>For businesses that order from a seller</h2>
+      <p class="vp-desc">Browse a linked seller's catalog, place orders, map your Amazon/Meesho/Flipkart SKUs, and track order status — all under the account you sign in with.</p>
+      <div class="vp-links">
+        <a href="buyer/my-sellers.html">My Sellers<span>See who's linked you and view their catalog</span></a>
+        <a href="buyer/place-order.html">Place Order<span>Pick products from a seller's catalog</span></a>
+        <a href="buyer/label-order.html">Label-Based Auto Order<span>Upload shipping labels to auto-build an order</span></a>
+        <a href="buyer/buyer-sku-master.html">Buyer SKU Master<span>Map marketplace SKUs to seller products</span></a>
+        <a href="buyer/my-orders.html">My Orders<span>Track status, invoices, and purchase records</span></a>
+      </div>
+    </div>
+
+    <div class="vp-portal">
+      <div class="vp-tag">Seller</div>
+      <h2>For businesses that sell to customers</h2>
+      <p class="vp-desc">Create GST invoices, manage your product and customer masters, track purchases and inventory, and receive orders from linked buyers.</p>
+      <div class="vp-links">
+        <a href="app.html">GST Billing<span>Invoices, Product &amp; Customer Master, GSTR-1</span></a>
+        <a href="app.html?view=purchases">Purchase Entry<span>Suppliers, purchases, payments</span></a>
+        <a href="seller/order-receive.html">Order Receive<span>Accept or reject orders from linked buyers</span></a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script src="assets/user-menu.js"></script>
+<script>
+// Every link on this page already has its own auth guard (redirects to
+// login.html?redirect=... if signed out, complete-profile.html if the
+// profile isn't finished) — this page itself stays open so signed-out
+// visitors can see what's here before deciding to sign in. If already
+// signed in, just mount the account menu.
+auth.onAuthStateChanged(user => {
+  if(user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'))){
+    mountUserMenu('userMenuMount', user, { showBillingLink: true });
+  } else {
+    document.getElementById('userMenuMount').innerHTML =
+      '<a class="btn small primary" href="login.html?redirect=' + encodeURIComponent('portal.html') + '">Sign In</a>';
+  }
+});
+</script>
+</body>
+</html>
