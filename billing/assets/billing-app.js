@@ -519,6 +519,9 @@ function renderCustomers(){
     <td class="row-actions">
       <button class="btn small" onclick="editCustomer('${c.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteCustomer('${c.id}')">Delete</button>
+      ${c.linkStatus === 'ACTIVE'
+        ? `<button class="btn small" onclick="unlinkBuyerAccount('${c.id}')">Unlink</button>`
+        : `<button class="btn small" onclick="linkBuyerAccount('${c.id}')">Link Buyer</button>`}
     </td></tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No customers yet.</td></tr>';
 }
 async function saveCustomer(){
@@ -536,7 +539,7 @@ async function saveCustomer(){
   if(!data.name){ showMsg('customerMsg', 'Customer name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('customers');
   if(id){ await col.doc(id).set(data, {merge:true}); } else { await col.add(data); }
-  ['cName','cGstin','cAddress','cEmail','cPhone','cEditId','cBuyerEmail'].forEach(f => document.getElementById(f).value = '');
+  ['cName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('cState').value = '';
   showMsg('customerMsg', 'Saved.', true);
   loadCustomers();
@@ -550,8 +553,6 @@ function editCustomer(id){
   document.getElementById('cState').value = c.stateCode || '';
   document.getElementById('cEmail').value = c.email || '';
   document.getElementById('cPhone').value = c.phone || '';
-  document.getElementById('cBuyerEmail').value = c.linkedBuyerEmail || '';
-  document.getElementById('buyerLinkMsg').textContent = '';
 }
 async function deleteCustomer(id){
   if(!confirm('Delete this customer?')) return;
@@ -560,29 +561,34 @@ async function deleteCustomer(id){
 }
 
 /* ---------------- Seller -> Buyer linking ----------------
-   Looks up buyerDirectory (a public uid<->email index that a buyer creates
-   for themselves when they turn on Buyer features in My Account) to find
-   the buyer's uid, then records the relationship in two places:
+   Works directly from the customer's row — no need to open Edit first (an
+   earlier version required that, which was confusing and easy to trip:
+   clicking Link Buyer without having clicked Edit first left the form's
+   hidden cEditId empty, so the link silently failed with a "save the
+   customer first" message even for an already-saved customer). Looks up
+   buyerDirectory (a public uid<->email index a buyer creates for themselves
+   when they turn on Buyer features in My Account) to find the buyer's uid,
+   then records the relationship in two places:
      - on the customer doc itself (linkedBuyerUid/linkedBuyerEmail/linkStatus)
      - in a top-level sellerLinks/{sellerUid}_{buyerUid} doc, which is what
        Firestore security rules check to decide whether that buyer may read
        this seller's buyer-visible products. */
-async function linkBuyerAccount(){
-  const id = document.getElementById('cEditId').value;
-  if(!id){ showMsg('buyerLinkMsg', 'Save this customer first, then click Edit on it to link a buyer account.', false); return; }
-  const email = document.getElementById('cBuyerEmail').value.trim().toLowerCase();
-  if(!email){ showMsg('buyerLinkMsg', "Enter the buyer's login email.", false); return; }
+async function linkBuyerAccount(customerId){
+  const customer = customersCache.find(c => c.id === customerId);
+  if(!customer) return;
+  const email = (window.prompt(`Buyer's login email for "${customer.name}" (the email they used to turn on Buyer Features):`, customer.linkedBuyerEmail || '') || '').trim().toLowerCase();
+  if(!email) return;
 
   showMsg('buyerLinkMsg', 'Looking up buyer account…', true);
   try{
     const dirSnap = await db.collection('buyerDirectory').doc(email).get();
     if(!dirSnap.exists){
-      showMsg('buyerLinkMsg', `No buyer account found for ${email}. Ask them to turn on "Buyer features" on their My Account page first, then try again.`, false);
+      showMsg('buyerLinkMsg', `No buyer account found for ${email}. Ask them to turn on "Buyer features" on their My Account page first (that's what creates this lookup entry), then try again — the email has to match exactly.`, false);
       return;
     }
     const buyerUid = dirSnap.data().uid;
     const linkId = `${currentUser.uid}_${buyerUid}`;
-    await db.collection('users').doc(currentUser.uid).collection('customers').doc(id).set({
+    await db.collection('users').doc(currentUser.uid).collection('customers').doc(customerId).set({
       linkedBuyerUid: buyerUid, linkedBuyerEmail: email, linkStatus: 'ACTIVE'
     }, {merge:true});
     await db.collection('sellerLinks').doc(linkId).set({
@@ -590,7 +596,7 @@ async function linkBuyerAccount(){
       sellerName: businessData.businessName || currentUser.email,
       sellerEmail: currentUser.email || '',
       buyerUid, buyerEmail: email,
-      customerId: id,
+      customerId: customerId,
       status: 'ACTIVE',
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -601,12 +607,12 @@ async function linkBuyerAccount(){
     showMsg('buyerLinkMsg', err.message, false);
   }
 }
-async function unlinkBuyerAccount(){
-  const id = document.getElementById('cEditId').value;
-  const customer = customersCache.find(c => c.id === id);
+async function unlinkBuyerAccount(customerId){
+  const customer = customersCache.find(c => c.id === customerId);
   if(!customer || !customer.linkedBuyerUid){ showMsg('buyerLinkMsg', 'This customer is not linked to a buyer account.', false); return; }
+  if(!confirm(`Unlink ${customer.linkedBuyerEmail || 'this buyer'} from ${customer.name}?`)) return;
   const linkId = `${currentUser.uid}_${customer.linkedBuyerUid}`;
-  await db.collection('users').doc(currentUser.uid).collection('customers').doc(id).set({linkStatus: 'INACTIVE'}, {merge:true});
+  await db.collection('users').doc(currentUser.uid).collection('customers').doc(customerId).set({linkStatus: 'INACTIVE'}, {merge:true});
   await db.collection('sellerLinks').doc(linkId).set({status: 'INACTIVE', updatedAt: firebase.firestore.FieldValue.serverTimestamp()}, {merge:true});
   showMsg('buyerLinkMsg', 'Unlinked. This customer can no longer see your buyer-visible products.', true);
   loadCustomers();
