@@ -1,0 +1,20 @@
+VISUTRA Billing - robust master/order data fix
+
+This version:
+- Loads Product, Customer, Supplier and Purchase Product masters independently.
+- Supports current and legacy collection names: products/productMaster/productMasters,
+  customers/customerMaster/customerMasters, suppliers/supplierMaster/supplierMasters,
+  purchaseProducts/purchaseProductMaster/purchaseProductMasters.
+- Supports common legacy field names (name/productName/businessName/etc.).
+- Falls back from Firestore orderBy queries to simple collection reads when an index is missing.
+- Shows actual Firestore load errors in the relevant page message.
+- Adds Refresh List buttons to master pages.
+- Makes Order to Supplier loading independent and shows errors instead of silently hiding them.
+- Shows order time in Orders Sent and Orders Received.
+- Keeps Order Receive authentication safe and loads supplier Product Master before rendering.
+
+IMPORTANT:
+If the lists still show empty after deploying this version, the existing records are almost certainly
+stored under a different Firebase Auth UID or a different Firestore path. The page will now show a
+Firestore error when access is denied. Check Firebase Authentication for the signed-in email and
+Firestore under users/<that UID>/. Do not delete existing Firestore data.
