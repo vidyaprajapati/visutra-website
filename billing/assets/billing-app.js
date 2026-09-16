@@ -1424,6 +1424,15 @@ async function saveAndGenerate(sendEmail){
 
   const ref = await db.collection('users').doc(currentUser.uid).collection('invoices').add(invoiceData);
 
+  // Stock OUT: every line item on a saved GST invoice reduces that product's
+  // stock, same as a monthly marketplace upload would — logged individually so
+  // each sale shows up in Stock Movement History with a reference to the invoice.
+  const stockItems = invoiceData.items.filter(li => li.productId);
+  for(const li of stockItems){
+    await addStockMovement('sale-out', li.productId, -(li.qty||0), dateVal, `Invoice ${invoiceNo} — sold to ${customer.name}`);
+  }
+  if(stockItems.length){ await loadProducts(); await loadStockMovements(); }
+
   showMsg('invoiceMsg', 'Generating PDF…', true);
   const pdfBlob = buildInvoicePDF(invoiceData);
 
