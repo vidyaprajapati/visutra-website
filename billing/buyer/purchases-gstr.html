@@ -31,34 +31,43 @@
 
   <div class="card">
     <h2>GSTR-1 Filing — Purchases from Sellers</h2>
-    <p class="sub">Compiles every purchase received from a linked seller (auto-created here the moment they accept your order) into one GST-rate-wise and seller-wise register for the period below. This is your <b>inward</b> supply data — what you bought, for return/ITC prep — not an outward-sales GSTR-1; use Billing → GSTR-1 Filing for your own sales.</p>
+    <p class="sub">Compiles <b>every</b> purchase received from any linked seller (auto-created here the moment they accept your order) into one GST-rate-wise register for the period below — your <b>inward</b> supply data, for return/ITC prep. Note: the GST portal doesn't accept a direct upload of purchase/inward data — your ITC is auto-populated from your sellers' own GSTR-1 filings (via 2A/2B). The JSON here is for your own records or your accountant, not a portal upload.</p>
     <div class="grid3">
-      <div class="field"><label>From</label><input type="date" id="fFrom"></div>
-      <div class="field"><label>To</label><input type="date" id="fTo"></div>
-      <div class="field"><label>Seller</label><select id="fSupplier"><option value="">All sellers</option></select></div>
+      <div class="field"><label>Financial Year</label><select id="gFY" onchange="onFYChange()"></select></div>
+      <div class="field"><label>Filing type</label>
+        <select id="gType" onchange="onFilingTypeChange()">
+          <option value="monthly">Monthly</option>
+          <option value="quarterly">Quarterly (QRMP)</option>
+        </select>
+      </div>
+      <div class="field" id="gMonthWrap"><label>Month</label><select id="gMonth"></select></div>
+      <div class="field hidden" id="gQuarterWrap"><label>Quarter</label><select id="gQuarter"></select></div>
     </div>
-    <button class="btn primary" onclick="renderReport()">Run Report</button>
-    <button class="btn small" onclick="exportExcel()">Export to Excel</button>
+    <button class="btn primary" onclick="generateReport()">Generate Report</button>
     <p class="msg" id="pageMsg"></p>
   </div>
 
-  <div class="card" id="totalsCard" style="display:none">
-    <h2>Totals for Period</h2>
+  <div class="card hidden" id="totalsCard">
+    <h2>Totals — <span id="periodLabel"></span></h2>
     <div class="totals-row"><span>Taxable value</span><span id="tTaxable">0.00</span></div>
     <div class="totals-row"><span>GST</span><span id="tGst">0.00</span></div>
     <div class="totals-row grand"><span>Grand total</span><span id="tGrand">0.00</span></div>
   </div>
 
-  <div class="card" id="rateCard" style="display:none">
+  <div class="card hidden" id="rateCard">
     <h2>GST Rate-wise Summary</h2>
     <table><thead><tr><th>GST Rate</th><th>Taxable Value</th><th>GST Amount</th><th>Total</th></tr></thead>
     <tbody id="rateTable"></tbody></table>
   </div>
 
-  <div class="card" id="registerCard" style="display:none">
+  <div class="card hidden" id="registerCard">
     <h2>Purchase Register</h2>
     <table><thead><tr><th>Date</th><th>Seller</th><th>Order #</th><th>Taxable</th><th>GST</th><th>Total</th></tr></thead>
     <tbody id="registerTable"></tbody></table>
+    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn primary" onclick="exportExcel()">Download Excel</button>
+      <button class="btn" onclick="exportJson()">Download JSON</button>
+    </div>
   </div>
 
   </div>
@@ -72,8 +81,81 @@
 <script>
 let currentUser = null;
 let purchasesCache = [];
-let suppliersCache = [];
 let reportRows = [];
+let reportPeriodLabel = '';
+let reportFileTag = '';
+
+/* ---------------- Period selector (FY + Monthly/Quarterly) — same convention as Billing's GSTR-1 Filing, so periods line up if you run both ---------------- */
+const FY_MONTHS = [
+  {m:4,label:'April'}, {m:5,label:'May'}, {m:6,label:'June'},
+  {m:7,label:'July'}, {m:8,label:'August'}, {m:9,label:'September'},
+  {m:10,label:'October'}, {m:11,label:'November'}, {m:12,label:'December'},
+  {m:1,label:'January'}, {m:2,label:'February'}, {m:3,label:'March'}
+];
+const FY_QUARTERS = [
+  {q:1, label:'Q1 (Apr – Jun)', months:[4,5,6]},
+  {q:2, label:'Q2 (Jul – Sep)', months:[7,8,9]},
+  {q:3, label:'Q3 (Oct – Dec)', months:[10,11,12]},
+  {q:4, label:'Q4 (Jan – Mar)', months:[1,2,3]}
+];
+function currentFYStartYear(d){ d = d || new Date(); return d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; }
+function populateFY(){
+  const sel = document.getElementById('gFY');
+  const curStart = currentFYStartYear();
+  const years = [curStart - 2, curStart - 1, curStart];
+  sel.innerHTML = years.map(y => `<option value="${y}">FY ${y}-${String(y+1).slice(2)}</option>`).join('');
+  sel.value = curStart;
+  onFYChange();
+}
+function onFYChange(){ populateMonth(); populateQuarter(); }
+function populateMonth(){
+  const fyStart = parseInt(document.getElementById('gFY').value, 10);
+  const sel = document.getElementById('gMonth');
+  sel.innerHTML = FY_MONTHS.map(x => {
+    const year = x.m >= 4 ? fyStart : fyStart + 1;
+    return `<option value="${year}-${String(x.m).padStart(2,'0')}">${x.label} ${year}</option>`;
+  }).join('');
+  const now = new Date();
+  const nowVal = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  if([...sel.options].some(o => o.value === nowVal)) sel.value = nowVal;
+}
+function populateQuarter(){
+  const fyStart = parseInt(document.getElementById('gFY').value, 10);
+  const sel = document.getElementById('gQuarter');
+  sel.innerHTML = FY_QUARTERS.map(q => {
+    const startYear = q.months[0] >= 4 ? fyStart : fyStart + 1;
+    const endYear = q.months[2] >= 4 ? fyStart : fyStart + 1;
+    return `<option value="${q.q}">${q.label} ${startYear}${endYear!==startYear ? '-'+String(endYear).slice(2) : ''}</option>`;
+  }).join('');
+  const now = new Date();
+  if(currentFYStartYear(now) === fyStart){
+    const curMonth = now.getMonth() + 1;
+    const match = FY_QUARTERS.find(x => x.months.includes(curMonth));
+    if(match) sel.value = match.q;
+  }
+}
+function onFilingTypeChange(){
+  const type = document.getElementById('gType').value;
+  document.getElementById('gMonthWrap').classList.toggle('hidden', type !== 'monthly');
+  document.getElementById('gQuarterWrap').classList.toggle('hidden', type !== 'quarterly');
+}
+function getSelectedPeriodRange(){
+  const type = document.getElementById('gType').value;
+  if(type === 'monthly'){
+    const val = document.getElementById('gMonth').value;
+    const [y, m] = val.split('-').map(Number);
+    return { start: new Date(y, m-1, 1), end: new Date(y, m, 1), label: val, fileTag: val };
+  }
+  const fyStart = parseInt(document.getElementById('gFY').value, 10);
+  const qNum = parseInt(document.getElementById('gQuarter').value, 10);
+  const q = FY_QUARTERS.find(x => x.q === qNum);
+  const startMonth = q.months[0];
+  const startYear = startMonth >= 4 ? fyStart : fyStart + 1;
+  const start = new Date(startYear, startMonth - 1, 1);
+  const end = new Date(start.getFullYear(), start.getMonth() + 3, 1);
+  const label = `Q${qNum} FY${fyStart}-${String(fyStart+1).slice(2)}`;
+  return { start, end, label, fileTag: `Q${qNum}-FY${fyStart}-${String(fyStart+1).slice(2)}` };
+}
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -92,57 +174,37 @@ auth.onAuthStateChanged(async user => {
   const data = snap.data() || {};
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
 
-  const today = new Date();
-  const first = new Date(today.getFullYear(), today.getMonth(), 1);
-  document.getElementById('fFrom').value = first.toISOString().slice(0,10);
-  document.getElementById('fTo').value = today.toISOString().slice(0,10);
+  populateFY();
 
-  await loadData();
-  renderReport();
+  const purSnap = await db.collection('users').doc(currentUser.uid).collection('purchases').where('autoCreatedFromOrder', '==', true).get();
+  purchasesCache = purSnap.docs.map(d => ({id:d.id, ...d.data()}));
 });
 
-async function loadData(){
-  const [purSnap, supSnap] = await Promise.all([
-    db.collection('users').doc(currentUser.uid).collection('purchases').where('autoCreatedFromOrder', '==', true).orderBy('date','desc').get(),
-    db.collection('users').doc(currentUser.uid).collection('suppliers').get()
-  ]);
-  purchasesCache = purSnap.docs.map(d => ({id:d.id, ...d.data()}));
-  // Only sellers you actually buy from on VISUTRA (carry a sellerUid) belong
-  // in this filter — a regular raw-material supplier on the Billing side
-  // never shows up here since it never has a sellerUid.
-  suppliersCache = supSnap.docs.map(d => ({id:d.id, ...d.data()})).filter(s => s.sellerUid);
-  document.getElementById('fSupplier').innerHTML = '<option value="">All sellers</option>' +
-    suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
-}
-
-function renderReport(){
-  const from = document.getElementById('fFrom').value;
-  const to = document.getElementById('fTo').value;
-  const supplierFilter = document.getElementById('fSupplier').value;
+function generateReport(){
+  const period = getSelectedPeriodRange();
+  reportPeriodLabel = period.label;
+  reportFileTag = period.fileTag;
 
   const filtered = purchasesCache.filter(p => {
-    if(from && p.date < from) return false;
-    if(to && p.date > to) return false;
-    if(supplierFilter && p.supplierId !== supplierFilter) return false;
-    return true;
+    const d = parseLocalDate(p.date);
+    return d >= period.start && d < period.end;
   });
 
   reportRows = filtered.map(p => ({
-    date: p.date,
-    supplierName: p.supplierName || 'Unknown seller',
-    orderNumber: p.orderNumber || '',
-    taxable: p.subtotal || 0,
-    gst: p.gstTotal || 0,
-    total: p.grandTotal || 0,
-    items: p.items || []
+    date: p.date, supplierName: p.supplierName || 'Unknown seller', orderNumber: p.orderNumber || '',
+    taxable: p.subtotal || 0, gst: p.gstTotal || 0, total: p.grandTotal || 0, items: p.items || []
   }));
 
+  const msgEl = document.getElementById('pageMsg');
   if(!reportRows.length){
-    showMsg('No purchases from sellers found for this period.', false);
-    ['totalsCard','rateCard','registerCard'].forEach(id => document.getElementById(id).style.display = 'none');
+    msgEl.textContent = 'No purchases from sellers found for this period.';
+    msgEl.className = 'msg error';
+    ['totalsCard','rateCard','registerCard'].forEach(id => document.getElementById(id).classList.add('hidden'));
     return;
   }
-  showMsg(`${reportRows.length} purchase(s) in this period.`, true);
+  msgEl.textContent = `${reportRows.length} purchase(s) in ${period.label}.`;
+  msgEl.className = 'msg ok';
+  document.getElementById('periodLabel').textContent = period.label;
 
   let taxable = 0, gst = 0, grand = 0;
   const byRate = {};
@@ -159,23 +221,23 @@ function renderReport(){
   document.getElementById('tTaxable').textContent = fmtMoney(taxable);
   document.getElementById('tGst').textContent = fmtMoney(gst);
   document.getElementById('tGrand').textContent = fmtMoney(grand);
-  document.getElementById('totalsCard').style.display = 'block';
+  document.getElementById('totalsCard').classList.remove('hidden');
 
   const rates = Object.keys(byRate).map(Number).sort((a,b) => a-b);
   document.getElementById('rateTable').innerHTML = rates.map(r => `
     <tr><td>${r}%</td><td>${fmtMoney(byRate[r].taxable)}</td><td>${fmtMoney(byRate[r].gst)}</td><td>${fmtMoney(byRate[r].taxable + byRate[r].gst)}</td></tr>
   `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No line-item GST-rate data on these purchases.</td></tr>';
-  document.getElementById('rateCard').style.display = 'block';
+  document.getElementById('rateCard').classList.remove('hidden');
 
   document.getElementById('registerTable').innerHTML = reportRows.map(r => `
     <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}</td><td>${esc(r.orderNumber)}</td>
     <td>${fmtMoney(r.taxable)}</td><td>${fmtMoney(r.gst)}</td><td>${fmtMoney(r.total)}</td></tr>
   `).join('');
-  document.getElementById('registerCard').style.display = 'block';
+  document.getElementById('registerCard').classList.remove('hidden');
 }
 
 function exportExcel(){
-  if(!reportRows.length){ showMsg('Run the report first — nothing to export yet.', false); return; }
+  if(!reportRows.length) return;
   const header = ['Date','Seller','Order #','Taxable Value','GST Amount','Total'];
   const rows = reportRows.map(r => [r.date, r.supplierName, r.orderNumber, r.taxable, r.gst, r.total]);
   const wb = XLSX.utils.book_new();
@@ -193,18 +255,38 @@ function exportExcel(){
     .map(r => [r + '%', byRate[r].taxable, byRate[r].gst, byRate[r].taxable + byRate[r].gst]);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([rateHeader].concat(rateRows)), 'Rate Summary');
 
-  const from = document.getElementById('fFrom').value || 'start';
-  const to = document.getElementById('fTo').value || 'end';
-  XLSX.writeFile(wb, `Buyer-Purchase-GST-Register-${from}-to-${to}.xlsx`);
+  XLSX.writeFile(wb, `Buyer-Purchase-Register-${reportFileTag}.xlsx`);
 }
 
+// Not a GST-portal upload format — the portal has no "upload your purchases"
+// endpoint; your ITC comes from your sellers' own GSTR-1 filings via 2A/2B.
+// This is a plain, readable JSON of the same register, meant for your own
+// records or to hand to an accountant.
+function exportJson(){
+  if(!reportRows.length) return;
+  const json = {
+    period: reportFileTag,
+    periodLabel: reportPeriodLabel,
+    generatedAt: new Date().toISOString(),
+    note: 'Inward/purchase register for internal use — the GST portal does not accept a direct purchase-data upload; ITC is auto-populated from your sellers\' GSTR-1 filings.',
+    purchases: reportRows.map(r => ({
+      date: r.date, seller: r.supplierName, orderNumber: r.orderNumber,
+      taxableValue: fix2(r.taxable), gstAmount: fix2(r.gst), total: fix2(r.total),
+      items: r.items.map(li => ({ name: li.name, qty: li.qty, unit: li.unit, gstRate: li.gstRate, taxable: fix2(li.taxable||0), gstAmt: fix2(li.gstAmt||0), total: fix2(li.total||0) }))
+    }))
+  };
+  const blob = new Blob([JSON.stringify(json, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `Buyer-Purchase-Register-${reportFileTag}.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function parseLocalDate(s){ const [y,m,d] = (s||'1970-01-01').split('-').map(Number); return new Date(y, m-1, d); }
+function fix2(n){ return Math.round((n||0)*100)/100; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
-function showMsg(text, ok){
-  const el = document.getElementById('pageMsg');
-  el.textContent = text;
-  el.className = 'msg ' + (ok ? 'ok' : 'error');
-}
 </script>
 </body>
 </html>

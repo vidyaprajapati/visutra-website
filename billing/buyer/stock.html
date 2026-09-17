@@ -29,8 +29,8 @@
   </div>
 
   <div class="card">
-    <h2>Current Stock</h2>
-    <p class="sub">This is your one inventory — the same numbers Stock Management shows on the Billing side — since a product's stock doesn't change depending on whether you're looking at it as buyer or seller of your own goods. It goes up automatically whenever a linked seller accepts an order of yours (see below), or when you record a purchase by hand in <a href="../app.html?view=purchases">Purchase Entry</a>.</p>
+    <h2>Current Stock — From Your Purchases</h2>
+    <p class="sub">Only products you've actually bought from a linked seller are listed here — not your full product catalog. The stock number itself is your one running total for that product (it goes up whenever a seller accepts your order, or you record a purchase by hand), since a product doesn't have a separate "buyer" and "seller" stock count.</p>
     <table><thead><tr><th>Product</th><th>Unit</th><th>Current Stock</th><th>Reorder Level</th></tr></thead>
     <tbody id="stockTable"></tbody></table>
   </div>
@@ -74,17 +74,28 @@ auth.onAuthStateChanged(async user => {
 });
 
 async function loadStock(){
-  const [prodSnap, moveSnap] = await Promise.all([
+  const [prodSnap, moveSnap, purchaseProductsSnap] = await Promise.all([
     db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get(),
-    db.collection('users').doc(currentUser.uid).collection('stockMovements').orderBy('createdAt', 'desc').limit(200).get()
+    db.collection('users').doc(currentUser.uid).collection('stockMovements').orderBy('createdAt', 'desc').limit(200).get(),
+    db.collection('users').doc(currentUser.uid).collection('purchaseProducts').get()
   ]);
   const products = prodSnap.docs.map(d => ({id: d.id, ...d.data()}));
   const productById = {};
   products.forEach(p => { productById[p.id] = p; });
 
-  document.getElementById('stockTable').innerHTML = products.map(p => `
+  // Only products actually linked to a Purchase Product that was auto-created
+  // from a seller order (i.e. it carries a sellerUid) belong on this page —
+  // this is what excludes regular raw-material products the account also
+  // stocks purely for its own Billing/Selling side. Filtered client-side
+  // (rather than a Firestore != query) to avoid an extra required index.
+  const buyerProductIds = new Set(
+    purchaseProductsSnap.docs.map(d => d.data()).filter(pp => pp.sellerUid).map(pp => pp.linkedProductId).filter(Boolean)
+  );
+  const buyerProducts = products.filter(p => buyerProductIds.has(p.id));
+
+  document.getElementById('stockTable').innerHTML = buyerProducts.map(p => `
     <tr><td>${esc(p.name)}</td><td>${esc(p.unit||'PCS')}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td></tr>
-  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No products yet.</td></tr>';
+  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No products purchased from a seller yet.</td></tr>';
 
   // "From Seller Purchases" is identified by the note this app writes when
   // an accepted order is turned into a stock-in — see ensureBuyerPurchaseForOrder
