@@ -25,7 +25,7 @@ const EMAILJS_TEMPLATE_ID = "template_ds08b1e";
 // — deliberately not the invoice template above, so its wording can stay
 // order-specific. See BILLING-SETUP.md "Order email notifications" for the
 // exact EmailJS template to create and paste the ID in below.
-const EMAILJS_ORDER_TEMPLATE_ID = "PASTE_YOUR_ORDER_TEMPLATE_ID";
+const EMAILJS_ORDER_TEMPLATE_ID = "template_r7i6awt";
 // Google reCAPTCHA v2 ("I'm not a robot" checkbox) — shown on login/signup to
 // deter bots. Get a free site key at https://www.google.com/recaptcha/admin
 // (register your domain "visutra.in", choose reCAPTCHA v2 "Checkbox").
