@@ -80,20 +80,13 @@ function mountUserMenu(mountId, user, opts) {
 
 // The Buyer domain's own pages (its equivalent of the Seller side's big
 // app.html sidebar). One list, used by every buyer/*.html page, so adding or
-// renaming a section only needs to happen here. Stock Management links back
-// into the Seller app's Stock view rather than a separate page: a buyer's
-// accepted orders land in the SAME users/{uid} purchases/products data the
-// Seller side's Stock Management already reads (see my-orders.html), so a
-// second copy of that view would just show the same numbers from a second
-// codepath.
+// renaming a section only needs to happen here.
 const VT_BUYER_NAV = [
   { view: 'my-sellers', href: 'buyer/my-sellers.html', label: 'My Sellers' },
   { view: 'place-order', href: 'buyer/place-order.html', label: 'Place Order' },
   { view: 'label-order', href: 'buyer/label-order.html', label: 'Label-Based Auto Order' },
   { view: 'buyer-sku-master', href: 'buyer/buyer-sku-master.html', label: 'Buyer SKU Master' },
-  { view: 'my-orders', href: 'buyer/my-orders.html', label: 'My Orders' },
-  { view: 'buyer-stock', href: 'app.html?view=stock', label: 'Stock Management' },
-  { view: 'buyer-gstr1', href: 'buyer/purchases-gstr.html', label: 'GSTR-1 Filing' }
+  { view: 'my-orders', href: 'buyer/my-orders.html', label: 'My Orders' }
 ];
 // Renders the persistent left sidebar for a buyer page — the same always-
 // visible-on-the-left treatment the Seller side's app.html sidebar uses,
