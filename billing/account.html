@@ -51,9 +51,17 @@
     <p class="msg" id="pwMsg"></p>
   </div>
 
-  <div class="card hidden" id="googleOnlyNotice">
-    <h2>Change Password</h2>
-    <p class="sub">Your account is signed in via Google, with no separate VISUTRA password. Manage your password through your Google Account settings instead.</p>
+  <div class="card hidden" id="setPasswordCard">
+    <h2>Set a Password</h2>
+    <p class="sub">You signed in with Google, so there's no VISUTRA password yet. Set one to also be able to sign in with your email<span id="usernameHintText"></span> and this password — Google sign-in keeps working too, this just adds a second way in.</p>
+    <div class="field" id="chooseUsernameField" style="display:none">
+      <label>Choose a username (optional — lets you sign in with a username instead of your email)</label>
+      <input id="setPwUsername" placeholder="letters, numbers, underscore — 3 to 20 characters">
+    </div>
+    <div class="field"><label>New password</label><input type="password" id="setPwNew" placeholder="At least 6 characters"></div>
+    <div class="field"><label>Confirm password</label><input type="password" id="setPwConfirm"></div>
+    <button class="btn primary" onclick="setPasswordForGoogleAccount()">Set Password</button>
+    <p class="msg" id="setPwMsg"></p>
   </div>
 
   <div class="card">
@@ -93,7 +101,12 @@ auth.onAuthStateChanged(async user => {
 
   const hasPasswordProvider = user.providerData.some(p => p.providerId === 'password');
   document.getElementById('passwordCard').classList.toggle('hidden', !hasPasswordProvider);
-  document.getElementById('googleOnlyNotice').classList.toggle('hidden', hasPasswordProvider);
+  document.getElementById('setPasswordCard').classList.toggle('hidden', hasPasswordProvider);
+  if(!hasPasswordProvider){
+    const needsUsername = !data.username;
+    document.getElementById('chooseUsernameField').style.display = needsUsername ? 'block' : 'none';
+    document.getElementById('usernameHintText').textContent = needsUsername ? ' (or a username, if you set one below)' : ` (or your username, ${data.username})`;
+  }
 
   document.getElementById('buyerEmailText').textContent = user.email || '';
   const buyerEnabled = !!(data.roles && data.roles.buyer);
@@ -126,6 +139,66 @@ function showMsg(id, text, ok){
 async function reauth(password){
   const cred = firebase.auth.EmailAuthProvider.credential(currentUser.email, password);
   await currentUser.reauthenticateWithCredential(cred);
+}
+
+/* Links an email/password credential onto the existing Google-authenticated
+   account (same uid, same Firestore data — this is NOT a second account).
+   Afterwards the person can sign in with Google OR with email/username +
+   this password, same as anyone who signed up the "normal" way. */
+async function setPasswordForGoogleAccount(){
+  const next = document.getElementById('setPwNew').value;
+  const confirmPw = document.getElementById('setPwConfirm').value;
+  const usernameField = document.getElementById('chooseUsernameField');
+  const wantsUsername = usernameField.style.display !== 'none';
+  const username = wantsUsername ? document.getElementById('setPwUsername').value.trim().toLowerCase() : '';
+
+  if(!next || !confirmPw){ showMsg('setPwMsg', 'Fill in both password fields.', false); return; }
+  if(next !== confirmPw){ showMsg('setPwMsg', 'Passwords do not match.', false); return; }
+  if(next.length < 6){ showMsg('setPwMsg', 'Password must be at least 6 characters.', false); return; }
+  if(username && !/^[a-z0-9_]{3,20}$/.test(username)){
+    showMsg('setPwMsg', 'Username must be 3–20 characters: letters, numbers, underscores only.', false);
+    return;
+  }
+
+  try{
+    if(username){
+      showMsg('setPwMsg', 'Checking username availability…', true);
+      const existing = await db.collection('usernames').doc(username).get();
+      if(existing.exists && existing.data().uid !== currentUser.uid){
+        showMsg('setPwMsg', 'That username is already taken — choose another, or leave it blank for now.', false);
+        return;
+      }
+    }
+    showMsg('setPwMsg', 'Setting password…', true);
+    await linkPasswordCredential(next);
+    if(username){
+      await db.collection('usernames').doc(username).set({ uid: currentUser.uid, email: currentUser.email });
+      await db.collection('users').doc(currentUser.uid).set({ username }, {merge:true});
+      document.getElementById('accUsername').value = username;
+    }
+    showMsg('setPwMsg', `Password set. You can now sign in with ${username ? `your username (${username}) or ` : ''}your email and this password — Google sign-in still works too.`, true);
+    document.getElementById('setPasswordCard').classList.add('hidden');
+    document.getElementById('passwordCard').classList.remove('hidden');
+  }catch(err){
+    if(err.code === 'auth/requires-recent-login'){
+      showMsg('setPwMsg', 'Your Google sign-in needs to be refreshed for this — confirming with Google again…', true);
+      try{
+        await currentUser.reauthenticateWithPopup(new firebase.auth.GoogleAuthProvider());
+        await linkPasswordCredential(next); // retry now that the session is fresh
+        showMsg('setPwMsg', 'Password set. You can now sign in with your email (or username, once set) and this password — Google sign-in still works too.', true);
+        document.getElementById('setPasswordCard').classList.add('hidden');
+        document.getElementById('passwordCard').classList.remove('hidden');
+      }catch(err2){
+        showMsg('setPwMsg', err2.message, false);
+      }
+    } else {
+      showMsg('setPwMsg', err.message, false);
+    }
+  }
+}
+async function linkPasswordCredential(password){
+  const cred = firebase.auth.EmailAuthProvider.credential(currentUser.email, password);
+  await currentUser.linkWithCredential(cred);
 }
 
 async function changeEmail(){
