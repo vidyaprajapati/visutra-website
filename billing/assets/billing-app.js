@@ -14,50 +14,74 @@ let skuMappingsCache = [];
 let stockUploadSheets = []; // {fileName, sheetName, headers, rows} — rows is an array of arrays, header row excluded
 let stockAggregation = []; // {rawKey, displayKey, totalQty} built from stockUploadSheets after column mapping
 
+/* Parse a date-only string ("YYYY-MM-DD", e.g. from <input type=date>) as a LOCAL
+   date. new Date("YYYY-MM-DD") parses as UTC per spec, which for India (UTC+5:30)
+   silently shifts the date back to the previous day when read back with local
+   getters (getMonth/getDate/etc) — this broke financial-year invoice numbering
+   and GSTR-1 period filtering for any invoice dated on a period boundary. Always
+   use this instead of new Date(dateStr) for date-only strings in this file. */
+function parseLocalDate(dateStr){
+  if(!dateStr) return new Date(NaN);
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
 /* ---------------- Auth guard ---------------- */
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
   if(!verified){ window.location.href = 'login.html'; return; }
 
-  const snap = await db.collection('users').doc(user.uid).get();
-  if(!snap.exists || !snap.data().profileComplete){
-    window.location.href = 'complete-profile.html?redirect=' + encodeURIComponent('app.html' + window.location.search);
-    return;
+  try{
+    const snap = await db.collection('users').doc(user.uid).get();
+    if(!snap.exists || !snap.data().profileComplete){
+      window.location.href = 'complete-profile.html?redirect=' + encodeURIComponent('app.html' + window.location.search);
+      return;
+    }
+
+    currentUser = user;
+    mountUserMenu('userMenuMount', user, { showBillingLink: false });
+    populateStateSelect(document.getElementById('bizState'));
+    populateStateSelect(document.getElementById('cState'));
+    populateStateSelect(document.getElementById('sState'));
+    document.getElementById('invDate').valueAsDate = new Date();
+    document.getElementById('purDate').valueAsDate = new Date();
+    document.getElementById('payEntryDate').valueAsDate = new Date();
+    populateGstrFY();
+    onFilingTypeChange();
+    initSignaturePad();
+    await loadProfile();
+    await loadProducts();
+    await loadCustomers();
+    await loadSuppliers();
+    await loadPurchaseProducts();
+    await loadPayments();
+    await loadSkuMappings();
+    await loadStockMovements();
+    addLineItem();
+    addPurchaseLineItem();
+    loadInvoices();
+    loadPurchases();
+
+    // Sidebar starts scoped to Business Profile only; the two buttons there
+    // (or a deep link below) reveal the GST Billing or Purchase Entry pages.
+    activateView('profile');
+
+    // Deep-link support: e.g. app.html?view=purchases (used by the "Purchase
+    // Data Entry" button on the main site) opens straight on that tab instead
+    // of the default Business Profile view.
+    const requestedView = new URLSearchParams(window.location.search).get('view');
+    if(requestedView) activateView(requestedView);
+  }catch(err){
+    // Without this, any Firestore hiccup here (expired token, offline, a
+    // permission error) throws inside an unhandled async callback and the
+    // page is left however it happened to be — blank, with nothing but a
+    // console error the user will never see. Show something actionable instead.
+    console.error('App init failed:', err);
+    document.body.innerHTML = `<div style="max-width:480px;margin:80px auto;text-align:center;font-family:sans-serif;color:#6B6255">
+      <p>Something went wrong loading your account${err && (err.code || err.message) ? ` (${err.code || err.message})` : ''}.</p>
+      <button onclick="location.reload()" style="padding:10px 20px;border-radius:8px;background:#C1440E;color:#fff;border:none;cursor:pointer">Retry</button>
+    </div>`;
   }
-
-  currentUser = user;
-  mountUserMenu('userMenuMount', user, { showBillingLink: false });
-  populateStateSelect(document.getElementById('bizState'));
-  populateStateSelect(document.getElementById('cState'));
-  populateStateSelect(document.getElementById('sState'));
-  document.getElementById('invDate').valueAsDate = new Date();
-  document.getElementById('purDate').valueAsDate = new Date();
-  document.getElementById('payEntryDate').valueAsDate = new Date();
-  populateGstrFY();
-  onFilingTypeChange();
-  initSignaturePad();
-  await loadProfile();
-  await loadProducts();
-  await loadCustomers();
-  await loadSuppliers();
-  await loadPurchaseProducts();
-  await loadPayments();
-  await loadSkuMappings();
-  await loadStockMovements();
-  addLineItem();
-  addPurchaseLineItem();
-  loadInvoices();
-  loadPurchases();
-
-  // Sidebar starts scoped to Business Profile only; the two buttons there
-  // (or a deep link below) reveal the GST Billing or Purchase Entry pages.
-  activateView('profile');
-
-  // Deep-link support: e.g. app.html?view=purchases (used by the "Purchase
-  // Data Entry" button on the main site) opens straight on that tab instead
-  // of the default Business Profile view.
-  const requestedView = new URLSearchParams(window.location.search).get('view');
-  if(requestedView) activateView(requestedView);
 });
 
 /* ---------------- Nav ---------------- */
@@ -1002,9 +1026,13 @@ async function savePurchase(){
       await loadPayments();
     }
 
+    // loadPurchases() MUST run before this message: getSupplierBalance() reads
+    // the in-memory purchasesCache, which still held this purchase's PRE-EDIT
+    // grandTotal until the cache is refreshed — showing a stale balance for a
+    // moment right after an edit that changed the amount.
+    await loadPurchases();
     showMsg('purchaseMsg', `Purchase updated. Balance now ₹${fmtMoney(getSupplierBalance(supId))}.`, true);
     cancelEditPurchase();
-    await loadPurchases();
     return;
   }
 
@@ -1484,16 +1512,22 @@ async function saveAndGenerate(sendEmail){
   if(!businessData.businessName || !businessData.gstin){ showMsg('invoiceMsg', 'Complete your Business Profile first.', false); return; }
   if(!lineItems.length || lineItems.every(li => !li.productId)){ showMsg('invoiceMsg', 'Add at least one line item.', false); return; }
   if(sendEmail && !customer.email){ showMsg('invoiceMsg', 'This customer has no email address saved — add one in Customers.', false); return; }
+  // Without a state code on both sides, sameState below silently falls back to
+  // false (IGST) even for an actual same-state sale — wrong tax head on a GST
+  // invoice, not just a display issue. Block instead of guessing.
+  if(!customer.stateCode){ showMsg('invoiceMsg', `${customer.name} has no state code saved — CGST/SGST vs IGST can't be determined correctly. Edit this customer first.`, false); return; }
+  if(!businessData.stateCode){ showMsg('invoiceMsg', 'Your Business Profile has no state code saved — complete it before invoicing.', false); return; }
 
   showMsg('invoiceMsg', 'Saving invoice…', true);
   const dateVal = document.getElementById('invDate').value || new Date().toISOString().slice(0,10);
-  const invoiceDate = new Date(dateVal);
+  const invoiceDate = parseLocalDate(dateVal);
   const invoiceNo = await nextInvoiceNumber(invoiceDate);
   const totals = recalcTotals();
   const reverseCharge = document.getElementById('invReverseCharge').checked;
 
   const invoiceData = {
     invoiceNo, date: dateVal, reverseCharge,
+    sellerUid: currentUser.uid, // required so the public_invoices Firestore rule can enforce ownership
     business: { ...businessData },
     customer: { name:customer.name, gstin:customer.gstin, address:customer.address, state:customer.state, stateCode:customer.stateCode, email:customer.email },
     items: lineItems.map(li => ({...li, taxable: lineTaxable(li)})),
@@ -1533,7 +1567,7 @@ async function saveAndGenerate(sendEmail){
       await ref.set({emailSent:true}, {merge:true});
       showMsg('invoiceMsg', 'Invoice saved, downloaded, and emailed to ' + customer.email + '.', true);
     }catch(err){
-      showMsg('invoiceMsg', 'Invoice saved and downloaded, but the email failed to send: ' + err.text || err.message, false);
+      showMsg('invoiceMsg', 'Invoice saved and downloaded, but the email failed to send: ' + (err.text || err.message || 'Unknown error'), false);
     }
   } else {
     showMsg('invoiceMsg', 'Invoice saved and downloaded.', true);
@@ -1795,7 +1829,7 @@ async function generateGstr1(){
 
   const snap = await db.collection('users').doc(currentUser.uid).collection('invoices').get();
   const invoices = snap.docs.map(d => d.data()).filter(inv => {
-    const d = new Date(inv.date);
+    const d = parseLocalDate(inv.date);
     return d >= start && d < end;
   });
 
