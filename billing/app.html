@@ -37,6 +37,7 @@
     <a href="#purchases" class="nav-link" data-view="purchases" data-group="purchase">Purchases</a>
     <a href="#payment-entry" class="nav-link" data-view="payment-entry" data-group="purchase">Payment Entry</a>
     <a href="#supplier-dashboard" class="nav-link" data-view="supplier-dashboard" data-group="purchase">Supplier Dashboard</a>
+    <a href="#purchase-gstr" class="nav-link" data-view="purchase-gstr" data-group="purchase">Purchase GST Summary</a>
     <a href="#new-invoice" class="nav-link" data-view="new-invoice" data-group="billing">New Invoice</a>
     <a href="#invoices" class="nav-link" data-view="invoices" data-group="billing">Invoice History</a>
     <a href="#gstr1" class="nav-link" data-view="gstr1" data-group="billing">GSTR-1 Filing</a>
@@ -399,6 +400,41 @@
           </div>
         </div>
         <p class="sub hidden" id="dashEmptyMsg">No purchases or payments recorded for this supplier yet.</p>
+      </div>
+    </div>
+
+    <!-- PURCHASE GST SUMMARY (inward/ITC-side register, mirrors GSTR-1 Filing below but for what you bought, not what you sold) -->
+    <div id="view-purchase-gstr" class="view hidden">
+      <div class="card">
+        <h2>Purchase GST Summary</h2>
+        <p class="sub">Compiles every entry in Purchases into a GST-rate-wise and supplier-wise register for the period below — your <b>inward</b> supply data (what you bought, for return/ITC prep). This is separate from GSTR-1 Filing, which covers your own outward sales invoices.</p>
+        <div class="grid3">
+          <div class="field"><label>From</label><input type="date" id="pgFrom"></div>
+          <div class="field"><label>To</label><input type="date" id="pgTo"></div>
+          <div class="field"><label>Supplier</label><select id="pgSupplier"><option value="">All suppliers</option></select></div>
+        </div>
+        <button class="btn primary" onclick="renderPurchaseGstr()">Run Report</button>
+        <button class="btn small" onclick="exportPurchaseGstrExcel()">Export to Excel</button>
+        <p class="msg" id="pgMsg"></p>
+      </div>
+
+      <div class="card hidden" id="pgTotalsCard">
+        <h2>Totals for Period</h2>
+        <div class="totals-row"><span>Taxable value</span><span id="pgTaxable">0.00</span></div>
+        <div class="totals-row"><span>GST</span><span id="pgGst">0.00</span></div>
+        <div class="totals-row grand"><span>Grand total</span><span id="pgGrand">0.00</span></div>
+      </div>
+
+      <div class="card hidden" id="pgRateCard">
+        <h2>GST Rate-wise Summary</h2>
+        <table><thead><tr><th>GST Rate</th><th>Taxable Value</th><th>GST Amount</th><th>Total</th></tr></thead>
+        <tbody id="pgRateTable"></tbody></table>
+      </div>
+
+      <div class="card hidden" id="pgRegisterCard">
+        <h2>Purchase Register</h2>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>GSTIN</th><th>Taxable</th><th>GST</th><th>Total</th></tr></thead>
+        <tbody id="pgRegisterTable"></tbody></table>
       </div>
     </div>
 
