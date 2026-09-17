@@ -58,6 +58,15 @@
       if (!complete) { goToCompleteProfile(); return; }
       overlay.remove();
       attachTopBar(user);
+    }).catch(function (err) {
+      // Without this, any Firestore hiccup (offline, permission error, expired
+      // token) leaves the "Checking your account…" overlay on screen forever —
+      // the tool never becomes usable and there's no indication why.
+      console.error('Auth guard check failed:', err);
+      overlay.innerHTML = '<div>Couldn\'t verify your account' +
+        (err && (err.code || err.message) ? ' (' + (err.code || err.message) + ')' : '') +
+        '.</div>' +
+        '<button onclick="location.reload()" style="padding:8px 18px;border-radius:8px;background:#C1440E;color:#fff;border:none;cursor:pointer;font-size:14px">Retry</button>';
     });
   });
 })();
