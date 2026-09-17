@@ -28,6 +28,11 @@ a{color:var(--indigo)}
 .sidebar a{display:block;padding:11px 24px;color:var(--muted);text-decoration:none;font-size:14px;border-left:3px solid transparent}
 .sidebar a.active{color:var(--ink);font-weight:600;border-left-color:var(--paprika);background:var(--ivory)}
 .sidebar a:hover{color:var(--ink)}
+/* Marks the boundary between the always-visible links (Business Profile,
+   Recycle Bin) and the links below that swap depending on whether GST
+   Billing or Purchase Entry mode is active, so it's clear why the list
+   changes when switching modes from the topbar. */
+.sidebar-divider{height:1px;background:var(--thread);margin:10px 24px}
 .main{flex:1;padding:32px;max-width:1100px}
 .card{background:var(--canvas);border:1px solid var(--thread);border-radius:var(--radius);padding:24px;margin-bottom:20px}
 .card h2{margin:0 0 6px;font-family:var(--display);font-size:22px}

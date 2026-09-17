@@ -107,12 +107,16 @@ function activateView(viewName){
   // from anywhere without going back to Business Profile.
   const billingBtn = document.getElementById('topbarBillingBtn');
   const purchaseBtn = document.getElementById('topbarPurchaseBtn');
+  const stockBtn = document.getElementById('topbarStockBtn');
   if(billingBtn) billingBtn.classList.toggle('primary', group === 'billing');
   if(purchaseBtn) purchaseBtn.classList.toggle('primary', group === 'purchase');
+  if(stockBtn) stockBtn.classList.toggle('primary', viewName === 'stock');
 
-  // Centered topbar title always names the page you're currently on.
+  // Centered topbar title always names the page you're currently on. The
+  // Stock button's own label is short ("Stock") to fit the topbar pill
+  // style, so show the fuller page name here instead of reusing it.
   const titleEl = document.getElementById('topbarTitle');
-  if(titleEl) titleEl.textContent = link.textContent;
+  if(titleEl) titleEl.textContent = viewName === 'stock' ? 'Stock Management' : link.textContent;
 
   if(viewName === 'invoices') loadInvoices();
   if(viewName === 'purchases') loadPurchases();

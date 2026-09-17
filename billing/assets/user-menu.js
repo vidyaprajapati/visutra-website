@@ -22,19 +22,20 @@ function mountUserMenu(mountId, user, opts) {
   const itemStyle = 'display:block;padding:10px 14px;font-size:13px;color:#1F1B16;text-decoration:none;white-space:nowrap';
   const dropdownStyle = 'display:none;position:absolute;left:0;top:calc(100% + 6px);background:#fff;color:#1F1B16;border:1px solid #E4D8BD;border-radius:10px;min-width:210px;box-shadow:0 8px 24px rgba(0,0,0,0.15);z-index:10000;overflow:hidden';
   const pillBtnStyle = 'background:transparent;border:1px solid currentColor;border-radius:20px;color:inherit;cursor:pointer;font-size:12px;padding:6px 12px;font-family:inherit';
+  // A crisp inline house outline, sized to sit centered in the 32x32 button —
+  // replaces the old Unicode "⌂" glyph, which rendered at an inconsistent
+  // size/weight depending on the visitor's OS font and looked out of place
+  // next to the pill buttons beside it.
+  const homeIconSvg = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/><path d="M9.5 20v-6h5v6"/></svg>';
 
   mount.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;font-family:system-ui,sans-serif">
-      <a href="${siteRoot}index.html" title="Home" style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;color:inherit;text-decoration:none;font-size:17px">&#8962;</a>
+      <a href="${siteRoot}index.html" title="Home" style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;color:inherit;text-decoration:none">${homeIconSvg}</a>
 
       <div style="position:relative;display:inline-block">
         <button id="vtBuyerMenuBtn" style="${pillBtnStyle}">Buyer &#9662;</button>
         <div id="vtBuyerMenuDropdown" style="${dropdownStyle}">
-          <a href="${base}buyer/my-sellers.html" style="${itemStyle}">My Sellers</a>
-          <a href="${base}buyer/place-order.html" style="${itemStyle}">Place Order</a>
-          <a href="${base}buyer/label-order.html" style="${itemStyle}">Label-Based Auto Order</a>
-          <a href="${base}buyer/buyer-sku-master.html" style="${itemStyle}">Buyer SKU Master</a>
-          <a href="${base}buyer/my-orders.html" style="${itemStyle}">My Orders</a>
+          ${VT_BUYER_NAV.map(function (item) { return '<a href="' + base + item.href + '" style="' + itemStyle + '">' + item.label + '</a>'; }).join('')}
         </div>
       </div>
 
@@ -75,6 +76,39 @@ function mountUserMenu(mountId, user, opts) {
   });
 
   mountSiteDrawer(mount, base, siteRoot);
+}
+
+// The Buyer domain's own pages (its equivalent of the Seller side's big
+// app.html sidebar). One list, used by every buyer/*.html page, so adding or
+// renaming a section only needs to happen here. Stock Management links back
+// into the Seller app's Stock view rather than a separate page: a buyer's
+// accepted orders land in the SAME users/{uid} purchases/products data the
+// Seller side's Stock Management already reads (see my-orders.html), so a
+// second copy of that view would just show the same numbers from a second
+// codepath.
+const VT_BUYER_NAV = [
+  { view: 'my-sellers', href: 'buyer/my-sellers.html', label: 'My Sellers' },
+  { view: 'place-order', href: 'buyer/place-order.html', label: 'Place Order' },
+  { view: 'label-order', href: 'buyer/label-order.html', label: 'Label-Based Auto Order' },
+  { view: 'buyer-sku-master', href: 'buyer/buyer-sku-master.html', label: 'Buyer SKU Master' },
+  { view: 'my-orders', href: 'buyer/my-orders.html', label: 'My Orders' },
+  { view: 'buyer-stock', href: 'app.html?view=stock', label: 'Stock Management' },
+  { view: 'buyer-gstr1', href: 'buyer/purchases-gstr.html', label: 'GSTR-1 Filing' }
+];
+// Renders the persistent left sidebar for a buyer page — the same always-
+// visible-on-the-left treatment the Seller side's app.html sidebar uses,
+// instead of requiring the "Buyer ▾" topbar dropdown to move between
+// sections while already inside the buyer area. Call after mountUserMenu()
+// with the current page's view id (matching VT_BUYER_NAV) and the same
+// basePath passed to mountUserMenu.
+function renderBuyerSidebar(activeView, basePath) {
+  const mount = document.getElementById('buyerSidebarMount');
+  if (!mount) return;
+  const base = basePath || '';
+  mount.innerHTML = VT_BUYER_NAV.map(function (item) {
+    const active = item.view === activeView ? ' active' : '';
+    return '<a href="' + base + item.href + '" class="nav-link' + active + '">' + item.label + '</a>';
+  }).join('');
 }
 
 function wireDropdown(btnId, dropdownId) {
@@ -135,11 +169,7 @@ function mountSiteDrawer(mount, base, siteRoot) {
         <a href="${base}portal.html" style="${itemStyle}">Business Portal</a>
 
         <div style="${sectionStyle}">Buyer</div>
-        <a href="${base}buyer/my-sellers.html" style="${itemStyle}">My Sellers</a>
-        <a href="${base}buyer/place-order.html" style="${itemStyle}">Place Order</a>
-        <a href="${base}buyer/label-order.html" style="${itemStyle}">Label-Based Auto Order</a>
-        <a href="${base}buyer/buyer-sku-master.html" style="${itemStyle}">Buyer SKU Master</a>
-        <a href="${base}buyer/my-orders.html" style="${itemStyle}">My Orders</a>
+        ${VT_BUYER_NAV.map(function (item) { return '<a href="' + base + item.href + '" style="' + itemStyle + '">' + item.label + '</a>'; }).join('')}
 
         <div style="${sectionStyle}">Seller</div>
         <a href="${base}app.html" style="${itemStyle}">GST Billing</a>
