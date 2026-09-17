@@ -103,8 +103,9 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 .vlc-saved-note{font-family:var(--font-mono);font-size:11px;color:var(--teal);}
 
 /* preview stage */
-.vlc-stage{background:var(--paper-2);border:1.5px dashed var(--line);border-radius:6px;padding:20px;min-height:420px;display:flex;align-items:center;justify-content:center;position:relative;}
+.vlc-stage{background:var(--paper-2);border:1.5px dashed var(--line);border-radius:6px;padding:20px;position:relative;}
 .vlc-stage-tag{position:absolute;top:10px;left:12px;font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);}
+#vlcPreviewMount{min-height:420px;display:flex;align-items:center;justify-content:center;}
 .vlc-canvas-wrap{position:relative;box-shadow:3px 3px 0 rgba(23,36,54,0.12);}
 #vlcPageCanvas{display:block;max-width:100%;height:auto;border:1.5px solid var(--ink);}
 .vlc-cropbox{position:absolute;border:2px dashed var(--stamp);background:rgba(193,64,31,0.06);pointer-events:none;}
@@ -271,6 +272,12 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     <div class="vlc-stage">
       <span class="vlc-stage-tag">Preview — page 1</span>
       <div id="vlcPreviewMount"><div class="vlc-empty">Upload a PDF to see the crop preview here.</div></div>
+
+      <div id="vlcOrderSummary" style="display:none;margin-top:18px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
+        <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:4px">Today's Order Summary</div>
+        <p style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:0 0 14px">Accumulates across every batch of labels you send today — a few now, a few more later, it all adds up into one order per seller. Click Send Order whenever you're ready; it clears after sending, ready for the next batch.</p>
+        <div id="vlcOrderSummaryBySeller"></div>
+      </div>
     </div>
   </div>
 
@@ -295,12 +302,6 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
       <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #E8A32C">SKU</th>
       <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #E8A32C">Qty seen</th>
     </tr></thead><tbody id="vlcUnmappedTable"></tbody></table>
-  </div>
-
-  <div id="vlcOrderSummary" style="display:none;margin-top:18px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
-    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:4px">Today's Order Summary</div>
-    <p style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:0 0 14px">Accumulates across every batch of labels you send today — a few now, a few more later, it all adds up into one order per seller. Click Send Order whenever you're ready; it clears after sending, ready for the next batch.</p>
-    <div id="vlcOrderSummaryBySeller"></div>
   </div>
 
   <div class="vlc-footer">
