@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Buyer Dashboard | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Buyer Dashboard</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="place-order.html">Place Order</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main">
+
+  <div class="card" id="notBuyerCard" style="display:none">
+    <h2>Buyer Features Not Enabled</h2>
+    <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first — you'll get a login email to share with sellers, who can then link your account.</p>
+  </div>
+
+  <div class="card">
+    <h2>Overview</h2>
+    <div class="grid3">
+      <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Linked Sellers</h3><p style="font-size:20px;font-weight:700;margin:0" id="sLinkedSellers">0</p></div>
+      <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Pending Orders</h3><p style="font-size:20px;font-weight:700;margin:0" id="sPendingOrders">0</p></div>
+      <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">This Month's Purchases</h3><p style="font-size:20px;font-weight:700;margin:0" id="sMonthPurchases">₹0.00</p></div>
+    </div>
+    <div class="grid3" style="margin-top:12px">
+      <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Dues to Sellers</h3><p style="font-size:20px;font-weight:700;margin:0;color:var(--paprika-dark)" id="sTotalDues">₹0.00</p></div>
+      <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Products Tracked</h3><p style="font-size:20px;font-weight:700;margin:0" id="sProductsTracked">0</p></div>
+      <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Last Order</h3><p style="font-size:14px;font-weight:600;margin:0" id="sLastOrder">—</p></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Dues &amp; Payment History</h2>
+    <p class="sub">Every linked seller you've bought from, ranked by balance due — the same purchase/payment records that back your <a href="../app.html?view=supplier-dashboard">Supplier Dashboard</a> in Billing, filtered here to just the sellers you buy from on VISUTRA.</p>
+    <table><thead><tr><th>Seller</th><th>Total Purchased</th><th>Total Paid</th><th>Balance Due</th><th>Last Payment</th></tr></thead>
+    <tbody id="duesTable"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Recent Orders</h2>
+    <table><thead><tr><th>Order #</th><th>Seller</th><th>Date</th><th>Status</th></tr></thead>
+    <tbody id="recentOrdersTable"></tbody></table>
+    <p class="sub" style="margin-top:10px"><a href="my-orders.html">See all orders →</a></p>
+  </div>
+
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/dashboard.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/dashboard.html');
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('dashboard', '../');
+
+  const data = snap.data() || {};
+  document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
+
+  await loadDashboard();
+});
+
+async function loadDashboard(){
+  const [linksSnap, ordersSnap, suppliersSnap, purchasesSnap, paymentsSnap] = await Promise.all([
+    db.collection('sellerLinks').where('buyerUid', '==', currentUser.uid).get(),
+    db.collection('marketplaceOrders').where('buyerUid', '==', currentUser.uid).get(),
+    db.collection('users').doc(currentUser.uid).collection('suppliers').get(),
+    db.collection('users').doc(currentUser.uid).collection('purchases').get(),
+    db.collection('users').doc(currentUser.uid).collection('payments').get()
+  ]);
+
+  const links = linksSnap.docs.map(d => d.data()).filter(l => l.status === 'ACTIVE');
+  const orders = ordersSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  const allSuppliers = suppliersSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  const allPurchases = purchasesSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  const allPayments = paymentsSnap.docs.map(d => ({id: d.id, ...d.data()}));
+
+  // "Sellers I buy from" are suppliers that were auto-created from an
+  // accepted order (they carry a sellerUid) — this is what distinguishes
+  // them from any regular raw-material suppliers on the Billing side, even
+  // though both live in the same suppliers collection.
+  const sellerSuppliers = allSuppliers.filter(s => s.sellerUid);
+  const sellerSupplierIds = new Set(sellerSuppliers.map(s => s.id));
+  const purchasesFromSellers = allPurchases.filter(p => sellerSupplierIds.has(p.supplierId));
+  const paymentsToSellers = allPayments.filter(p => sellerSupplierIds.has(p.supplierId));
+
+  const pendingCount = orders.filter(o => o.status === 'PENDING').length;
+  const today = new Date();
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0,10);
+  const monthTotal = purchasesFromSellers.filter(p => p.date >= monthStart).reduce((sum,p) => sum + (p.grandTotal||0), 0);
+
+  let totalDues = 0;
+  const duesRows = sellerSuppliers.map(s => {
+    const totalPurchase = purchasesFromSellers.filter(p => p.supplierId === s.id).reduce((sum,p) => sum + (p.grandTotal||0), 0);
+    const supplierPayments = paymentsToSellers.filter(p => p.supplierId === s.id);
+    const totalPaid = supplierPayments.reduce((sum,p) => sum + (p.amount||0), 0);
+    const lastPayment = supplierPayments.sort((a,b) => (b.date||'').localeCompare(a.date||''))[0];
+    const balance = totalPurchase - totalPaid;
+    totalDues += balance;
+    return { name: s.name, totalPurchase, totalPaid, balance, lastPayment };
+  }).filter(r => r.totalPurchase > 0 || r.totalPaid > 0).sort((a,b) => b.balance - a.balance);
+
+  const trackedProductIds = new Set();
+  purchasesFromSellers.forEach(p => (p.items||[]).forEach(li => { if(li.productId) trackedProductIds.add(li.productId); }));
+
+  const sortedOrders = orders.slice().sort((a,b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+
+  document.getElementById('sLinkedSellers').textContent = links.length;
+  document.getElementById('sPendingOrders').textContent = pendingCount;
+  document.getElementById('sMonthPurchases').textContent = '₹' + fmtMoney(monthTotal);
+  document.getElementById('sTotalDues').textContent = '₹' + fmtMoney(totalDues);
+  document.getElementById('sProductsTracked').textContent = trackedProductIds.size;
+  document.getElementById('sLastOrder').textContent = sortedOrders.length
+    ? `${esc(sortedOrders[0].sellerName)} — ${sortedOrders[0].createdAt?.toDate ? sortedOrders[0].createdAt.toDate().toISOString().slice(0,10) : ''}` : '—';
+
+  document.getElementById('duesTable').innerHTML = duesRows.map(r => `
+    <tr><td>${esc(r.name)}</td><td>₹${fmtMoney(r.totalPurchase)}</td><td>₹${fmtMoney(r.totalPaid)}</td>
+    <td>₹${fmtMoney(r.balance)}</td><td>${r.lastPayment ? esc(r.lastPayment.date) + ' — ₹' + fmtMoney(r.lastPayment.amount) : '—'}</td></tr>
+  `).join('') || '<tr><td colspan="5" style="color:var(--muted)">No purchases from linked sellers yet.</td></tr>';
+
+  document.getElementById('recentOrdersTable').innerHTML = sortedOrders.slice(0, 8).map(o => {
+    const date = o.createdAt?.toDate ? o.createdAt.toDate().toISOString().slice(0, 10) : '';
+    return `<tr><td>${esc(o.orderNumber)}</td><td>${esc(o.sellerName)}</td><td>${date}</td><td><span class="badge">${esc(o.status)}</span></td></tr>`;
+  }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No orders yet — place one from My Sellers.</td></tr>';
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+</script>
+</body>
+</html>

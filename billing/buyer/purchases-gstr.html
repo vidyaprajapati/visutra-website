@@ -31,11 +31,11 @@
 
   <div class="card">
     <h2>GSTR-1 Filing — Purchases from Sellers</h2>
-    <p class="sub">Compiles every purchase in your <a href="../app.html?view=purchases">Purchase Entry</a> — both ones you entered by hand and the ones auto-created when a linked seller accepts your order — into one GST-rate-wise and supplier-wise register for the period below. This is your <b>inward</b> supply data (what you bought, for ITC/return prep), not your outward sales GSTR-1 — use Billing → GSTR-1 Filing for that.</p>
+    <p class="sub">Compiles every purchase received from a linked seller (auto-created here the moment they accept your order) into one GST-rate-wise and seller-wise register for the period below. This is your <b>inward</b> supply data — what you bought, for return/ITC prep — not an outward-sales GSTR-1; use Billing → GSTR-1 Filing for your own sales.</p>
     <div class="grid3">
       <div class="field"><label>From</label><input type="date" id="fFrom"></div>
       <div class="field"><label>To</label><input type="date" id="fTo"></div>
-      <div class="field"><label>Supplier</label><select id="fSupplier"><option value="">All suppliers</option></select></div>
+      <div class="field"><label>Seller</label><select id="fSupplier"><option value="">All sellers</option></select></div>
     </div>
     <button class="btn primary" onclick="renderReport()">Run Report</button>
     <button class="btn small" onclick="exportExcel()">Export to Excel</button>
@@ -57,7 +57,7 @@
 
   <div class="card" id="registerCard" style="display:none">
     <h2>Purchase Register</h2>
-    <table><thead><tr><th>Date</th><th>Supplier</th><th>GSTIN</th><th>Source</th><th>Taxable</th><th>GST</th><th>Total</th></tr></thead>
+    <table><thead><tr><th>Date</th><th>Seller</th><th>Order #</th><th>Taxable</th><th>GST</th><th>Total</th></tr></thead>
     <tbody id="registerTable"></tbody></table>
   </div>
 
@@ -73,7 +73,7 @@
 let currentUser = null;
 let purchasesCache = [];
 let suppliersCache = [];
-let reportRows = []; // flattened, filtered rows behind whatever's currently on screen
+let reportRows = [];
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -92,8 +92,6 @@ auth.onAuthStateChanged(async user => {
   const data = snap.data() || {};
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
 
-  // Default period: current calendar month, same convention as the Billing
-  // side's GSTR-1 tool, so the two reports line up if run side by side.
   const today = new Date();
   const first = new Date(today.getFullYear(), today.getMonth(), 1);
   document.getElementById('fFrom').value = first.toISOString().slice(0,10);
@@ -105,12 +103,15 @@ auth.onAuthStateChanged(async user => {
 
 async function loadData(){
   const [purSnap, supSnap] = await Promise.all([
-    db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').get(),
-    db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get()
+    db.collection('users').doc(currentUser.uid).collection('purchases').where('autoCreatedFromOrder', '==', true).orderBy('date','desc').get(),
+    db.collection('users').doc(currentUser.uid).collection('suppliers').get()
   ]);
   purchasesCache = purSnap.docs.map(d => ({id:d.id, ...d.data()}));
-  suppliersCache = supSnap.docs.map(d => ({id:d.id, ...d.data()}));
-  document.getElementById('fSupplier').innerHTML = '<option value="">All suppliers</option>' +
+  // Only sellers you actually buy from on VISUTRA (carry a sellerUid) belong
+  // in this filter — a regular raw-material supplier on the Billing side
+  // never shows up here since it never has a sellerUid.
+  suppliersCache = supSnap.docs.map(d => ({id:d.id, ...d.data()})).filter(s => s.sellerUid);
+  document.getElementById('fSupplier').innerHTML = '<option value="">All sellers</option>' +
     suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
 }
 
@@ -126,32 +127,25 @@ function renderReport(){
     return true;
   });
 
-  // One register row per purchase (not per line item) — matches how the
-  // Purchase Entry list itself is organised, and keeps the register a
-  // manageable length even for a purchase with many items.
-  reportRows = filtered.map(p => {
-    const supplier = suppliersCache.find(s => s.id === p.supplierId);
-    return {
-      date: p.date,
-      supplierName: p.supplierName || (supplier && supplier.name) || 'Unknown',
-      gstin: (supplier && supplier.gstin) || '',
-      source: p.autoCreatedFromOrder ? `Order ${p.orderNumber || ''}`.trim() : 'Manual entry',
-      taxable: p.subtotal || 0,
-      gst: p.gstTotal || 0,
-      total: p.grandTotal || 0,
-      items: p.items || []
-    };
-  });
+  reportRows = filtered.map(p => ({
+    date: p.date,
+    supplierName: p.supplierName || 'Unknown seller',
+    orderNumber: p.orderNumber || '',
+    taxable: p.subtotal || 0,
+    gst: p.gstTotal || 0,
+    total: p.grandTotal || 0,
+    items: p.items || []
+  }));
 
   if(!reportRows.length){
-    showMsg('No purchases found for this period/supplier.', false);
+    showMsg('No purchases from sellers found for this period.', false);
     ['totalsCard','rateCard','registerCard'].forEach(id => document.getElementById(id).style.display = 'none');
     return;
   }
   showMsg(`${reportRows.length} purchase(s) in this period.`, true);
 
   let taxable = 0, gst = 0, grand = 0;
-  const byRate = {}; // rate -> {taxable, gst}
+  const byRate = {};
   reportRows.forEach(r => {
     taxable += r.taxable; gst += r.gst; grand += r.total;
     r.items.forEach(li => {
@@ -174,7 +168,7 @@ function renderReport(){
   document.getElementById('rateCard').style.display = 'block';
 
   document.getElementById('registerTable').innerHTML = reportRows.map(r => `
-    <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}</td><td>${esc(r.gstin || '—')}</td><td>${esc(r.source)}</td>
+    <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}</td><td>${esc(r.orderNumber)}</td>
     <td>${fmtMoney(r.taxable)}</td><td>${fmtMoney(r.gst)}</td><td>${fmtMoney(r.total)}</td></tr>
   `).join('');
   document.getElementById('registerCard').style.display = 'block';
@@ -182,8 +176,8 @@ function renderReport(){
 
 function exportExcel(){
   if(!reportRows.length){ showMsg('Run the report first — nothing to export yet.', false); return; }
-  const header = ['Date','Supplier','GSTIN','Source','Taxable Value','GST Amount','Total'];
-  const rows = reportRows.map(r => [r.date, r.supplierName, r.gstin || '', r.source, r.taxable, r.gst, r.total]);
+  const header = ['Date','Seller','Order #','Taxable Value','GST Amount','Total'];
+  const rows = reportRows.map(r => [r.date, r.supplierName, r.orderNumber, r.taxable, r.gst, r.total]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([header].concat(rows)), 'Purchase Register');
 
@@ -201,7 +195,7 @@ function exportExcel(){
 
   const from = document.getElementById('fFrom').value || 'start';
   const to = document.getElementById('fTo').value || 'end';
-  XLSX.writeFile(wb, `Purchase-GST-Register-${from}-to-${to}.xlsx`);
+  XLSX.writeFile(wb, `Buyer-Purchase-GST-Register-${from}-to-${to}.xlsx`);
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

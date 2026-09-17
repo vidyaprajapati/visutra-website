@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stock | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Stock</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="my-orders.html">My Orders</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main">
+
+  <div class="card" id="notBuyerCard" style="display:none">
+    <h2>Buyer Features Not Enabled</h2>
+    <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first, then get linked by a seller from their Customers page.</p>
+  </div>
+
+  <div class="card">
+    <h2>Current Stock</h2>
+    <p class="sub">This is your one inventory — the same numbers Stock Management shows on the Billing side — since a product's stock doesn't change depending on whether you're looking at it as buyer or seller of your own goods. It goes up automatically whenever a linked seller accepts an order of yours (see below), or when you record a purchase by hand in <a href="../app.html?view=purchases">Purchase Entry</a>.</p>
+    <table><thead><tr><th>Product</th><th>Unit</th><th>Current Stock</th><th>Reorder Level</th></tr></thead>
+    <tbody id="stockTable"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Recent Stock-Ins from Seller Purchases</h2>
+    <p class="sub">Just the stock movements that came from an order a linked seller accepted — a subset of the full log in Billing → Stock Management, filtered to purchases from your sellers.</p>
+    <table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Note</th></tr></thead>
+    <tbody id="movementsTable"></tbody></table>
+  </div>
+
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/stock.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/stock.html');
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('buyer-stock', '../');
+
+  const data = snap.data() || {};
+  document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
+
+  await loadStock();
+});
+
+async function loadStock(){
+  const [prodSnap, moveSnap] = await Promise.all([
+    db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get(),
+    db.collection('users').doc(currentUser.uid).collection('stockMovements').orderBy('createdAt', 'desc').limit(200).get()
+  ]);
+  const products = prodSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  const productById = {};
+  products.forEach(p => { productById[p.id] = p; });
+
+  document.getElementById('stockTable').innerHTML = products.map(p => `
+    <tr><td>${esc(p.name)}</td><td>${esc(p.unit||'PCS')}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td></tr>
+  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No products yet.</td></tr>';
+
+  // "From Seller Purchases" is identified by the note this app writes when
+  // an accepted order is turned into a stock-in — see ensureBuyerPurchaseForOrder
+  // in my-orders.html, the only place that writes this exact note prefix.
+  const sellerMovements = moveSnap.docs.map(d => ({id: d.id, ...d.data()}))
+    .filter(m => m.type === 'purchase-in' && (m.note || '').startsWith('Purchase from '))
+    .slice(0, 30);
+
+  document.getElementById('movementsTable').innerHTML = sellerMovements.map(m => `
+    <tr><td>${esc(m.date)}</td><td>${esc((productById[m.productId]||{}).name || 'Unknown product')}</td><td>${m.qty}</td><td>${esc(m.note)}</td></tr>
+  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No stock-ins from seller purchases yet — these appear once a linked seller accepts an order of yours.</td></tr>';
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+</script>
+</body>
+</html>
