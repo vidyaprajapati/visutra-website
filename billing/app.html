@@ -37,10 +37,9 @@
     <a href="#purchases" class="nav-link" data-view="purchases" data-group="purchase">Purchases</a>
     <a href="#payment-entry" class="nav-link" data-view="payment-entry" data-group="purchase">Payment Entry</a>
     <a href="#supplier-dashboard" class="nav-link" data-view="supplier-dashboard" data-group="purchase">Supplier Dashboard</a>
-    <a href="#purchase-gstr" class="nav-link" data-view="purchase-gstr" data-group="purchase">Purchase GST Summary</a>
     <a href="#new-invoice" class="nav-link" data-view="new-invoice" data-group="billing">New Invoice</a>
     <a href="#invoices" class="nav-link" data-view="invoices" data-group="billing">Invoice History</a>
-    <a href="#gstr1" class="nav-link" data-view="gstr1" data-group="billing">GSTR-1 Filing</a>
+    <a href="#gstr1" class="nav-link" data-view="gstr1">GSTR-1 Filing (Sales &amp; Purchases)</a>
   </div>
 
   <div class="main">
@@ -403,41 +402,6 @@
       </div>
     </div>
 
-    <!-- PURCHASE GST SUMMARY (inward/ITC-side register, mirrors GSTR-1 Filing below but for what you bought, not what you sold) -->
-    <div id="view-purchase-gstr" class="view hidden">
-      <div class="card">
-        <h2>Purchase GST Summary</h2>
-        <p class="sub">Compiles every entry in Purchases into a GST-rate-wise and supplier-wise register for the period below — your <b>inward</b> supply data (what you bought, for return/ITC prep). This is separate from GSTR-1 Filing, which covers your own outward sales invoices.</p>
-        <div class="grid3">
-          <div class="field"><label>From</label><input type="date" id="pgFrom"></div>
-          <div class="field"><label>To</label><input type="date" id="pgTo"></div>
-          <div class="field"><label>Supplier</label><select id="pgSupplier"><option value="">All suppliers</option></select></div>
-        </div>
-        <button class="btn primary" onclick="renderPurchaseGstr()">Run Report</button>
-        <button class="btn small" onclick="exportPurchaseGstrExcel()">Export to Excel</button>
-        <p class="msg" id="pgMsg"></p>
-      </div>
-
-      <div class="card hidden" id="pgTotalsCard">
-        <h2>Totals for Period</h2>
-        <div class="totals-row"><span>Taxable value</span><span id="pgTaxable">0.00</span></div>
-        <div class="totals-row"><span>GST</span><span id="pgGst">0.00</span></div>
-        <div class="totals-row grand"><span>Grand total</span><span id="pgGrand">0.00</span></div>
-      </div>
-
-      <div class="card hidden" id="pgRateCard">
-        <h2>GST Rate-wise Summary</h2>
-        <table><thead><tr><th>GST Rate</th><th>Taxable Value</th><th>GST Amount</th><th>Total</th></tr></thead>
-        <tbody id="pgRateTable"></tbody></table>
-      </div>
-
-      <div class="card hidden" id="pgRegisterCard">
-        <h2>Purchase Register</h2>
-        <table><thead><tr><th>Date</th><th>Supplier</th><th>GSTIN</th><th>Taxable</th><th>GST</th><th>Total</th></tr></thead>
-        <tbody id="pgRegisterTable"></tbody></table>
-      </div>
-    </div>
-
     <!-- NEW INVOICE -->
     <div id="view-new-invoice" class="view hidden">
       <div class="card">
@@ -483,8 +447,8 @@
     <!-- GSTR-1 FILING -->
     <div id="view-gstr1" class="view hidden">
       <div class="card">
-        <h2>GST Filing</h2>
-        <p class="sub">Every invoice you save is already stored with everything GSTR-1 needs. Pick a return period below to generate the B2B, B2CL, B2CS and HSN summary tables from your saved invoices, and download them in the same Excel format used by the GST offline tool.</p>
+        <h2>GST Filing — Sales &amp; Purchases</h2>
+        <p class="sub">Pick a return period below and generate both sides at once: your outward supplies (Sales, from Invoices) and inward supplies (Purchases, from Purchase Entry — including ones auto-created when a linked buyer's order is accepted). Download an Excel with both, or a GST-portal-ready JSON for the Sales side (the portal doesn't accept a direct Purchases upload — ITC comes from your suppliers' own filings via 2A/2B).</p>
         <div class="grid3">
           <div class="field"><label>Financial Year</label><select id="gstrFY" onchange="onFYChange()"></select></div>
           <div class="field"><label>Filing type</label>
@@ -501,14 +465,32 @@
       </div>
 
       <div class="card hidden" id="gstrSummaryCard">
-        <h2>Outward Supplies (GSTR-1) — <span id="gstrPeriodLabel"></span></h2>
+        <h2>Sales (Outward Supplies) — <span id="gstrPeriodLabel"></span></h2>
         <div class="grid3">
           <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">B2B invoices</h3><p style="font-size:22px;font-weight:700;margin:0" id="gstrB2bCount">0</p></div>
           <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">B2CL invoices</h3><p style="font-size:22px;font-weight:700;margin:0" id="gstrB2clCount">0</p></div>
           <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">B2CS lines</h3><p style="font-size:22px;font-weight:700;margin:0" id="gstrB2csCount">0</p></div>
         </div>
         <p class="sub" style="margin-top:16px">B2CL = unregistered, inter-state, invoice value over ₹1,00,000 (current GST threshold). Everything else unregistered goes into B2CS, grouped by state and tax rate.</p>
-        <button class="btn primary" style="margin-top:10px" onclick="downloadGstr1Excel()">Download GSTR-1 Excel</button>
+      </div>
+
+      <div class="card hidden" id="pgSummaryCard">
+        <h2>Purchases (Inward Supplies) — <span id="pgPeriodLabel"></span></h2>
+        <div class="totals-row"><span>Taxable value</span><span id="pgTaxable">0.00</span></div>
+        <div class="totals-row"><span>GST</span><span id="pgGst">0.00</span></div>
+        <div class="totals-row grand"><span>Grand total</span><span id="pgGrand">0.00</span></div>
+        <table style="margin-top:14px"><thead><tr><th>GST Rate</th><th>Taxable Value</th><th>GST Amount</th><th>Total</th></tr></thead>
+        <tbody id="pgRateTable"></tbody></table>
+        <p class="sub" style="margin-top:10px" id="pgEmptyMsg">No purchases in this period.</p>
+      </div>
+
+      <div class="card hidden" id="gstrDownloadCard">
+        <h2>Download</h2>
+        <p class="sub">Excel includes both Sales and Purchases sheets for this period. JSON covers Sales only, in a GST-offline-tool-style layout — <b>please import it into the current official GST offline utility and check for errors before relying on it for an actual filing</b>, since the portal's exact schema can change and this isn't validated against a live filing.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn primary" onclick="downloadGstr1Excel()">Download Excel (Sales + Purchases)</button>
+          <button class="btn" onclick="downloadGstr1Json()">Download JSON (Sales — GST Portal Format)</button>
+        </div>
       </div>
     </div>
 
