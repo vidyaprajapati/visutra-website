@@ -302,7 +302,11 @@ async function saveProduct(){
   ['pName','pHsn','pUnit','pSku','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
   showMsg('productMsg', 'Saved.', true);
-  loadProducts();
+  await loadProducts();
+  // A new/renamed sellable Product might now name-match an existing,
+  // still-unlinked Purchase Product — re-run the auto-link pass so that
+  // pairing connects immediately instead of waiting for the next page load.
+  if(purchaseProductsCache.length){ await autoLinkPurchaseProducts(); renderPurchaseProducts(); }
 }
 function editProduct(id){
   const p = productsCache.find(x => x.id === id);
@@ -334,7 +338,7 @@ function renderStockDropdowns(){
   const ppSel = document.getElementById('ppLinkedProduct');
   if(ppSel){
     const prev = ppSel.value;
-    ppSel.innerHTML = '<option value="">Not linked — doesn\'t affect stock</option>' +
+    ppSel.innerHTML = '<option value="">Auto-detect by matching name — or pick one</option>' +
       productsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
     if(prev && productsCache.some(p => p.id === prev)) ppSel.value = prev;
   }
@@ -711,9 +715,35 @@ function renderSupplierDropdown(){
 }
 
 /* ---------------- Purchase Product Master (separate from the GST billing Products list — purchase price differs from selling price) ---------------- */
+/* Finds a sellable Product whose name matches a Purchase Product's name,
+   case-insensitively and ignoring surrounding whitespace. Used to auto-link
+   the two lists by name instead of requiring a manual dropdown pick. */
+function findProductByName(name){
+  const norm = (name || '').trim().toLowerCase();
+  if(!norm) return null;
+  return productsCache.find(p => (p.name || '').trim().toLowerCase() === norm) || null;
+}
+/* Backfills linkedProductId for any Purchase Product that isn't linked yet,
+   or whose link points to a Product that's since been deleted, by matching
+   names against the sellable Products list. Runs every time Purchase
+   Products load, so a purchase product and its matching sellable product
+   get linked automatically whichever one was created first. */
+async function autoLinkPurchaseProducts(){
+  const col = db.collection('users').doc(currentUser.uid).collection('purchaseProducts');
+  for(const pp of purchaseProductsCache){
+    const stillValid = pp.linkedProductId && productsCache.some(p => p.id === pp.linkedProductId);
+    if(stillValid) continue;
+    const match = findProductByName(pp.name);
+    if(match){
+      pp.linkedProductId = match.id;
+      await col.doc(pp.id).update({ linkedProductId: match.id });
+    }
+  }
+}
 async function loadPurchaseProducts(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').orderBy('name').get();
   purchaseProductsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  await autoLinkPurchaseProducts();
   renderPurchaseProducts();
   renderPurchaseProductDropdowns();
 }
@@ -729,10 +759,19 @@ function renderPurchaseProducts(){
 }
 async function savePurchaseProduct(){
   const id = document.getElementById('ppEditId').value;
+  const name = document.getElementById('ppName').value.trim();
+  // Auto-link by name when the user hasn't manually picked a linked product:
+  // if a sellable Product with the same name (case/whitespace-insensitive)
+  // exists, connect them automatically so stock updates without extra steps.
+  let linkedProductId = document.getElementById('ppLinkedProduct').value || null;
+  if(!linkedProductId){
+    const match = findProductByName(name);
+    if(match) linkedProductId = match.id;
+  }
   const data = {
-    name: document.getElementById('ppName').value.trim(),
+    name,
     unit: document.getElementById('ppUnit').value.trim() || 'PCS',
-    linkedProductId: document.getElementById('ppLinkedProduct').value || null
+    linkedProductId
   };
   if(!data.name){ showMsg('purchaseProductMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('purchaseProducts');
