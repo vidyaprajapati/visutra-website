@@ -127,8 +127,18 @@ service cloud.firestore {
     }
 
     match /public_invoices/{invoiceId} {
+      // Publicly readable (that's the point — buyers open this with no login),
+      // but create/update used to only check "is someone logged in", with
+      // nothing tying the document to the seller who made it. That let ANY
+      // signed-in user overwrite ANY invoice by its ID (which is visible in
+      // every invoice-view.html link ever emailed out). Now every invoice
+      // write must carry sellerUid matching the writer, and it can never be
+      // reassigned on update.
       allow read: if true;
-      allow create, update: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.sellerUid == request.auth.uid;
+      allow update: if request.auth != null
+        && resource.data.sellerUid == request.auth.uid
+        && request.resource.data.sellerUid == resource.data.sellerUid;
       allow delete: if false;
     }
 
