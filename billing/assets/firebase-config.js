@@ -19,7 +19,7 @@ const firebaseConfig = {
 };
 // EmailJS (used to send the invoice email to the buyer — see BILLING-SETUP.md)
 const EMAILJS_PUBLIC_KEY = "uvFM4OUqc4ZM_r3X4";
-const EMAILJS_SERVICE_ID = "service_7ufblgf";
+const EMAILJS_SERVICE_ID = "service_1g6knan";
 const EMAILJS_TEMPLATE_ID = "template_ds08b1e";
 // Separate template for marketplace order notifications (placed/accepted/rejected)
 // — deliberately not the invoice template above, so its wording can stay
