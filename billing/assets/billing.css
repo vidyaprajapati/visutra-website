@@ -38,6 +38,13 @@ a{color:var(--indigo)}
 .field{margin-bottom:14px}
 .field label{display:block;font-family:var(--mono);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px}
 .field input,.field select,.field textarea{width:100%;padding:10px 12px;border:1px solid var(--thread);border-radius:var(--radius-sm);font-family:var(--body);font-size:14.5px;background:#fff;color:var(--ink)}
+/* Line-item tables (invoice/purchase entry) use bare <select>/<input> in table
+   cells without the .field wrapper — style them directly so they match the
+   rest of the app instead of falling back to the browser default appearance. */
+table select,table input[type="number"],table input[type="text"]{
+  padding:6px 8px;border:1px solid var(--thread);border-radius:6px;
+  font-family:var(--body);font-size:13.5px;background:#fff;color:var(--ink)
+}
 .field textarea{min-height:70px;resize:vertical}
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--thread)}
