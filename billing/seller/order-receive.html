@@ -183,6 +183,7 @@ async function acceptOrder(orderId){
       // GSTR-1 filing, and the public invoice-view.html PDF viewer as-is.
       const invoiceData = {
         invoiceNo, date: new Date().toISOString().slice(0, 10), reverseCharge: false,
+        sellerUid: currentUser.uid, // required by the public_invoices Firestore rule — omitting this causes "Missing or insufficient permissions" on Accept
         business: { ...businessData },
         customer: {
           name: order.buyerBusiness?.businessName || '', gstin: order.buyerBusiness?.gstin || '',
