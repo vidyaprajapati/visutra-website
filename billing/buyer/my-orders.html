@@ -20,7 +20,9 @@
   </div>
 </div>
 
-<div style="max-width:1000px;margin:0 auto;padding:32px 20px">
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main">
 
   <div class="card">
     <h2>My Orders</h2>
@@ -33,6 +35,7 @@
     <p class="msg" id="pageMsg"></p>
   </div>
 
+  </div>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -43,6 +46,7 @@
 <script>
 let currentUser = null;
 let ordersCache = [];
+let myProductsCache = []; // this buyer's OWN sellable Products (users/{uid}/products) — used to auto-link stock, same name-matching rule as the Purchase Products page in Billing
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -56,6 +60,10 @@ auth.onAuthStateChanged(async user => {
 
   currentUser = user;
   mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('my-orders', '../');
+
+  const prodSnap = await db.collection('users').doc(currentUser.uid).collection('products').get();
+  myProductsCache = prodSnap.docs.map(d => ({id: d.id, ...d.data()}));
 
   // Real-time: as soon as a linked seller accepts/rejects, this page updates
   // itself and (for an acceptance) creates the matching Buyer Purchase record
@@ -123,18 +131,26 @@ function renderOrders(){
    seller and a Purchase Product per ordered item are created the first time
    they're needed (matched by sellerUid / sellerProductId so repeats reuse the
    same records), then one purchase entry is written using the EXACT invoice
-   values the seller's acceptance produced — never re-derived or estimated. */
+   values the seller's acceptance produced — never re-derived or estimated.
+   Since this writes the purchase doc directly (there's no form to click
+   "Save Purchase" on), it also has to do the two things that button's handler
+   does for a manual entry: auto-link each Purchase Product to a matching
+   sellable Product by name, and post the stock-in movement — otherwise an
+   order accepted from a seller would silently never move Stock Management,
+   unlike a purchase entered by hand. */
 async function ensureBuyerPurchaseForOrder(order){
   const supplierId = await ensureSupplierForSeller(order.sellerUid, order.sellerName);
   const items = [];
+  const stockIns = []; // {linkedProductId, qty} — applied after the purchase doc is saved
   for(const item of order.items){
-    const purchaseProductId = await ensurePurchaseProductForSellerItem(order.sellerUid, item);
+    const { purchaseProductId, linkedProductId } = await ensurePurchaseProductForSellerItem(order.sellerUid, item);
     items.push({
       productId: purchaseProductId, name: item.productName, unit: item.unit || 'PCS',
       qty: item.qty, rate: item.rate || 0, gstRate: item.gstRate || 0,
       taxable: item.taxable || 0, gstAmt: item.gstAmt || 0, total: item.total || 0,
-      priceMode: 'excl'
+      priceMode: 'excl', linkedProductId: linkedProductId || null
     });
+    if(linkedProductId) stockIns.push({ linkedProductId, qty: item.qty });
   }
   const summary = order.invoiceSummary || {};
   const purchaseData = {
@@ -149,6 +165,17 @@ async function ensureBuyerPurchaseForOrder(order){
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   const purRef = await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
+
+  for(const s of stockIns){
+    await db.collection('users').doc(currentUser.uid).collection('products').doc(s.linkedProductId).update({
+      stock: firebase.firestore.FieldValue.increment(s.qty)
+    });
+    await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
+      type: 'purchase-in', productId: s.linkedProductId, qty: s.qty, date: purchaseData.date,
+      note: `Purchase from ${order.sellerName} (order ${order.orderNumber || ''})`,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }
 
   // Narrow, rule-guarded update: a buyer may only set buyerPurchaseId once,
   // on an already-ACCEPTED order, and only that one field (+ timestamp) — see
@@ -169,15 +196,28 @@ async function ensureSupplierForSeller(sellerUid, sellerName){
   });
   return ref.id;
 }
+/* Auto-links by exact name match against this buyer's own sellable Products
+   (case/whitespace-insensitive) — the same rule savePurchaseProduct() in the
+   Billing app uses, kept in sync here since this codepath writes the
+   Purchase Product record directly instead of going through that form. */
+function findMyProductByName(name){
+  const norm = (name || '').trim().toLowerCase();
+  if(!norm) return null;
+  return myProductsCache.find(p => (p.name || '').trim().toLowerCase() === norm) || null;
+}
 async function ensurePurchaseProductForSellerItem(sellerUid, item){
   const snap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts')
     .where('sellerUid', '==', sellerUid).where('sellerProductId', '==', item.productId).limit(1).get();
-  if(!snap.empty) return snap.docs[0].id;
+  if(!snap.empty){
+    const doc = snap.docs[0];
+    return { purchaseProductId: doc.id, linkedProductId: doc.data().linkedProductId || null };
+  }
+  const match = findMyProductByName(item.productName);
   const ref = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').add({
-    name: item.productName, unit: item.unit || 'PCS', linkedProductId: null,
+    name: item.productName, unit: item.unit || 'PCS', linkedProductId: match ? match.id : null,
     sellerUid, sellerProductId: item.productId, autoCreatedFromOrder: true
   });
-  return ref.id;
+  return { purchaseProductId: ref.id, linkedProductId: match ? match.id : null };
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

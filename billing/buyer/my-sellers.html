@@ -19,7 +19,9 @@
   </div>
 </div>
 
-<div style="max-width:900px;margin:0 auto;padding:32px 20px">
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main" style="max-width:900px">
 
   <div class="card" id="notBuyerCard" style="display:none">
     <h2>Buyer Features Not Enabled</h2>
@@ -34,6 +36,7 @@
     <p class="sub" style="margin-top:10px">Once you've spotted products you want to track, set up <a href="buyer-sku-master.html">Buyer SKU Master</a> to map each one to your Amazon/Meesho/Flipkart SKUs.</p>
   </div>
 
+  </div>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -56,6 +59,7 @@ auth.onAuthStateChanged(async user => {
 
   currentUser = user;
   mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('my-sellers', '../');
 
   const data = snap.data() || {};
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';

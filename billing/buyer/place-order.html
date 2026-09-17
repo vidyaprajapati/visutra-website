@@ -20,7 +20,9 @@
   </div>
 </div>
 
-<div style="max-width:900px;margin:0 auto;padding:32px 20px">
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main" style="max-width:900px">
 
   <div class="card">
     <h2>Product Select Order</h2>
@@ -43,6 +45,7 @@
     <p class="msg" id="orderMsg"></p>
   </div>
 
+  </div>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -72,6 +75,7 @@ auth.onAuthStateChanged(async user => {
   currentUser = user;
   buyerData = snap.data() || {};
   mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('place-order', '../');
 
   if(!buyerData.businessName || !buyerData.stateCode){
     showMsg('orderMsg', 'Complete your Business Profile (name, address, state) in Billing before placing orders — it\'s needed for the GST invoice the seller will raise. ', false);

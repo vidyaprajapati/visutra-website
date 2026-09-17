@@ -20,7 +20,9 @@
   </div>
 </div>
 
-<div style="max-width:1000px;margin:0 auto;padding:32px 20px">
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main">
 
   <div class="card" id="notBuyerCard" style="display:none">
     <h2>Buyer Features Not Enabled</h2>
@@ -80,6 +82,7 @@
     <tbody id="unmappedTable"></tbody></table>
   </div>
 
+  </div>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -106,6 +109,7 @@ auth.onAuthStateChanged(async user => {
 
   currentUser = user;
   mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('buyer-sku-master', '../');
 
   const data = snap.data() || {};
   const isBuyer = !!(data.roles && data.roles.buyer);
