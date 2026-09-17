@@ -5,16 +5,16 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Order Receive | VISUTRA Billing</title>
 <meta name="robots" content="noindex, nofollow">
-<link rel="icon" href="../favicon.svg">
+<link rel="icon" href="../../favicon.svg">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/billing.css">
+<link rel="stylesheet" href="../assets/billing.css">
 </head>
 <body>
 
 <div class="topbar">
-  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"><b>Order Receive</b></a>
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Order Receive</b></a>
   <div class="topbar-right">
-    <a class="btn small" href="app.html">Back to Billing</a>
+    <a class="btn small" href="../app.html">Back to Billing</a>
     <div id="userMenuMount"></div>
   </div>
 </div>
@@ -37,8 +37,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-<script src="assets/firebase-config.js"></script>
-<script src="assets/user-menu.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 let currentUser = null;
@@ -47,17 +47,17 @@ let ordersCache = [];
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
-  if(!verified){ window.location.href = 'login.html?redirect=' + encodeURIComponent('seller/order-receive.html'); return; }
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('seller/order-receive.html'); return; }
 
   const snap = await db.collection('users').doc(user.uid).get();
   if(!snap.exists || !snap.data().profileComplete){
-    window.location.href = 'complete-profile.html?redirect=' + encodeURIComponent('seller/order-receive.html');
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('seller/order-receive.html');
     return;
   }
 
   currentUser = user;
   businessData = snap.data() || {};
-  mountUserMenu('userMenuMount', user, { showBillingLink: true });
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
 
   if(!businessData.businessName || !businessData.gstin || !businessData.stateCode){
     showMsg('pageMsg', 'Complete your Business Profile (Billing → Business Profile) before accepting orders — it\'s needed on the GST invoice.', false);
@@ -99,7 +99,7 @@ function renderOrders(){
       actions = `<button class="btn small primary" onclick="acceptOrder('${o.id}')">Accept</button>
                  <button class="btn small danger" onclick="rejectOrder('${o.id}')">Reject</button>`;
     } else if(o.status === 'ACCEPTED' && o.invoiceId){
-      actions = `<a class="btn small" href="invoice-view.html?id=${o.invoiceId}" target="_blank">View Invoice</a>`;
+      actions = `<a class="btn small" href="../invoice-view.html?id=${o.invoiceId}" target="_blank">View Invoice</a>`;
     } else if(o.status === 'REJECTED'){
       actions = `<span style="color:var(--muted)">${esc(o.rejectionReason||'No reason given')}</span>`;
     }
