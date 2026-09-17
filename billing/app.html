@@ -281,7 +281,10 @@
         <p class="sub">A separate product list just for purchases (name and unit only) — since the purchase (cost) price is different from the selling price in your GST billing Products list, and even varies supplier to supplier, you enter the price and GST rate manually for every purchase instead of a fixed default.</p>
         <div class="grid3">
           <div class="field"><label>Product name</label><input id="ppName"></div>
+          <div class="field"><label>HSN code</label><input id="ppHsn" placeholder="For GSTR-1 purchase register"></div>
           <div class="field"><label>Unit</label><input id="ppUnit" placeholder="e.g. PCS, NOS, KG"></div>
+        </div>
+        <div class="grid3">
           <div class="field"><label>Restocks which billing product? (optional)</label><select id="ppLinkedProduct"><option value="">Not linked — doesn't affect stock</option></select></div>
         </div>
         <button class="btn primary" onclick="savePurchaseProduct()">Add Purchase Product</button>
@@ -289,7 +292,7 @@
         <p class="msg" id="purchaseProductMsg"></p>
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>Unit</th><th>Restocks</th><th></th></tr></thead>
+        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Restocks</th><th></th></tr></thead>
         <tbody id="purchaseProductsTable"></tbody></table>
       </div>
     </div>
@@ -472,6 +475,30 @@
           <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">B2CS lines</h3><p style="font-size:22px;font-weight:700;margin:0" id="gstrB2csCount">0</p></div>
         </div>
         <p class="sub" style="margin-top:16px">B2CL = unregistered, inter-state, invoice value over ₹1,00,000 (current GST threshold). Everything else unregistered goes into B2CS, grouped by state and tax rate.</p>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">B2B — Registered Customers</h3>
+        <div style="max-height:320px;overflow-y:auto">
+          <table><thead><tr><th>GSTIN</th><th>Customer</th><th>Invoice #</th><th>Date</th><th>Invoice Value</th><th>Place of Supply</th><th>Rate</th><th>Taxable</th></tr></thead>
+          <tbody id="gstrB2bTable"></tbody></table>
+        </div>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">B2CL — Unregistered, Inter-State, Over ₹1L</h3>
+        <div style="max-height:260px;overflow-y:auto">
+          <table><thead><tr><th>Invoice #</th><th>Date</th><th>Invoice Value</th><th>Place of Supply</th><th>Rate</th><th>Taxable</th></tr></thead>
+          <tbody id="gstrB2clTable"></tbody></table>
+        </div>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">B2CS — Everything Else Unregistered</h3>
+        <div style="max-height:260px;overflow-y:auto">
+          <table><thead><tr><th>Type</th><th>Place of Supply</th><th>Rate</th><th>Taxable</th></tr></thead>
+          <tbody id="gstrB2csTable"></tbody></table>
+        </div>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">HSN-wise Summary</h3>
+        <div style="max-height:320px;overflow-y:auto">
+          <table><thead><tr><th>HSN</th><th>Description</th><th>UQC</th><th>Qty</th><th>Rate</th><th>Taxable</th><th>IGST</th><th>CGST</th><th>SGST</th><th>Total Value</th></tr></thead>
+          <tbody id="gstrHsnTable"></tbody></table>
+        </div>
       </div>
 
       <div class="card hidden" id="pgSummaryCard">
@@ -482,6 +509,18 @@
         <table style="margin-top:14px"><thead><tr><th>GST Rate</th><th>Taxable Value</th><th>GST Amount</th><th>Total</th></tr></thead>
         <tbody id="pgRateTable"></tbody></table>
         <p class="sub" style="margin-top:10px" id="pgEmptyMsg">No purchases in this period.</p>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">Purchase Register — By Supplier</h3>
+        <div style="max-height:280px;overflow-y:auto">
+          <table><thead><tr><th>Date</th><th>Supplier</th><th>GSTIN</th><th>Taxable</th><th>GST</th><th>Total</th></tr></thead>
+          <tbody id="pgRegisterTable"></tbody></table>
+        </div>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">Purchase Register — By Item (HSN-wise)</h3>
+        <div style="max-height:320px;overflow-y:auto">
+          <table><thead><tr><th>Date</th><th>Supplier</th><th>Product</th><th>HSN</th><th>Qty</th><th>Rate %</th><th>Taxable</th><th>GST Amt</th><th>Total</th></tr></thead>
+          <tbody id="pgItemsTable"></tbody></table>
+        </div>
       </div>
 
       <div class="card hidden" id="gstrDownloadCard">
