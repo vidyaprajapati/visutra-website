@@ -145,6 +145,22 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     <button class="vlc-plat" data-p="custom"><span class="dot"></span>Custom</button>
   </div>
 
+  <!-- Moved above the crop/download bench: SKUs are detected immediately on
+       upload, before any cropping happens, so the "send to auto order" step
+       now appears — and can be required — before the download step below. -->
+  <div id="vlcSkuSummary" style="display:none;margin-bottom:22px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
+    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:10px">Detected SKUs</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Pages</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">SKU</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Total Qty</th>
+    </tr></thead><tbody id="vlcSkuSummaryTable"></tbody></table>
+    <p style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:12px 0 0">This list shows regardless of whether "print SKU on label" is turned on below — it's just what was read off the file. Ready to turn these into an order?
+      <button class="vlc-btn" style="display:inline-block;width:auto;padding:8px 16px;margin-left:4px" onclick="sendToLabelOrder()">Send to Label-Based Auto Order →</button>
+      (opens signed in, with these SKUs already loaded — no need to upload the file again there).</p>
+    <p id="vlcSendGateNote" style="display:none;font-size:12.5px;color:#9E3608;margin:10px 0 0;font-weight:600">⚠ For a new file, send it to Label-Based Auto Order first — the "Crop &amp; download PDF" button below stays locked until you do. Already sent this exact file before? Downloading is unlocked automatically, no need to send it again.</p>
+  </div>
+
   <div class="vlc-bench">
     <!-- LEFT: controls -->
     <div>
@@ -258,17 +274,6 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     </div>
   </div>
 
-  <div id="vlcSkuSummary" style="display:none;margin-top:22px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
-    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:10px">Detected SKUs</div>
-    <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
-      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Page</th>
-      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">SKU</th>
-      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Qty</th>
-    </tr></thead><tbody id="vlcSkuSummaryTable"></tbody></table>
-    <p style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:12px 0 0">This list shows regardless of whether "print SKU on label" is turned on above — it's just what was read off the file. Ready to turn these into an order?
-      <button class="vlc-btn" style="display:inline-block;width:auto;padding:8px 16px;margin-left:4px" onclick="sendToLabelOrder()">Send to Label-Based Auto Order →</button>
-      (opens signed in, with these SKUs already loaded — no need to upload the file again there).</p>
-  </div>
 
   <div class="vlc-footer">
     <span>VISUTRA Label Cropper — free tool, 100% client-side.</span>
@@ -742,11 +747,12 @@ async function handleFile(file){
   pdfFile = file;
   document.getElementById('vlcFilename').textContent = file.name;
   pdfBytes = new Uint8Array(await file.arrayBuffer());
-  document.getElementById('vlcProcessBtn').disabled = false;
+  document.getElementById('vlcProcessBtn').disabled = true; // re-locked until applyDownloadGate() (via renderSkuSummary) decides, below
   pageCouriers = []; pageSkus = []; pageQtys = []; pageGroups = []; groupOrder = [];
   amazonSkuByLabelIndex = {};
   document.getElementById('vlcCourierPanel').style.display = 'none';
   document.getElementById('vlcSkuSummary').style.display = 'none';
+  document.getElementById('vlcSendGateNote').style.display = 'none';
   await renderPreview();
   // SKU detection always runs on upload, independent of the "print SKU on
   // label" checkboxes below — those checkboxes only control whether the
@@ -771,32 +777,77 @@ async function handleFile(file){
 }
 
 let lastDetectedRows = [];
+/* File-level "already sent to auto order" tracking, keyed by a signature of
+   filename + the aggregated SKU/qty set (not just filename) so re-uploading
+   the exact same dispatch file is recognized even across browser sessions —
+   this is what lets a genuine re-print skip the send-to-order requirement,
+   while a new file (new signature) stays locked until it's sent once. */
+function fileSignatureFor(fileName, rows){
+  const key = fileName + '|' + rows.map(r => `${r.sku}:${r.qty}`).sort().join(',');
+  return hashText(key);
+}
+function hasBeenSentToOrder(sig){
+  try{ return localStorage.getItem('vlc_sent_' + sig) === '1'; }catch(e){ return false; }
+}
+function markSentToOrder(sig){
+  try{ localStorage.setItem('vlc_sent_' + sig, '1'); }catch(e){}
+}
+function applyDownloadGate(){
+  const btn = document.getElementById('vlcProcessBtn');
+  const note = document.getElementById('vlcSendGateNote');
+  if(!pdfBytes){ return; } // no file loaded yet — leave the existing disabled state alone
+  if(!lastDetectedRows.length){
+    // Nothing detected (e.g. a platform/file with no readable SKUs) — don't lock
+    // downloads behind a step that has nothing to send.
+    btn.disabled = false;
+    note.style.display = 'none';
+    return;
+  }
+  const sig = fileSignatureFor(pdfFile ? pdfFile.name : '', lastDetectedRows);
+  const alreadySent = hasBeenSentToOrder(sig);
+  btn.disabled = !alreadySent;
+  note.style.display = alreadySent ? 'none' : 'block';
+}
 function renderSkuSummary(){
-  const rows = [];
+  const raw = [];
   if(currentPlatform === 'amazon'){
     Object.keys(amazonSkuByLabelIndex).sort((a,b)=>a-b).forEach(idx => {
-      amazonSkuByLabelIndex[idx].forEach(it => rows.push({ page: parseInt(idx,10)+1, sku: it.sku, qty: it.qty }));
+      amazonSkuByLabelIndex[idx].forEach(it => raw.push({ page: parseInt(idx,10)+1, sku: it.sku, qty: it.qty }));
     });
   } else {
     pageSkus.forEach((sku, i) => {
-      if(sku && sku !== 'Unknown SKU') rows.push({ page: i+1, sku, qty: pageQtys[i] || 1 });
+      if(sku && sku !== 'Unknown SKU') raw.push({ page: i+1, sku, qty: pageQtys[i] || 1 });
     });
   }
+
+  // Group by SKU: the same SKU appearing on multiple pages/labels (e.g. 4
+  // separate "WA-FA1-8_8.5 x1" labels) is combined into one row with the
+  // total quantity, instead of listing each occurrence separately.
+  const grouped = {};
+  const order = [];
+  raw.forEach(r => {
+    if(!grouped[r.sku]){ grouped[r.sku] = { sku: r.sku, qty: 0, pages: [] }; order.push(r.sku); }
+    grouped[r.sku].qty += (r.qty || 0);
+    grouped[r.sku].pages.push(r.page);
+  });
+  const rows = order.map(sku => grouped[sku]);
+
   lastDetectedRows = rows;
   const panel = document.getElementById('vlcSkuSummary');
-  if(!rows.length){ panel.style.display = 'none'; return; }
+  if(!rows.length){ panel.style.display = 'none'; applyDownloadGate(); return; }
   document.getElementById('vlcSkuSummaryTable').innerHTML = rows.map(r =>
-    `<tr><td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.page}</td>
+    `<tr><td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.pages.join(', ')}</td>
      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD);font-family:var(--font-mono,monospace)">${escapeHtml(r.sku)}</td>
      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.qty}</td></tr>`
   ).join('');
   panel.style.display = 'block';
+  applyDownloadGate();
 }
 
 /* Hands the already-detected SKUs off to Label-Based Auto Order via
    sessionStorage (same origin, so this works without any server round trip)
    so the buyer never has to upload the same file a second time there. A
-   lightweight fingerprint per row (marketplace+sku+qty+page+filename) is
+   lightweight fingerprint per row (marketplace+sku+qty+pages+filename) is
    included for duplicate-order protection on the receiving page — weaker
    than the full-page-text hash label-order.html uses for its own direct
    uploads, but sufficient for this one handoff path. */
@@ -809,11 +860,14 @@ function sendToLabelOrder(){
       marketplace: currentPlatform.toUpperCase(),
       sku: r.sku,
       qty: r.qty,
-      pageHash: 'cropper_' + hashText(`${currentPlatform}|${r.sku}|${r.qty}|${r.page}|${pdfFile ? pdfFile.name : ''}`)
+      pageHash: 'cropper_' + hashText(`${currentPlatform}|${r.sku}|${r.qty}|${r.pages.join('-')}|${pdfFile ? pdfFile.name : ''}`)
     })),
     timestamp: Date.now()
   };
   try{ sessionStorage.setItem('vlc_detected_skus', JSON.stringify(payload)); }catch(e){}
+  // Unlock downloading of THIS file's cropped PDF from now on (including if the
+  // user comes back and re-uploads the same file later to re-print).
+  markSentToOrder(fileSignatureFor(pdfFile ? pdfFile.name : '', lastDetectedRows));
   window.location.href = '../billing/buyer/label-order.html?fromCropper=1';
 }
 function hashText(str){
@@ -906,6 +960,13 @@ const OUT_SIZES = {
 
 async function processPdf(courierFilter){
   if(!pdfBytes){ alert('Upload a PDF first.'); return; }
+  if(document.getElementById('vlcProcessBtn').disabled){
+    // Belt-and-suspenders check alongside the disabled button — this is what
+    // actually stops the per-courier "Download" buttons in the courier panel
+    // too, since they call this same function.
+    document.getElementById('vlcStatus').textContent = 'Send this file to Label-Based Auto Order first (button above) — downloading unlocks right after.';
+    return;
+  }
   const btn = document.getElementById('vlcProcessBtn');
   const status = document.getElementById('vlcStatus');
   btn.disabled = true;
