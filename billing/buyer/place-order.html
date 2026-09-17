@@ -166,14 +166,21 @@ async function placeOrder(){
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    showMsg('orderMsg', `Order ${orderNumber} sent to ${seller.sellerName}. Track it from My Orders.`, true);
-    sendOrderNotification(
+    showMsg('orderMsg', `Order ${orderNumber} sent to ${seller.sellerName}. Notifying seller…`, true);
+    const emailResult = await sendOrderNotification(
       seller.sellerEmail, seller.sellerName,
       `New Order Received – VISUTRA – Order #${orderNumber}`,
       `You've received a new order from ${buyerData.businessName || currentUser.email}.`,
       items.map(i => `${i.productName} × ${i.qty}`).join(', '),
       `${window.location.origin}/billing/seller/order-receive.html?id=${orderRef.id}`
     );
+    if(emailResult.sent){
+      showMsg('orderMsg', `Order ${orderNumber} sent to ${seller.sellerName} and they've been emailed. Track it from My Orders.`, true);
+    } else if(emailResult.reason === 'not_configured'){
+      showMsg('orderMsg', `Order ${orderNumber} placed — but the seller wasn't emailed (order email isn't set up on this site yet). They'll still see it in their Order Receive portal. Track your order from My Orders.`, true);
+    } else {
+      showMsg('orderMsg', `Order ${orderNumber} placed — but notifying the seller by email failed (${emailResult.error || emailResult.reason}). They'll still see it in their Order Receive portal.`, true);
+    }
     cart = {};
     renderCart();
     document.getElementById('oNote').value = '';
@@ -182,19 +189,25 @@ async function placeOrder(){
   }
 }
 
-/* Fire-and-forget order email — an unfilled EMAILJS_ORDER_TEMPLATE_ID (setup
-   not done yet) or a send failure never blocks the order itself, which is
-   already saved in Firestore by the time this runs. See BILLING-SETUP.md
-   "Order email notifications" for the template to create in EmailJS. */
+/* Order email — an unfilled EMAILJS_ORDER_TEMPLATE_ID (setup not done yet)
+   or a send failure never blocks the order itself, which is already saved
+   in Firestore by the time this runs; the caller decides what to tell the
+   buyer based on the returned result. See BILLING-SETUP.md "Order email
+   notifications" for the template to create in EmailJS. */
 async function sendOrderNotification(toEmail, toName, subject, headline, detailLine, viewLink){
-  if(!toEmail || !EMAILJS_ORDER_TEMPLATE_ID || EMAILJS_ORDER_TEMPLATE_ID.indexOf('PASTE_YOUR') === 0) return;
+  if(!toEmail) return { sent: false, reason: 'no_recipient_email' };
+  if(!EMAILJS_ORDER_TEMPLATE_ID || EMAILJS_ORDER_TEMPLATE_ID.indexOf('PASTE_YOUR') === 0) return { sent: false, reason: 'not_configured' };
   try{
     emailjs.init(EMAILJS_PUBLIC_KEY);
     await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_ORDER_TEMPLATE_ID, {
       to_email: toEmail, to_name: toName || toEmail,
       email_subject: subject, headline, detail_line: detailLine, view_link: viewLink
     });
-  }catch(err){ console.error('Order notification email failed:', err); }
+    return { sent: true };
+  }catch(err){
+    console.error('Order notification email failed:', err);
+    return { sent: false, reason: 'send_failed', error: err.message || String(err) };
+  }
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
