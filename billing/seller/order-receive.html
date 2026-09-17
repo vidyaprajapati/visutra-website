@@ -226,8 +226,21 @@ async function acceptOrder(orderId){
       };
     });
 
-    showMsg('pageMsg', 'Order accepted — invoice generated and stock updated.', true);
-    if(emailPayload) sendOrderNotification(emailPayload.toEmail, emailPayload.toName, emailPayload.subject, emailPayload.headline, emailPayload.detailLine, emailPayload.viewLink);
+    showMsg('pageMsg', 'Order accepted — invoice generated and stock updated. Sending buyer email…', true);
+    if(emailPayload){
+      const emailResult = await sendOrderNotification(emailPayload.toEmail, emailPayload.toName, emailPayload.subject, emailPayload.headline, emailPayload.detailLine, emailPayload.viewLink);
+      if(emailResult.sent){
+        await db.collection('users').doc(currentUser.uid).collection('invoices').doc(invoiceRef.id).update({ emailSent: true }).catch(()=>{});
+        await db.collection('public_invoices').doc(invoiceRef.id).update({ emailSent: true }).catch(()=>{});
+        showMsg('pageMsg', 'Order accepted — invoice generated, stock updated, and the buyer has been emailed the bill.', true);
+      } else if(emailResult.reason === 'not_configured'){
+        showMsg('pageMsg', 'Order accepted and invoice generated — but no email was sent because EMAILJS_ORDER_TEMPLATE_ID in assets/firebase-config.js is still the placeholder. See BILLING-SETUP.md "Order email notifications" to set this up (one-time). The buyer can still be sent the invoice link manually for now.', false);
+      } else {
+        showMsg('pageMsg', `Order accepted and invoice generated — but the email to the buyer failed to send: ${emailResult.error}`, false);
+      }
+    } else {
+      showMsg('pageMsg', 'Order accepted — invoice generated and stock updated.', true);
+    }
     loadOrders();
   }catch(err){
     showMsg('pageMsg', err.message, false);
@@ -244,13 +257,20 @@ async function rejectOrder(orderId){
     showMsg('pageMsg', 'Order rejected.', true);
     const order = ordersCache.find(o => o.id === orderId);
     if(order){
-      sendOrderNotification(
+      const emailResult = await sendOrderNotification(
         order.buyerEmail, order.buyerBusiness?.businessName,
         `Order Rejected – VISUTRA – Order #${order.orderNumber}`,
         `Your order to ${businessData.businessName} was rejected.`,
         reason || 'No reason given.',
         `${window.location.origin}/billing/buyer/my-orders.html?id=${orderId}`
       );
+      if(emailResult.sent){
+        showMsg('pageMsg', 'Order rejected and the buyer has been emailed.', true);
+      } else if(emailResult.reason === 'not_configured'){
+        showMsg('pageMsg', 'Order rejected — but no email was sent because EMAILJS_ORDER_TEMPLATE_ID in assets/firebase-config.js is still the placeholder. See BILLING-SETUP.md "Order email notifications".', false);
+      } else if(emailResult.reason === 'send_failed'){
+        showMsg('pageMsg', `Order rejected — but the email to the buyer failed to send: ${emailResult.error}`, false);
+      }
     }
     loadOrders();
   }catch(err){
@@ -259,14 +279,19 @@ async function rejectOrder(orderId){
 }
 
 async function sendOrderNotification(toEmail, toName, subject, headline, detailLine, viewLink){
-  if(!toEmail || !EMAILJS_ORDER_TEMPLATE_ID || EMAILJS_ORDER_TEMPLATE_ID.indexOf('PASTE_YOUR') === 0) return;
+  if(!toEmail) return { sent: false, reason: 'no_recipient_email' };
+  if(!EMAILJS_ORDER_TEMPLATE_ID || EMAILJS_ORDER_TEMPLATE_ID.indexOf('PASTE_YOUR') === 0) return { sent: false, reason: 'not_configured' };
   try{
     emailjs.init(EMAILJS_PUBLIC_KEY);
     await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_ORDER_TEMPLATE_ID, {
       to_email: toEmail, to_name: toName || toEmail,
       email_subject: subject, headline, detail_line: detailLine, view_link: viewLink
     });
-  }catch(err){ console.error('Order notification email failed:', err); }
+    return { sent: true };
+  }catch(err){
+    console.error('Order notification email failed:', err);
+    return { sent: false, reason: 'send_failed', error: err.message || String(err) };
+  }
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
