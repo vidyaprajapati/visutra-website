@@ -32,21 +32,8 @@ function mountUserMenu(mountId, user, opts) {
     <div style="display:flex;align-items:center;gap:8px;font-family:system-ui,sans-serif">
       <a href="${siteRoot}index.html" title="Home" style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;color:inherit;text-decoration:none">${homeIconSvg}</a>
 
-      <div style="position:relative;display:inline-block">
-        <button id="vtBuyerMenuBtn" style="${pillBtnStyle}">Buyer &#9662;</button>
-        <div id="vtBuyerMenuDropdown" style="${dropdownStyle}">
-          ${VT_BUYER_NAV.map(function (item) { return '<a href="' + base + item.href + '" style="' + itemStyle + '">' + item.label + '</a>'; }).join('')}
-        </div>
-      </div>
-
-      <div style="position:relative;display:inline-block">
-        <button id="vtSellerMenuBtn" style="${pillBtnStyle}">Seller &#9662;</button>
-        <div id="vtSellerMenuDropdown" style="${dropdownStyle}">
-          <a href="${base}app.html" style="${itemStyle}">GST Billing</a>
-          <a href="${base}app.html?view=purchases" style="${itemStyle}">Purchase Entry</a>
-          <a href="${base}seller/order-receive.html" style="${itemStyle}">Order Receive</a>
-        </div>
-      </div>
+      <a href="${base}buyer/dashboard.html" class="topbar-role-link" style="${pillBtnStyle};text-decoration:none;display:inline-block">Buyer</a>
+      <a href="${base}app.html" class="topbar-role-link" style="${pillBtnStyle};text-decoration:none;display:inline-block">Seller</a>
 
       <div style="position:relative;display:inline-block">
         <button id="vtUserMenuBtn" style="display:flex;align-items:center;gap:8px;background:transparent;border:none;color:inherit;cursor:pointer;font-size:13px;padding:4px 8px;border-radius:8px;font-family:inherit">
@@ -65,8 +52,6 @@ function mountUserMenu(mountId, user, opts) {
     </div>
   `;
 
-  wireDropdown('vtBuyerMenuBtn', 'vtBuyerMenuDropdown');
-  wireDropdown('vtSellerMenuBtn', 'vtSellerMenuDropdown');
   wireDropdown('vtUserMenuBtn', 'vtUserMenuDropdown');
   document.addEventListener('click', closeAllVtDropdowns);
 
@@ -80,13 +65,21 @@ function mountUserMenu(mountId, user, opts) {
 
 // The Buyer domain's own pages (its equivalent of the Seller side's big
 // app.html sidebar). One list, used by every buyer/*.html page, so adding or
-// renaming a section only needs to happen here.
+// renaming a section only needs to happen here. Dashboard is the Buyer
+// landing page (what the topbar "Buyer" link opens directly, now that it's
+// no longer a dropdown). Stock and GSTR-1 are native buyer/*.html pages —
+// they read the same underlying products/purchases data as the Seller side
+// (it's the same business account's one inventory), but render inside the
+// Buyer's own topbar/sidebar rather than opening the Seller app screen.
 const VT_BUYER_NAV = [
+  { view: 'dashboard', href: 'buyer/dashboard.html', label: 'Dashboard' },
   { view: 'my-sellers', href: 'buyer/my-sellers.html', label: 'My Sellers' },
   { view: 'place-order', href: 'buyer/place-order.html', label: 'Place Order' },
   { view: 'label-order', href: 'buyer/label-order.html', label: 'Label-Based Auto Order' },
   { view: 'buyer-sku-master', href: 'buyer/buyer-sku-master.html', label: 'Buyer SKU Master' },
-  { view: 'my-orders', href: 'buyer/my-orders.html', label: 'My Orders' }
+  { view: 'my-orders', href: 'buyer/my-orders.html', label: 'My Orders' },
+  { view: 'buyer-stock', href: 'buyer/stock.html', label: 'Stock' },
+  { view: 'buyer-gstr1', href: 'buyer/purchases-gstr.html', label: 'GSTR-1 Filing' }
 ];
 // Renders the persistent left sidebar for a buyer page — the same always-
 // visible-on-the-left treatment the Seller side's app.html sidebar uses,
@@ -116,7 +109,7 @@ function wireDropdown(btnId, dropdownId) {
   });
 }
 function closeAllVtDropdowns() {
-  ['vtBuyerMenuDropdown', 'vtSellerMenuDropdown', 'vtUserMenuDropdown'].forEach(function (id) {
+  ['vtUserMenuDropdown'].forEach(function (id) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   });
@@ -167,6 +160,8 @@ function mountSiteDrawer(mount, base, siteRoot) {
         <div style="${sectionStyle}">Seller</div>
         <a href="${base}app.html" style="${itemStyle}">GST Billing</a>
         <a href="${base}app.html?view=purchases" style="${itemStyle}">Purchase Entry</a>
+        <a href="${base}app.html?view=stock" style="${itemStyle}">Stock Management</a>
+        <a href="${base}app.html?view=purchase-gstr" style="${itemStyle}">Purchase GST Summary</a>
         <a href="${base}seller/order-receive.html" style="${itemStyle}">Order Receive</a>
 
         <div style="${sectionStyle}">Site</div>

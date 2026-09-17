@@ -121,6 +121,7 @@ function activateView(viewName){
   if(viewName === 'invoices') loadInvoices();
   if(viewName === 'purchases') loadPurchases();
   if(viewName === 'trash') loadTrash();
+  if(viewName === 'purchase-gstr') initPurchaseGstr();
 }
 document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', e => {
@@ -902,6 +903,107 @@ function renderPayablesOverview(){
       <td>₹${fmtMoney(r.balance)}</td>
       <td class="row-actions"><button class="btn small" onclick="goToSupplierDashboard('${r.id}')">View</button></td>
     </tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No supplier activity yet.</td></tr>';
+}
+
+/* ---------------- Purchase GST Summary (inward/ITC-side register) ----------------
+   Same idea as GSTR-1 Filing below, but sourced from Purchases instead of
+   Invoices — this is what you bought (from suppliers, or auto-created from
+   an accepted buyer order), not what you sold. */
+let purchaseGstrRows = [];
+async function initPurchaseGstr(){
+  await loadPurchases(); // purchasesCache isn't preloaded at boot, only when Purchases itself has been opened
+  const sel = document.getElementById('pgSupplier');
+  sel.innerHTML = '<option value="">All suppliers</option>' + suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  if(!document.getElementById('pgFrom').value){
+    const today = new Date();
+    const first = new Date(today.getFullYear(), today.getMonth(), 1);
+    document.getElementById('pgFrom').value = first.toISOString().slice(0,10);
+    document.getElementById('pgTo').value = today.toISOString().slice(0,10);
+  }
+  renderPurchaseGstr();
+}
+function renderPurchaseGstr(){
+  const from = document.getElementById('pgFrom').value;
+  const to = document.getElementById('pgTo').value;
+  const supplierFilter = document.getElementById('pgSupplier').value;
+
+  const filtered = purchasesCache.filter(p => {
+    if(from && p.date < from) return false;
+    if(to && p.date > to) return false;
+    if(supplierFilter && p.supplierId !== supplierFilter) return false;
+    return true;
+  });
+
+  purchaseGstrRows = filtered.map(p => {
+    const supplier = suppliersCache.find(s => s.id === p.supplierId);
+    return {
+      date: p.date, supplierName: p.supplierName || (supplier && supplier.name) || 'Unknown',
+      gstin: (supplier && supplier.gstin) || '',
+      taxable: p.subtotal || 0, gst: p.gstTotal || 0, total: p.grandTotal || 0, items: p.items || []
+    };
+  });
+
+  const msgEl = document.getElementById('pgMsg');
+  if(!purchaseGstrRows.length){
+    msgEl.textContent = 'No purchases found for this period/supplier.';
+    msgEl.className = 'msg error';
+    ['pgTotalsCard','pgRateCard','pgRegisterCard'].forEach(id => document.getElementById(id).classList.add('hidden'));
+    return;
+  }
+  msgEl.textContent = `${purchaseGstrRows.length} purchase(s) in this period.`;
+  msgEl.className = 'msg ok';
+
+  let taxable = 0, gst = 0, grand = 0;
+  const byRate = {};
+  purchaseGstrRows.forEach(r => {
+    taxable += r.taxable; gst += r.gst; grand += r.total;
+    r.items.forEach(li => {
+      const rate = li.gstRate || 0;
+      if(!byRate[rate]) byRate[rate] = { taxable: 0, gst: 0 };
+      byRate[rate].taxable += li.taxable || 0;
+      byRate[rate].gst += li.gstAmt || 0;
+    });
+  });
+
+  document.getElementById('pgTaxable').textContent = fmtMoney(taxable);
+  document.getElementById('pgGst').textContent = fmtMoney(gst);
+  document.getElementById('pgGrand').textContent = fmtMoney(grand);
+  document.getElementById('pgTotalsCard').classList.remove('hidden');
+
+  const rates = Object.keys(byRate).map(Number).sort((a,b) => a-b);
+  document.getElementById('pgRateTable').innerHTML = rates.map(r => `
+    <tr><td>${r}%</td><td>${fmtMoney(byRate[r].taxable)}</td><td>${fmtMoney(byRate[r].gst)}</td><td>${fmtMoney(byRate[r].taxable + byRate[r].gst)}</td></tr>
+  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No line-item GST-rate data on these purchases.</td></tr>';
+  document.getElementById('pgRateCard').classList.remove('hidden');
+
+  document.getElementById('pgRegisterTable').innerHTML = purchaseGstrRows.map(r => `
+    <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}</td><td>${esc(r.gstin || '—')}</td>
+    <td>${fmtMoney(r.taxable)}</td><td>${fmtMoney(r.gst)}</td><td>${fmtMoney(r.total)}</td></tr>
+  `).join('');
+  document.getElementById('pgRegisterCard').classList.remove('hidden');
+}
+function exportPurchaseGstrExcel(){
+  if(!purchaseGstrRows.length){ const el = document.getElementById('pgMsg'); el.textContent = 'Run the report first — nothing to export yet.'; el.className = 'msg error'; return; }
+  const header = ['Date','Supplier','GSTIN','Taxable Value','GST Amount','Total'];
+  const rows = purchaseGstrRows.map(r => [r.date, r.supplierName, r.gstin || '', r.taxable, r.gst, r.total]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([header].concat(rows)), 'Purchase Register');
+
+  const byRate = {};
+  purchaseGstrRows.forEach(r => r.items.forEach(li => {
+    const rate = li.gstRate || 0;
+    if(!byRate[rate]) byRate[rate] = { taxable: 0, gst: 0 };
+    byRate[rate].taxable += li.taxable || 0;
+    byRate[rate].gst += li.gstAmt || 0;
+  }));
+  const rateHeader = ['GST Rate','Taxable Value','GST Amount','Total'];
+  const rateRows = Object.keys(byRate).map(Number).sort((a,b) => a-b)
+    .map(r => [r + '%', byRate[r].taxable, byRate[r].gst, byRate[r].taxable + byRate[r].gst]);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([rateHeader].concat(rateRows)), 'Rate Summary');
+
+  const from = document.getElementById('pgFrom').value || 'start';
+  const to = document.getElementById('pgTo').value || 'end';
+  XLSX.writeFile(wb, `Purchase-GST-Register-${from}-to-${to}.xlsx`);
 }
 
 /* ---------------- Purchases (line items pick from the Purchase Product master above, not the billing Products list) ---------------- */
