@@ -145,22 +145,6 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     <button class="vlc-plat" data-p="custom"><span class="dot"></span>Custom</button>
   </div>
 
-  <!-- Moved above the crop/download bench: SKUs are detected immediately on
-       upload, before any cropping happens, so the "send to auto order" step
-       now appears — and can be required — before the download step below. -->
-  <div id="vlcSkuSummary" style="display:none;margin-bottom:22px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
-    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:10px">Detected SKUs</div>
-    <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
-      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Pages</th>
-      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">SKU</th>
-      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Total Qty</th>
-    </tr></thead><tbody id="vlcSkuSummaryTable"></tbody></table>
-    <p style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:12px 0 0">This list shows regardless of whether "print SKU on label" is turned on below — it's just what was read off the file. Ready to turn these into an order?
-      <button class="vlc-btn" style="display:inline-block;width:auto;padding:8px 16px;margin-left:4px" onclick="sendToLabelOrder()">Send to Label-Based Auto Order →</button>
-      (opens signed in, with these SKUs already loaded — no need to upload the file again there).</p>
-    <p id="vlcSendGateNote" style="display:none;font-size:12.5px;color:#9E3608;margin:10px 0 0;font-weight:600">⚠ For a new file, send it to Label-Based Auto Order first — the "Crop &amp; download PDF" button below stays locked until you do. Already sent this exact file before? Downloading is unlocked automatically, no need to send it again.</p>
-  </div>
-
   <div class="vlc-bench">
     <!-- LEFT: controls -->
     <div>
@@ -257,6 +241,10 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         <p class="vlc-help" style="margin-top:8px">Flipkart prints the SKU in a small "SKU ID | Description" table on the label (and again on the tax invoice, next to "IMEI/SrNo"). With this on, that SKU and Qty are read off and reprinted in bigger, clearer text at the bottom of the cropped label — e.g. "SKU: VST-WA-FA30-6_7.5 x1".</p>
       </div>
 
+      <div id="vlcSendGateWrap" style="display:none;margin-bottom:10px">
+        <button class="vlc-btn" style="width:100%" onclick="sendToLabelOrder()">Send to Label-Based Auto Order →</button>
+        <p id="vlcSendGateNote" style="display:none;font-size:12px;color:#9E3608;margin:8px 0 0;font-weight:600">⚠ New file — send it above first. The button below unlocks right after (or automatically, if this exact file was already sent before).</p>
+      </div>
       <button class="vlc-btn accent" id="vlcProcessBtn" onclick="processPdf()" disabled>Crop &amp; download PDF</button>
       <div class="vlc-status" id="vlcStatus"></div>
 
@@ -274,6 +262,17 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     </div>
   </div>
 
+  <div id="vlcSkuSummary" style="display:none;margin-top:22px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
+    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:10px">Detected SKUs</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Pages</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">SKU</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Total Qty</th>
+    </tr></thead><tbody id="vlcSkuSummaryTable"></tbody></table>
+    <p style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:12px 0 0">This list shows regardless of whether "print SKU on label" is turned on above — it's just what was read off the file. Ready to turn these into an order?
+      <button class="vlc-btn" style="display:inline-block;width:auto;padding:8px 16px;margin-left:4px" onclick="sendToLabelOrder()">Send to Label-Based Auto Order →</button>
+      (opens signed in, with these SKUs already loaded — no need to upload the file again there).</p>
+  </div>
 
   <div class="vlc-footer">
     <span>VISUTRA Label Cropper — free tool, 100% client-side.</span>
@@ -752,6 +751,7 @@ async function handleFile(file){
   amazonSkuByLabelIndex = {};
   document.getElementById('vlcCourierPanel').style.display = 'none';
   document.getElementById('vlcSkuSummary').style.display = 'none';
+  document.getElementById('vlcSendGateWrap').style.display = 'none';
   document.getElementById('vlcSendGateNote').style.display = 'none';
   await renderPreview();
   // SKU detection always runs on upload, independent of the "print SKU on
@@ -794,18 +794,21 @@ function markSentToOrder(sig){
 }
 function applyDownloadGate(){
   const btn = document.getElementById('vlcProcessBtn');
+  const wrap = document.getElementById('vlcSendGateWrap');
   const note = document.getElementById('vlcSendGateNote');
   if(!pdfBytes){ return; } // no file loaded yet — leave the existing disabled state alone
   if(!lastDetectedRows.length){
     // Nothing detected (e.g. a platform/file with no readable SKUs) — don't lock
-    // downloads behind a step that has nothing to send.
+    // downloads behind a step that has nothing to send, and no button to show.
     btn.disabled = false;
+    wrap.style.display = 'none';
     note.style.display = 'none';
     return;
   }
   const sig = fileSignatureFor(pdfFile ? pdfFile.name : '', lastDetectedRows);
   const alreadySent = hasBeenSentToOrder(sig);
   btn.disabled = !alreadySent;
+  wrap.style.display = 'block';
   note.style.display = alreadySent ? 'none' : 'block';
 }
 function renderSkuSummary(){
