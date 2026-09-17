@@ -8,7 +8,7 @@
   --ink:#17213A;         /* deep indigo-ink text */
   --indigo:#1C2B52;      /* header / footer / dark panels */
   --indigo-soft:#2A3C6B; /* hover state on indigo */
-  --paprika:#C1450F;     /* primary accent / CTA */
+  --paprika:#C1440E;     /* primary accent / CTA */
   --paprika-dark:#9E3608;
   --marigold:#D79B1F;    /* secondary accent */
   --ivory:#F7F1E3;       /* page background */
@@ -46,7 +46,7 @@ h1,h2,h3,h4{font-family:var(--display);margin:0;letter-spacing:-0.01em}
 
 /* ---------- stitch divider (signature element) ---------- */
 .stitch{height:14px;margin:0;background-repeat:repeat-x;background-position:center;background-size:26px 14px;
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='14'%3E%3Cline x1='4' y1='11' x2='10' y2='3' stroke='%23C1450F' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='16' y1='11' x2='22' y2='3' stroke='%23D79B1F' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='14'%3E%3Cline x1='4' y1='11' x2='10' y2='3' stroke='%23C1440E' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='16' y1='11' x2='22' y2='3' stroke='%23D79B1F' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
 }
 .stitch.on-dark{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='14'%3E%3Cline x1='4' y1='11' x2='10' y2='3' stroke='%23D79B1F' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='16' y1='11' x2='22' y2='3' stroke='%23E4D8BD' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E")}
 
