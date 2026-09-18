@@ -84,7 +84,7 @@
   <div class="card hidden" id="verifyCard">
     <div class="verify-box">
       <h2>Check your email</h2>
-      <p class="sub">We sent a verification link to <b id="verifyEmail"></b>. Click it, then come back here and sign in.</p>
+      <p class="sub">We sent a verification link to <b id="verifyEmail"></b>. Click it, then come back here and sign in. Not in your inbox after a few minutes? Check spam/junk before resending.</p>
       <button class="btn" onclick="resendVerification()">Resend verification email</button>
       <p class="msg" id="verifyMsg"></p>
     </div>
@@ -212,11 +212,24 @@ async function submitAuth(){
       });
       await db.collection('usernames').doc(username).set({ uid: cred.user.uid, email });
 
-      await cred.user.sendEmailVerification();
+      // The account now exists and is signed in either way — sendEmailVerification
+      // can fail (rate limit, quota, transient network error) without that
+      // meaning account creation itself failed, so it must never leave this
+      // freshly-created session sitting there authenticated-but-unverified.
+      // signOut() always runs; a verification-send failure still surfaces to
+      // the person via the message below instead of being silently lost.
+      let verifyError = null;
+      try{ await cred.user.sendEmailVerification(); }
+      catch(err){ verifyError = err; }
       await auth.signOut();
+
       document.getElementById('verifyEmail').textContent = email;
       document.getElementById('authCard').classList.add('hidden');
       document.getElementById('verifyCard').classList.remove('hidden');
+      if(verifyError){
+        document.getElementById('verifyMsg').textContent = `Account created, but the verification email failed to send just now (${verifyError.message}). Use "Resend verification email" below to try again.`;
+        document.getElementById('verifyMsg').className = 'msg error';
+      }
     }catch(err){ showMsg(err.message, false); }
 
   } else {
@@ -253,15 +266,36 @@ async function resendVerification(){
   const email = document.getElementById('verifyEmail').textContent;
   const pw = document.getElementById('suPw').value || document.getElementById('siPw').value;
   const msgEl = document.getElementById('verifyMsg');
+  if(!pw){
+    msgEl.textContent = 'Enter your password in the sign-in form above, then try again — it\'s needed to confirm it\'s you before resending.';
+    msgEl.className = 'msg error';
+    return;
+  }
+  let cred = null;
   try{
-    const cred = await auth.signInWithEmailAndPassword(email, pw);
+    cred = await auth.signInWithEmailAndPassword(email, pw);
+  }catch(err){
+    msgEl.textContent = `Could not sign in to resend (${err.message}). Double-check the password above.`;
+    msgEl.className = 'msg error';
+    return;
+  }
+  // Signing in above is only a means to get a fresh, sendable user object —
+  // this must never leave the browser authenticated if what follows fails,
+  // or a resend attempt would silently turn into an unverified active
+  // session instead of just an error message.
+  try{
     await cred.user.sendEmailVerification();
-    await auth.signOut();
-    msgEl.textContent = 'Verification email re-sent.';
+    msgEl.textContent = 'Verification email re-sent — check spam/junk if it doesn\'t arrive in a few minutes.';
     msgEl.className = 'msg ok';
   }catch(err){
-    msgEl.textContent = 'Could not resend automatically — please sign in again to trigger it.';
+    // Surfaced verbatim rather than a generic message — "auth/too-many-requests"
+    // (Firebase's own cooldown between verification sends) is the single most
+    // common real cause when someone reports "the email never arrives," and a
+    // generic message would hide exactly that.
+    msgEl.textContent = `Could not resend: ${err.message}`;
     msgEl.className = 'msg error';
+  }finally{
+    await auth.signOut();
   }
 }
 
