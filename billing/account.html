@@ -70,6 +70,7 @@
     <p>Status: <b id="buyerStatusText">Checking…</b></p>
     <p>Your login email (share this with a seller to get linked): <b id="buyerEmailText"></b></p>
     <button class="btn primary" id="enableBuyerBtn" onclick="enableBuyerFeatures()">Enable Buyer Features</button>
+    <button class="btn danger hidden" id="deactivateBuyerBtn" onclick="deactivateBuyerFeatures()">Deactivate Buyer Features</button>
     <p class="msg" id="buyerMsg"></p>
   </div>
 
@@ -112,6 +113,7 @@ auth.onAuthStateChanged(async user => {
   const buyerEnabled = !!(data.roles && data.roles.buyer);
   document.getElementById('buyerStatusText').textContent = buyerEnabled ? 'Enabled' : 'Not enabled';
   document.getElementById('enableBuyerBtn').classList.toggle('hidden', buyerEnabled);
+  document.getElementById('deactivateBuyerBtn').classList.toggle('hidden', !buyerEnabled);
 });
 
 async function enableBuyerFeatures(){
@@ -124,7 +126,28 @@ async function enableBuyerFeatures(){
     await db.collection('users').doc(currentUser.uid).set({roles: {buyer: true, seller: true}}, {merge:true});
     document.getElementById('buyerStatusText').textContent = 'Enabled';
     document.getElementById('enableBuyerBtn').classList.add('hidden');
+    document.getElementById('deactivateBuyerBtn').classList.remove('hidden');
     showMsg('buyerMsg', `Buyer features enabled. Share ${email} with a seller so they can link you.`, true);
+  }catch(err){
+    showMsg('buyerMsg', err.message, false);
+  }
+}
+
+async function deactivateBuyerFeatures(){
+  if(!confirm('Deactivate Buyer Features? Sellers who\'ve already linked you keep their existing link and your order history — you just stop being discoverable for NEW links, and the Buyer section of Billing becomes unavailable until you re-enable it.')) return;
+  try{
+    await db.collection('users').doc(currentUser.uid).set({ roles: { buyer: false } }, {merge:true});
+    const email = (currentUser.email || '').trim().toLowerCase();
+    if(email){
+      // Best-effort — removes this account from the "does this email have a
+      // buyer account" lookup sellers use when linking someone NEW. Existing
+      // sellerLinks rows aren't touched, so already-linked sellers keep them.
+      await db.collection('buyerDirectory').doc(email).delete().catch(() => {});
+    }
+    document.getElementById('buyerStatusText').textContent = 'Not enabled';
+    document.getElementById('deactivateBuyerBtn').classList.add('hidden');
+    document.getElementById('enableBuyerBtn').classList.remove('hidden');
+    showMsg('buyerMsg', 'Buyer features deactivated.', true);
   }catch(err){
     showMsg('buyerMsg', err.message, false);
   }
