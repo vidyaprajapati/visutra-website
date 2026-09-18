@@ -146,6 +146,16 @@ async function loadProfile(){
     document.getElementById('sigPreview').src = businessData.signature;
     document.getElementById('sigPreviewWrap').classList.remove('hidden');
   }
+  const bank = businessData.bankDetails || {};
+  document.getElementById('bankHolderName').value = bank.holderName || '';
+  document.getElementById('bankName').value = bank.bankName || '';
+  document.getElementById('bankAccountNumber').value = bank.accountNumber || '';
+  document.getElementById('bankIfsc').value = bank.ifsc || '';
+  document.getElementById('bankUpiId').value = bank.upiId || '';
+  if(bank.qrImage){
+    document.getElementById('bankQrPreview').src = bank.qrImage;
+    document.getElementById('bankQrPreviewWrap').classList.remove('hidden');
+  }
 }
 
 async function saveProfile(){
@@ -245,6 +255,74 @@ async function saveSignature(){
   document.getElementById('sigPreview').src = dataUrl;
   document.getElementById('sigPreviewWrap').classList.remove('hidden');
   showMsg('sigMsg', 'Signature saved.', true);
+}
+
+/* ---------------- Bank Details ---------------- */
+let uploadedBankQrDataUrl = null;
+function handleBankQrUpload(evt){
+  const file = evt.target.files && evt.target.files[0];
+  uploadedBankQrDataUrl = null;
+  if(!file) return;
+  if(file.type !== 'image/png' && file.type !== 'image/jpeg'){
+    showMsg('bankMsg', 'Please choose a JPG or PNG image.', false);
+    evt.target.value = '';
+    return;
+  }
+  if(file.size > 5 * 1024 * 1024){
+    showMsg('bankMsg', 'That image is too large — please use one under 5MB.', false);
+    evt.target.value = '';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      // Scaled into a 180x180 square (QR codes are square, unlike the
+      // signature's wide box) — keeps the saved image comfortably under
+      // Firestore's 1MB document field limit regardless of the source photo.
+      const canvas = document.getElementById('bankQrUploadPreview');
+      canvas.classList.remove('hidden');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const scale = Math.min(canvas.width / img.width, canvas.height / img.height, 1);
+      const w = img.width * scale, h = img.height * scale;
+      ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+      uploadedBankQrDataUrl = canvas.toDataURL('image/png');
+    };
+    img.onerror = () => showMsg('bankMsg', 'Could not read that image file.', false);
+    img.src = reader.result;
+  };
+  reader.onerror = () => showMsg('bankMsg', 'Could not read that image file.', false);
+  reader.readAsDataURL(file);
+}
+async function saveBankDetails(){
+  const bankDetails = {
+    holderName: document.getElementById('bankHolderName').value.trim(),
+    bankName: document.getElementById('bankName').value.trim(),
+    accountNumber: document.getElementById('bankAccountNumber').value.trim(),
+    ifsc: document.getElementById('bankIfsc').value.trim(),
+    upiId: document.getElementById('bankUpiId').value.trim(),
+    qrImage: uploadedBankQrDataUrl || (businessData.bankDetails && businessData.bankDetails.qrImage) || ''
+  };
+  await db.collection('users').doc(currentUser.uid).set({ bankDetails }, {merge: true});
+  businessData.bankDetails = bankDetails;
+  if(bankDetails.qrImage){
+    document.getElementById('bankQrPreview').src = bankDetails.qrImage;
+    document.getElementById('bankQrPreviewWrap').classList.remove('hidden');
+  }
+  uploadedBankQrDataUrl = null;
+  document.getElementById('bankQrFileInput').value = '';
+  document.getElementById('bankQrUploadPreview').classList.add('hidden');
+  showMsg('bankMsg', 'Bank details saved.', true);
+}
+async function removeBankQr(){
+  if(!confirm('Remove the saved payment QR code?')) return;
+  const bankDetails = { ...(businessData.bankDetails || {}), qrImage: '' };
+  await db.collection('users').doc(currentUser.uid).set({ bankDetails }, {merge: true});
+  businessData.bankDetails = bankDetails;
+  document.getElementById('bankQrPreviewWrap').classList.add('hidden');
+  document.getElementById('bankQrPreview').src = '';
+  showMsg('bankMsg', 'QR code removed.', true);
 }
 
 /* ---------------- Products ---------------- */
@@ -591,6 +669,21 @@ function editCustomer(id){
 }
 async function deleteCustomer(id){
   if(!confirm('Delete this customer?')) return;
+  const customer = customersCache.find(x => x.id === id);
+  // A linked customer also has a sellerLinks row, which is what the BUYER's
+  // "My Sellers" page actually reads — deleting only the customer doc used
+  // to leave that row (and this seller) still showing on their side. Deletes
+  // on sellerLinks are blocked by rules (by design, so a stray delete can't
+  // wipe shared history), so this marks it removed instead — the buyer-side
+  // queries already filter to status === 'ACTIVE', so a removed link simply
+  // stops appearing for them.
+  if(customer && customer.linkedBuyerUid){
+    const linkId = `${currentUser.uid}_${customer.linkedBuyerUid}`;
+    await db.collection('sellerLinks').doc(linkId).update({
+      status: 'REMOVED_BY_SELLER',
+      removedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).catch(err => console.error('Could not update sellerLinks on customer delete:', err));
+  }
   await db.collection('users').doc(currentUser.uid).collection('customers').doc(id).delete();
   loadCustomers();
 }
@@ -668,17 +761,18 @@ async function loadSuppliers(){
 }
 function renderSuppliers(){
   document.getElementById('suppliersTable').innerHTML = suppliersCache.map(s => `
-    <tr><td>${esc(s.name)}</td><td>${esc(s.gstin||'—')}</td><td>${esc(s.state||'')}</td><td>${esc(s.phone||'')}</td>
+    <tr><td>${esc(s.legalName || '—')}</td><td>${esc(s.name)}</td><td>${esc(s.gstin||'—')}</td><td>${esc(s.state||'')}</td><td>${esc(s.phone||'')}</td>
     <td class="row-actions">
       <button class="btn small" onclick="openSupplierLedger('${s.id}')">Ledger</button>
       <button class="btn small" onclick="editSupplier('${s.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteSupplier('${s.id}')">Delete</button>
-    </td></tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No suppliers yet.</td></tr>';
+    </td></tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No suppliers yet.</td></tr>';
 }
 async function saveSupplier(){
   const id = document.getElementById('sEditId').value;
   const stateCode = document.getElementById('sState').value;
   const data = {
+    legalName: document.getElementById('sLegalName').value.trim(),
     name: document.getElementById('sName').value.trim(),
     gstin: document.getElementById('sGstin').value.trim(),
     address: document.getElementById('sAddress').value.trim(),
@@ -690,7 +784,7 @@ async function saveSupplier(){
   if(!data.name){ showMsg('supplierMsg', 'Supplier name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('suppliers');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['sName','sGstin','sAddress','sEmail','sPhone','sEditId'].forEach(f => document.getElementById(f).value = '');
+  ['sLegalName','sName','sGstin','sAddress','sEmail','sPhone','sEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('sState').value = '';
   showMsg('supplierMsg', 'Saved.', true);
   loadSuppliers();
@@ -698,6 +792,7 @@ async function saveSupplier(){
 function editSupplier(id){
   const s = suppliersCache.find(x => x.id === id);
   document.getElementById('sEditId').value = id;
+  document.getElementById('sLegalName').value = s.legalName || '';
   document.getElementById('sName').value = s.name;
   document.getElementById('sGstin').value = s.gstin || '';
   document.getElementById('sAddress').value = s.address || '';
@@ -954,11 +1049,17 @@ function renderPurchaseGstrSection(){
   `).join('') || '<tr><td colspan="6" style="color:var(--muted)">No purchases this period.</td></tr>';
 
   // Item-level view: one row per product per purchase, so qty/HSN/rate are
-  // visible per line rather than only the per-purchase total above.
+  // visible per line rather than only the per-purchase total above. Falls
+  // back to the Purchase Product's CURRENT hsn when the saved line item has
+  // none — purchases recorded before HSN was added to Purchase Products (or
+  // before it was filled in for that product) won't have it baked into the
+  // old record, but this still shows it correctly once it's set, with no
+  // need to re-save every old purchase by hand.
   const itemRows = [];
   gstr1PurchaseRows.forEach(r => {
     r.items.forEach(li => {
-      itemRows.push({ date: r.date, supplierName: r.supplierName, name: li.name, hsn: li.hsn || '', qty: li.qty, unit: li.unit, gstRate: li.gstRate || 0, taxable: li.taxable || 0, gstAmt: li.gstAmt || 0, total: li.total || 0 });
+      const currentHsn = (purchaseProductsCache.find(p => p.id === li.productId) || {}).hsn || '';
+      itemRows.push({ date: r.date, supplierName: r.supplierName, name: li.name, hsn: li.hsn || currentHsn, qty: li.qty, unit: li.unit, gstRate: li.gstRate || 0, taxable: li.taxable || 0, gstAmt: li.gstAmt || 0, total: li.total || 0 });
     });
   });
   document.getElementById('pgItemsTable').innerHTML = itemRows.map(r => `
@@ -1319,7 +1420,14 @@ function editPurchase(id){
   document.getElementById('purSupplier').value = purchase.supplierId;
   document.getElementById('purDate').value = purchase.date;
   document.getElementById('purPaidNow').value = '0';
-  purchaseLineItems = (purchase.items || []).map(li => ({ productId: li.productId, name: li.name, unit: li.unit, qty: li.qty, rate: li.rate, gstRate: li.gstRate }));
+  // Carries hsn forward from the saved item, and backfills it from the
+  // Purchase Product's CURRENT hsn when the saved item has none — otherwise
+  // editing an old purchase (recorded before hsn existed, or before it was
+  // filled in for that product) would silently drop/never gain hsn on save.
+  purchaseLineItems = (purchase.items || []).map(li => ({
+    productId: li.productId, name: li.name, unit: li.unit, qty: li.qty, rate: li.rate, gstRate: li.gstRate,
+    hsn: li.hsn || (purchaseProductsCache.find(p => p.id === li.productId) || {}).hsn || ''
+  }));
   if(!purchaseLineItems.length) purchaseLineItems.push({productId:'', name:'', unit:'PCS', qty:1, rate:0, gstRate:0});
   renderPurchaseLineItems();
   document.getElementById('purFormTitle').textContent = 'Edit Purchase';
@@ -1770,6 +1878,26 @@ function buildInvoicePDF(inv){
   doc.text('Tax is payable on reverse charge basis: ' + (inv.reverseCharge ? 'Yes' : 'No'), 40, y);
   doc.text('This is a computer-generated invoice.', 40, y+12);
 
+  // Payment details block, bottom left — only drawn if at least one field is
+  // filled in, so an invoice from someone who hasn't set this up yet looks
+  // exactly as it did before this existed.
+  const bank = inv.business.bankDetails || {};
+  const hasBankDetails = bank.holderName || bank.bankName || bank.accountNumber || bank.ifsc || bank.upiId || bank.qrImage;
+  if(hasBankDetails){
+    let by = y + 30;
+    doc.setFont('helvetica','bold'); doc.setFontSize(9);
+    doc.text('Payment Details', 40, by); by += 13;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
+    if(bank.holderName){ doc.text(`Account Holder: ${bank.holderName}`, 40, by); by += 11; }
+    if(bank.bankName){ doc.text(`Bank: ${bank.bankName}`, 40, by); by += 11; }
+    if(bank.accountNumber){ doc.text(`A/c No: ${bank.accountNumber}`, 40, by); by += 11; }
+    if(bank.ifsc){ doc.text(`IFSC: ${bank.ifsc}`, 40, by); by += 11; }
+    if(bank.upiId){ doc.text(`UPI: ${bank.upiId}`, 40, by); by += 11; }
+    if(bank.qrImage){
+      try{ doc.addImage(bank.qrImage, 'PNG', 40, by + 4, 70, 70); }catch(e){}
+    }
+  }
+
   // Signature block, bottom right
   const sigY = y - 10;
   doc.setFontSize(9);
@@ -1991,8 +2119,14 @@ async function generateGstr1(){
     }
 
     items.forEach(li => {
-      const key = li.hsn + '|' + li.gstRate;
-      if(!hsnMap[key]) hsnMap[key] = { hsn: li.hsn, desc: li.name, uqc: li.unit, qty: 0, value: 0, rate: li.gstRate, taxable: 0, igst: 0, cgst: 0, sgst: 0 };
+      // Backfill from the Product's CURRENT hsn when the saved invoice item
+      // has none — older invoices (created before a product had its HSN
+      // filled in, or before HSN was tracked at all) would otherwise always
+      // report blank HSN in this and every future download, even after the
+      // product's HSN gets filled in later.
+      const hsn = li.hsn || (productsCache.find(p => p.id === li.productId) || {}).hsn || '';
+      const key = hsn + '|' + li.gstRate;
+      if(!hsnMap[key]) hsnMap[key] = { hsn, desc: li.name, uqc: li.unit, qty: 0, value: 0, rate: li.gstRate, taxable: 0, igst: 0, cgst: 0, sgst: 0 };
       const taxAmt = li.taxable * (li.gstRate||0) / 100;
       hsnMap[key].qty += li.qty;
       hsnMap[key].taxable += li.taxable;
