@@ -103,6 +103,34 @@
           <img id="sigPreview" alt="Your saved signature" style="max-height:60px;border:1px solid var(--thread);border-radius:8px;background:#fff;padding:6px">
         </div>
       </div>
+
+      <div class="card">
+        <h2>Bank Details</h2>
+        <p class="sub">Shown in a "Payment Details" block on every invoice PDF, so customers know where to pay. All optional — leave blank to omit the block entirely.</p>
+        <div class="grid2">
+          <div class="field"><label>Account holder name</label><input id="bankHolderName" placeholder="e.g. VISUTRA (or your legal name)"></div>
+          <div class="field"><label>Bank name</label><input id="bankName" placeholder="e.g. HDFC Bank"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Account number</label><input id="bankAccountNumber"></div>
+          <div class="field"><label>IFSC code</label><input id="bankIfsc" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"></div>
+        </div>
+        <div class="field"><label>UPI ID</label><input id="bankUpiId" placeholder="e.g. yourname@okhdfcbank"></div>
+
+        <div class="field">
+          <label>Payment QR code (optional — e.g. a screenshot of your UPI QR from Google Pay/PhonePe)</label>
+          <input type="file" id="bankQrFileInput" accept="image/png,image/jpeg" onchange="handleBankQrUpload(event)">
+        </div>
+        <canvas id="bankQrUploadPreview" class="sig-pad hidden" width="180" height="180" style="margin-top:10px"></canvas>
+
+        <div style="margin-top:14px"><button class="btn primary" onclick="saveBankDetails()">Save Bank Details</button></div>
+        <p class="msg" id="bankMsg"></p>
+        <div id="bankQrPreviewWrap" class="hidden" style="margin-top:14px">
+          <p class="sub" style="margin-bottom:6px">Currently saved QR:</p>
+          <img id="bankQrPreview" alt="Your saved payment QR code" style="max-height:120px;border:1px solid var(--thread);border-radius:8px;background:#fff;padding:6px">
+          <button class="btn small danger" style="margin-left:10px" onclick="removeBankQr()">Remove QR</button>
+        </div>
+      </div>
     </div>
 
     <!-- STOCK MANAGEMENT -->
@@ -257,9 +285,10 @@
         <h2>Supplier Master</h2>
         <p class="sub">Add each supplier once — you'll pick from this list when recording a purchase. Click "Ledger" on any row to see their full product-wise, date-wise purchase and payment history.</p>
         <div class="grid2">
-          <div class="field"><label>Supplier / business name</label><input id="sName"></div>
-          <div class="field"><label>GSTIN (leave blank if unregistered)</label><input id="sGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('sGstin','sGstinMsg','sState')"><p class="msg" id="sGstinMsg"></p></div>
+          <div class="field"><label>Legal name (as registered with GST)</label><input id="sLegalName"></div>
+          <div class="field"><label>Supplier / trade name</label><input id="sName"></div>
         </div>
+        <div class="field"><label>GSTIN (leave blank if unregistered)</label><input id="sGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('sGstin','sGstinMsg','sState')"><p class="msg" id="sGstinMsg"></p></div>
         <div class="field"><label>Address</label><textarea id="sAddress"></textarea></div>
         <div class="grid3">
           <div class="field"><label>State</label><select id="sState"></select></div>
@@ -271,7 +300,7 @@
         <p class="msg" id="supplierMsg"></p>
       </div>
       <div class="card">
-        <table><thead><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Phone</th><th></th></tr></thead>
+        <table><thead><tr><th>Legal Name</th><th>Name</th><th>GSTIN</th><th>State</th><th>Phone</th><th></th></tr></thead>
         <tbody id="suppliersTable"></tbody></table>
       </div>
     </div>
