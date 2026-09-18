@@ -136,6 +136,7 @@ function signOut(){ auth.signOut().then(()=> window.location.href = 'login.html'
 async function loadProfile(){
   const snap = await db.collection('users').doc(currentUser.uid).get();
   businessData = snap.data() || {};
+  document.getElementById('bizLegalName').value = businessData.legalName || '';
   document.getElementById('bizName').value = businessData.businessName || '';
   document.getElementById('bizGstin').value = businessData.gstin || '';
   document.getElementById('bizAddress').value = businessData.address || '';
@@ -150,6 +151,7 @@ async function loadProfile(){
 async function saveProfile(){
   const stateCode = document.getElementById('bizState').value;
   const data = {
+    legalName: document.getElementById('bizLegalName').value.trim(),
     businessName: document.getElementById('bizName').value.trim(),
     gstin: document.getElementById('bizGstin').value.trim(),
     address: document.getElementById('bizAddress').value.trim(),
@@ -755,12 +757,12 @@ async function loadPurchaseProducts(){
 function renderPurchaseProducts(){
   document.getElementById('purchaseProductsTable').innerHTML = purchaseProductsCache.map(p => {
     const linked = p.linkedProductId ? productsCache.find(x => x.id === p.linkedProductId) : null;
-    return `<tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td>${linked ? esc(linked.name) : '—'}</td>
+    return `<tr><td>${esc(p.name)}</td><td>${esc(p.hsn || '—')}</td><td>${esc(p.unit)}</td><td>${linked ? esc(linked.name) : '—'}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editPurchaseProduct('${p.id}')">Edit</button>
       <button class="btn small danger" onclick="deletePurchaseProduct('${p.id}')">Delete</button>
     </td></tr>`;
-  }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No purchase products yet.</td></tr>';
+  }).join('') || '<tr><td colspan="5" style="color:var(--muted)">No purchase products yet.</td></tr>';
 }
 async function savePurchaseProduct(){
   const id = document.getElementById('ppEditId').value;
@@ -775,13 +777,14 @@ async function savePurchaseProduct(){
   }
   const data = {
     name,
+    hsn: document.getElementById('ppHsn').value.trim(),
     unit: document.getElementById('ppUnit').value.trim() || 'PCS',
     linkedProductId
   };
   if(!data.name){ showMsg('purchaseProductMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('purchaseProducts');
   if(id){ await col.doc(id).set(data); } else { await col.add(data); }
-  ['ppName','ppUnit','ppEditId'].forEach(f => document.getElementById(f).value = '');
+  ['ppName','ppHsn','ppUnit','ppEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('ppLinkedProduct').value = '';
   showMsg('purchaseProductMsg', 'Saved.', true);
   loadPurchaseProducts();
@@ -790,6 +793,7 @@ function editPurchaseProduct(id){
   const p = purchaseProductsCache.find(x => x.id === id);
   document.getElementById('ppEditId').value = id;
   document.getElementById('ppName').value = p.name;
+  document.getElementById('ppHsn').value = p.hsn || '';
   document.getElementById('ppUnit').value = p.unit;
   document.getElementById('ppLinkedProduct').value = p.linkedProductId || '';
 }
@@ -943,6 +947,24 @@ function renderPurchaseGstrSection(){
     <tr><td>${r}%</td><td>${fmtMoney(byRate[r].taxable)}</td><td>${fmtMoney(byRate[r].gst)}</td><td>${fmtMoney(byRate[r].taxable + byRate[r].gst)}</td></tr>
   `).join('');
   document.getElementById('pgEmptyMsg').classList.toggle('hidden', gstr1PurchaseRows.length > 0);
+
+  document.getElementById('pgRegisterTable').innerHTML = gstr1PurchaseRows.map(r => `
+    <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}</td><td>${esc(r.gstin || '—')}</td>
+    <td>${fmtMoney(r.taxable)}</td><td>${fmtMoney(r.gst)}</td><td>${fmtMoney(r.total)}</td></tr>
+  `).join('') || '<tr><td colspan="6" style="color:var(--muted)">No purchases this period.</td></tr>';
+
+  // Item-level view: one row per product per purchase, so qty/HSN/rate are
+  // visible per line rather than only the per-purchase total above.
+  const itemRows = [];
+  gstr1PurchaseRows.forEach(r => {
+    r.items.forEach(li => {
+      itemRows.push({ date: r.date, supplierName: r.supplierName, name: li.name, hsn: li.hsn || '', qty: li.qty, unit: li.unit, gstRate: li.gstRate || 0, taxable: li.taxable || 0, gstAmt: li.gstAmt || 0, total: li.total || 0 });
+    });
+  });
+  document.getElementById('pgItemsTable').innerHTML = itemRows.map(r => `
+    <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}</td><td>${esc(r.name)}</td><td>${esc(r.hsn || '—')}</td>
+    <td>${r.qty} ${esc(r.unit||'')}</td><td>${r.gstRate}%</td><td>${fmtMoney(r.taxable)}</td><td>${fmtMoney(r.gstAmt)}</td><td>${fmtMoney(r.total)}</td></tr>
+  `).join('') || '<tr><td colspan="9" style="color:var(--muted)">No purchase line items this period.</td></tr>';
 }
 
 /* ---------------- Purchases (line items pick from the Purchase Product master above, not the billing Products list) ---------------- */
@@ -1004,7 +1026,7 @@ function onPurchaseProductPick(idx, productId){
   const supplierId = document.getElementById('purSupplier').value;
   const last = supplierId ? getLastPriceForSupplierProduct(supplierId, productId) : null;
   purchaseLineItems[idx] = {
-    productId, name:p.name, unit:p.unit,
+    productId, name:p.name, unit:p.unit, hsn: p.hsn || '',
     qty: purchaseLineItems[idx].qty || 1,
     rate: last ? last.rate : 0,
     gstRate: last ? last.gstRate : 0,
@@ -1676,9 +1698,18 @@ function buildInvoicePDF(inv){
   y += 24;
 
   doc.setFont('helvetica','bold'); doc.setFontSize(11);
-  doc.text(inv.business.businessName || '', 40, y);
-  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+  // GST invoices are conventionally headed with the supplier's LEGAL name
+  // (as registered against the GSTIN) — the business/trade name, if
+  // different, follows as a smaller "Trading as" line. Falls back to the
+  // business name alone for anyone who hasn't filled in Legal Name yet.
+  doc.text(inv.business.legalName || inv.business.businessName || '', 40, y);
   y += 14;
+  if(inv.business.legalName && inv.business.businessName && inv.business.businessName !== inv.business.legalName){
+    doc.setFont('helvetica','normal'); doc.setFontSize(9);
+    doc.text(`Trading as: ${inv.business.businessName}`, 40, y);
+    y += 12;
+  }
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
   const bizAddrLines = doc.splitTextToSize(inv.business.address || '', 250);
   doc.text(bizAddrLines, 40, y); y += bizAddrLines.length * 12;
   doc.text(`GSTIN: ${inv.business.gstin || ''}`, 40, y); y += 12;
@@ -1742,7 +1773,7 @@ function buildInvoicePDF(inv){
   // Signature block, bottom right
   const sigY = y - 10;
   doc.setFontSize(9);
-  doc.text(`For ${inv.business.businessName || ''}`, pageW-160, sigY, {align:'center'});
+  doc.text(`For ${inv.business.legalName || inv.business.businessName || ''}`, pageW-160, sigY, {align:'center'});
   if(inv.business.signature){
     try{ doc.addImage(inv.business.signature, 'PNG', pageW-210, sigY+8, 100, 40); }catch(e){}
   }
@@ -1981,6 +2012,23 @@ async function generateGstr1(){
   document.getElementById('gstrB2bCount').textContent = b2b.length;
   document.getElementById('gstrB2clCount').textContent = b2cl.length;
   document.getElementById('gstrB2csCount').textContent = b2cs.length;
+
+  // b2b/b2cl/b2cs/hsn are flat rows already shaped to match the table headers
+  // (built above, and also what the Excel export writes) — same arrays, two
+  // renderings.
+  document.getElementById('gstrB2bTable').innerHTML = b2b.map(r => `
+    <tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td>${esc(r[3])}</td><td>${fmtMoney(r[4])}</td><td>${esc(r[5])}</td><td>${r[9]}%</td><td>${fmtMoney(r[10])}</td></tr>
+  `).join('') || '<tr><td colspan="8" style="color:var(--muted)">No B2B sales this period.</td></tr>';
+  document.getElementById('gstrB2clTable').innerHTML = b2cl.map(r => `
+    <tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${fmtMoney(r[2])}</td><td>${esc(r[3])}</td><td>${r[5]}%</td><td>${fmtMoney(r[6])}</td></tr>
+  `).join('') || '<tr><td colspan="6" style="color:var(--muted)">No B2CL sales this period.</td></tr>';
+  document.getElementById('gstrB2csTable').innerHTML = b2cs.map(r => `
+    <tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${r[3]}%</td><td>${fmtMoney(r[4])}</td></tr>
+  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No B2CS sales this period.</td></tr>';
+  document.getElementById('gstrHsnTable').innerHTML = hsn.map(r => `
+    <tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td>${r[3]}</td><td>${r[5]}%</td><td>${fmtMoney(r[6])}</td><td>${fmtMoney(r[7])}</td><td>${fmtMoney(r[8])}</td><td>${fmtMoney(r[9])}</td><td>${fmtMoney(r[4])}</td></tr>
+  `).join('') || '<tr><td colspan="10" style="color:var(--muted)">No sales this period.</td></tr>';
+
   document.getElementById('gstrSummaryCard').classList.remove('hidden');
   // Show the download card as soon as the Sales side is ready — it must not
   // depend on the Purchases step below succeeding, or a failure there (e.g.
@@ -2021,6 +2069,13 @@ function downloadGstr1Excel(){
   const purHeader = ['Date','Supplier','GSTIN','Taxable Value','GST Amount','Total'];
   const purRows = gstr1PurchaseRows.map(r => [r.date, r.supplierName, r.gstin || '', r.taxable, r.gst, r.total]);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([purHeader].concat(purRows)), 'Purchases - Register');
+
+  const purItemsHeader = ['Date','Supplier','Product','HSN','Qty','Unit','GST Rate','Taxable','GST Amount','Total'];
+  const purItemsRows = [];
+  gstr1PurchaseRows.forEach(r => r.items.forEach(li => {
+    purItemsRows.push([r.date, r.supplierName, li.name, li.hsn || '', li.qty, li.unit || '', li.gstRate || 0, li.taxable || 0, li.gstAmt || 0, li.total || 0]);
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([purItemsHeader].concat(purItemsRows)), 'Purchases - Items');
 
   const byRate = {};
   gstr1PurchaseRows.forEach(r => r.items.forEach(li => {
