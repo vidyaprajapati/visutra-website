@@ -627,7 +627,7 @@ async function loadCustomers(){
 }
 function renderCustomers(){
   document.getElementById('customersTable').innerHTML = customersCache.map(c => `
-    <tr><td>${esc(c.name)}</td><td>${esc(c.gstin||'—')}</td><td>${esc(c.state||'')}</td><td>${esc(c.email||'')}</td>
+    <tr><td>${esc(c.legalName || '—')}</td><td>${esc(c.name)}</td><td>${esc(c.gstin||'—')}</td><td>${esc(c.state||'')}</td><td>${esc(c.email||'')}</td>
     <td>${c.linkStatus === 'ACTIVE' ? `<span class="badge">Linked · ${esc(c.linkedBuyerEmail||'')}</span>` : '<span style="color:var(--muted)">Not linked</span>'}</td>
     <td class="row-actions">
       <button class="btn small" onclick="editCustomer('${c.id}')">Edit</button>
@@ -635,12 +635,13 @@ function renderCustomers(){
       ${c.linkStatus === 'ACTIVE'
         ? `<button class="btn small" onclick="unlinkBuyerAccount('${c.id}')">Unlink</button>`
         : `<button class="btn small" onclick="linkBuyerAccount('${c.id}')">Link Buyer</button>`}
-    </td></tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No customers yet.</td></tr>';
+    </td></tr>`).join('') || '<tr><td colspan="7" style="color:var(--muted)">No customers yet.</td></tr>';
 }
 async function saveCustomer(){
   const id = document.getElementById('cEditId').value;
   const stateCode = document.getElementById('cState').value;
   const data = {
+    legalName: document.getElementById('cLegalName').value.trim(),
     name: document.getElementById('cName').value.trim(),
     gstin: document.getElementById('cGstin').value.trim(),
     address: document.getElementById('cAddress').value.trim(),
@@ -652,7 +653,7 @@ async function saveCustomer(){
   if(!data.name){ showMsg('customerMsg', 'Customer name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('customers');
   if(id){ await col.doc(id).set(data, {merge:true}); } else { await col.add(data); }
-  ['cName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
+  ['cLegalName','cName','cGstin','cAddress','cEmail','cPhone','cEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('cState').value = '';
   showMsg('customerMsg', 'Saved.', true);
   loadCustomers();
@@ -660,6 +661,7 @@ async function saveCustomer(){
 function editCustomer(id){
   const c = customersCache.find(x => x.id === id);
   document.getElementById('cEditId').value = id;
+  document.getElementById('cLegalName').value = c.legalName || '';
   document.getElementById('cName').value = c.name;
   document.getElementById('cGstin').value = c.gstin || '';
   document.getElementById('cAddress').value = c.address || '';
@@ -1743,7 +1745,7 @@ async function saveAndGenerate(sendEmail){
     invoiceNo, date: dateVal, reverseCharge,
     sellerUid: currentUser.uid, // required so the public_invoices Firestore rule can enforce ownership
     business: { ...businessData },
-    customer: { name:customer.name, gstin:customer.gstin, address:customer.address, state:customer.state, stateCode:customer.stateCode, email:customer.email },
+    customer: { legalName:customer.legalName, name:customer.name, gstin:customer.gstin, address:customer.address, state:customer.state, stateCode:customer.stateCode, email:customer.email },
     items: lineItems.map(li => ({...li, taxable: lineTaxable(li)})),
     subtotal: totals.subtotal, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, grandTotal: totals.grand,
     sameState: totals.sameState,
@@ -1835,7 +1837,13 @@ function buildInvoicePDF(inv){
 
   doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.text('Bill To:', 40, y); y += 14;
   doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
-  doc.text(inv.customer.name || '', 40, y); y += 12;
+  // Same legal-name-first convention as the seller's own header above.
+  doc.text(inv.customer.legalName || inv.customer.name || '', 40, y); y += 12;
+  if(inv.customer.legalName && inv.customer.name && inv.customer.name !== inv.customer.legalName){
+    doc.setFontSize(8.5);
+    doc.text(`Trading as: ${inv.customer.name}`, 40, y); y += 11;
+    doc.setFontSize(9.5);
+  }
   const custAddrLines = doc.splitTextToSize(inv.customer.address || '', 300);
   doc.text(custAddrLines, 40, y); y += custAddrLines.length * 12;
   if(inv.customer.gstin){ doc.text(`GSTIN: ${inv.customer.gstin}`, 40, y); y += 12; }
