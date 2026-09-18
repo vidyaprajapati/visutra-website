@@ -228,12 +228,16 @@ async function onMappingSellerChange(){
   // Your own products (sellerUid === yourself) show your FULL catalog — the
   // buyerVisibility flag only makes sense when it's someone ELSE deciding
   // what to expose to you as a buyer; it has no meaning against your own list.
+  // For someone else's catalog, the query must filter on active too — the
+  // Firestore rule requires both active==true AND buyerVisibility==true, and
+  // rejects the whole list request if the query doesn't also constrain on
+  // active (see seller-products.html's equivalent query for the full note).
   const isSelf = sellerUid === currentUser.uid;
   const query = isSelf
     ? db.collection('users').doc(sellerUid).collection('products')
-    : db.collection('users').doc(sellerUid).collection('products').where('buyerVisibility', '==', true);
+    : db.collection('users').doc(sellerUid).collection('products').where('active', '==', true).where('buyerVisibility', '==', true);
   const snap = await query.get();
-  sellerProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.active !== false);
+  sellerProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
   prodSel.innerHTML = '<option value="">Select product…</option>' +
     sellerProductsCache.map(p => `<option value="${p.id}">${esc(p.name)}${p.sku ? ' ('+esc(p.sku)+')' : ''}</option>`).join('');
 }
@@ -384,9 +388,9 @@ async function onPackagingSellerChange(){
   const isSelf = sellerUid === currentUser.uid;
   const query = isSelf
     ? db.collection('users').doc(sellerUid).collection('products')
-    : db.collection('users').doc(sellerUid).collection('products').where('buyerVisibility', '==', true);
+    : db.collection('users').doc(sellerUid).collection('products').where('active', '==', true).where('buyerVisibility', '==', true);
   const snap = await query.get();
-  packagingProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.active !== false);
+  packagingProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
   prodSel.innerHTML = '<option value="">Select product…</option>' +
     packagingProductsCache.map(p => `<option value="${p.id}">${esc(p.name)}${p.sku ? ' ('+esc(p.sku)+')' : ''}</option>`).join('');
 }

@@ -24,7 +24,12 @@
   <div class="sidebar" id="buyerSidebarMount"></div>
   <div class="main" style="max-width:900px">
 
-  <div class="card">
+  <div class="card" id="noSellersCard" style="display:none;background:#FFF7ED;border:1.5px solid #E8A32C">
+    <h2>No Sellers Linked Yet</h2>
+    <p class="sub">You need at least one linked seller before you can place an order. Share your login email (from <a href="../account.html">My Account</a>) with a seller to get started.</p>
+  </div>
+
+  <div class="card" id="orderFormCard">
     <h2>Product Select Order</h2>
     <p class="sub">Pick a linked seller, choose products from their catalog, and send the order. The price shown here is the seller's current price — the seller's own Product Master price at the moment they accept is what actually goes on the GST invoice, so if it's changed in between, the invoice may differ slightly from this preview.</p>
     <div class="field" style="max-width:360px"><label>Seller</label><select id="oSeller" onchange="onSellerChange()"><option value="">Select seller…</option></select></div>
@@ -82,6 +87,8 @@ auth.onAuthStateChanged(async user => {
   }
 
   await loadLinkedSellers();
+  document.getElementById('noSellersCard').style.display = sellersCache.length ? 'none' : 'block';
+  document.getElementById('orderFormCard').style.display = sellersCache.length ? 'block' : 'none';
   if(preselectSellerId){ document.getElementById('oSeller').value = preselectSellerId; await onSellerChange(); }
 });
 
@@ -100,8 +107,11 @@ async function onSellerChange(){
   if(!sellerUid){ document.getElementById('catalogCard').style.display = 'none'; return; }
   document.getElementById('catalogCard').style.display = 'block';
   document.getElementById('catalogTable').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr>';
-  const snap = await db.collection('users').doc(sellerUid).collection('products').where('buyerVisibility', '==', true).get();
-  catalogCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.active !== false);
+  const snap = await db.collection('users').doc(sellerUid).collection('products')
+    .where('active', '==', true).where('buyerVisibility', '==', true).get();
+  // Must filter on active too, matching the Firestore rule exactly — see
+  // the comment in seller-products.html's equivalent query.
+  catalogCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
   renderCatalog();
 }
 function renderCatalog(){

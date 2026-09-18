@@ -69,8 +69,14 @@ async function loadSellerAndProducts(){
     document.getElementById('sellerHeading').textContent = `${sellerName} — Products`;
 
     const prodSnap = await db.collection('users').doc(sellerId).collection('products')
-      .where('buyerVisibility', '==', true).get();
-    const products = prodSnap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.active !== false);
+      .where('active', '==', true).where('buyerVisibility', '==', true).get();
+    // The Firestore rule for reading another seller's products requires BOTH
+    // active==true AND buyerVisibility==true — the query must filter on
+    // both too, or Firestore rejects the whole list request outright rather
+    // than silently dropping the docs that wouldn't qualify (this is why an
+    // otherwise-correctly-linked buyer would see "Could not load" here even
+    // though the seller really had marked products buyer-visible).
+    const products = prodSnap.docs.map(d => ({id: d.id, ...d.data()}));
 
     document.getElementById('productsTable').innerHTML = products.map(p => `
       <tr><td>${esc(p.name)}</td><td>${esc(p.sku||'—')}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td>
