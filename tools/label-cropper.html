@@ -287,6 +287,16 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:8px 0 0">Uploading several files at once instead? Use the full <a href="../billing/buyer/label-order.html" target="_blank" rel="noopener">Upload Shipping Labels</a> page.</p>
   </div>
 
+  <div id="vlcStockPanel" style="display:none;margin-top:18px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
+    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:10px">Packaging &amp; Label Stock — For Products In This File</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Product</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Packaging Stock</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Label Stock</th>
+    </tr></thead><tbody id="vlcStockTable"></tbody></table>
+    <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:10px 0 0">Rows in red are at or below your reorder level — set it per product in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a>, where you also define packaging/label size. Stock reduces once per label the first time it's actually cropped &amp; downloaded here — re-downloading the exact same labels won't reduce it again.</p>
+  </div>
+
   <div id="vlcUnmappedCard" style="display:none;margin-top:18px;padding:18px 20px;background:#FFF7ED;border:1.5px solid #E8A32C;border-radius:var(--radius,10px)">
     <div style="font-weight:700;font-size:14px;margin-bottom:6px">⚠ New SKUs Found</div>
     <p style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:0 0 10px">These aren't defined in your <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a> yet. Define each one there (pick the seller + product it belongs to), then click "Send to Label-Based Auto Order" again — one mapping resolves every occurrence.</p>
@@ -335,6 +345,7 @@ let pageAspect = 1 / 1.4142; // fallback A4 portrait ratio (w/h)
 let cropperUser = null;      // this page's own auth capture — separate from assets/auth-guard.js's listener, which only gates page access
 let buyerData = {};
 let mappingsCache = [];      // this buyer's ACTIVE buyerSkuMappings
+let packagingCache = [];     // this buyer's buyerProductPackaging (packaging/label size + stock, one per seller+product)
 let sellerEmailById = {};
 let todayKey = new Date().toISOString().slice(0, 10);
 let todayDraftsCache = {};   // sellerId -> labelOrderDrafts/{todayKey}_{sellerId}
@@ -346,6 +357,7 @@ firebase.auth().onAuthStateChanged(async user => {
     const snap = await db.collection('users').doc(user.uid).get();
     buyerData = (snap.exists && snap.data()) || {};
     await loadMappings();
+    await loadPackaging();
     await loadSellerEmails();
     await loadTodayDrafts();
   }catch(err){
@@ -354,6 +366,13 @@ firebase.auth().onAuthStateChanged(async user => {
     // still works; only the inline order summary would be unavailable.
   }
 });
+async function loadPackaging(){
+  const snap = await db.collection('users').doc(cropperUser.uid).collection('buyerProductPackaging').get();
+  packagingCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+}
+function findPackaging(sellerUid, productId){
+  return packagingCache.find(p => p.sellerUid === sellerUid && p.productId === productId) || null;
+}
 async function loadMappings(){
   const snap = await db.collection('users').doc(cropperUser.uid).collection('buyerSkuMappings').get();
   mappingsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(m => m.status === 'ACTIVE');
@@ -1010,6 +1029,7 @@ async function handleFile(file){
   amazonSkuByLabelIndex = {};
   document.getElementById('vlcCourierPanel').style.display = 'none';
   document.getElementById('vlcSkuSummary').style.display = 'none';
+  document.getElementById('vlcStockPanel').style.display = 'none';
   document.getElementById('vlcSendGateWrap').style.display = 'none';
   document.getElementById('vlcSendGateNote').style.display = 'none';
   await renderPreview();
@@ -1104,14 +1124,43 @@ function renderSkuSummary(){
 
   lastDetectedRows = rows;
   const panel = document.getElementById('vlcSkuSummary');
-  if(!rows.length){ panel.style.display = 'none'; applyDownloadGate(); return; }
+  if(!rows.length){ panel.style.display = 'none'; renderStockPanel([]); applyDownloadGate(); return; }
   document.getElementById('vlcSkuSummaryTable').innerHTML = rows.map(r =>
     `<tr><td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.pages.join(', ')}</td>
      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD);font-family:var(--font-mono,monospace)">${escapeHtml(r.sku)}</td>
      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.qty}</td></tr>`
   ).join('');
   panel.style.display = 'block';
+  renderStockPanel(rows);
   applyDownloadGate();
+}
+/* Shows current packaging/label stock for whichever products the detected
+   SKUs resolve to (one row per product, not per SKU — several SKUs can map
+   to the same product). Purely informational here; the actual deduction
+   happens in processPdf() at the moment of an actual crop & download. */
+function renderStockPanel(rows){
+  const panelEl = document.getElementById('vlcStockPanel');
+  const seenProducts = {}; // `${sellerUid}_${productId}` -> packaging doc
+  rows.forEach(r => {
+    const mapping = findMapping(currentPlatform.toUpperCase(), r.sku);
+    if(!mapping) return;
+    const pkg = findPackaging(mapping.sellerId, mapping.productId);
+    if(!pkg) return;
+    seenProducts[`${mapping.sellerId}_${mapping.productId}`] = pkg;
+  });
+  const list = Object.values(seenProducts);
+  if(!list.length){ panelEl.style.display = 'none'; return; }
+  document.getElementById('vlcStockTable').innerHTML = list.map(p => {
+    const pkgLow = (p.packagingStock||0) <= (p.packagingMinQty||0);
+    const lblLow = (p.labelStock||0) <= (p.labelMinQty||0);
+    const rowStyle = (pkgLow || lblLow) ? ' style="background:#FBE4DE;color:#7A2A12"' : '';
+    return `<tr${rowStyle}>
+      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${escapeHtml(p.productName)}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${p.packagingStock||0}${pkgLow ? ' ⚠ reorder' : ''}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${p.labelStock||0}${lblLow ? ' ⚠ reorder' : ''}</td>
+    </tr>`;
+  }).join('');
+  panelEl.style.display = 'block';
 }
 
 /* Runs the already-detected SKUs through the SAME merge-into-today's-draft
@@ -1250,6 +1299,82 @@ const OUT_SIZES = {
   'a6': [298, 420],
   '4x8': [288, 576]
 };
+
+/* ---------------- Packaging & Label stock consumption ----------------
+   Runs from processPdf() itself (the actual "Crop & download PDF" action),
+   completely independent of the "Require sending order first" toggle and
+   the order-draft/processedLabels system above — stock must reduce whether
+   or not an order ever gets sent for these labels.
+
+   Dedup is keyed on the exact set of pages actually exported in ONE
+   processPdf() call (platform + courier filter + filename + page indices +
+   the resolved sku/qty set), not just the file as a whole — a courier-
+   filtered partial download and the full "download all" are different
+   exports and both count, but clicking the SAME download again (a genuine
+   reprint) produces the identical key and is skipped. Note: redownloading
+   the same physical pages through a DIFFERENT export path (e.g. "download
+   all" and then a single courier's "Download" button covering an
+   overlapping set of pages) isn't recognized as the same event and would
+   still consume stock twice — a limit of hashing by page-set rather than
+   tracking every physical label individually. */
+function computeExportSkuQty(pageIndexOrder, amazonSkuMode){
+  const skuQty = {};
+  if(amazonSkuMode){
+    pageIndexOrder.forEach(i => {
+      (amazonSkuByLabelIndex[i] || []).forEach(it => { skuQty[it.sku] = (skuQty[it.sku] || 0) + it.qty; });
+    });
+  } else {
+    pageIndexOrder.forEach(i => {
+      const sku = pageSkus[i];
+      if(sku && sku !== 'Unknown SKU') skuQty[sku] = (skuQty[sku] || 0) + (pageQtys[i] || 1);
+    });
+  }
+  return skuQty;
+}
+async function consumeStockForExport(pageIndexOrder, courierFilter, amazonSkuMode){
+  const skuQty = computeExportSkuQty(pageIndexOrder, amazonSkuMode);
+  const skus = Object.keys(skuQty);
+  if(!skus.length) return; // nothing resolvable to a SKU on this export — nothing to consume
+
+  const hash = 'stockgrp_' + hashText(`${currentPlatform}|${courierFilter||'all'}|${pdfFile ? pdfFile.name : ''}|${pageIndexOrder.join('-')}|${JSON.stringify(skuQty)}`);
+  const markerRef = db.collection('users').doc(cropperUser.uid).collection('stockConsumedGroups').doc(hash);
+  try{
+    const already = await markerRef.get();
+    if(already.exists) return; // this exact export has already had its stock deducted — a reprint
+  }catch(err){
+    console.error('Stock dedup check failed, skipping stock deduction for this export to avoid a possible double-count:', err);
+    return;
+  }
+
+  // Aggregate by product — several SKUs (e.g. Amazon + Meesho SKUs for the
+  // same physical product) can appear in one export and must add to the
+  // same packaging/label stock, not be treated as separate products.
+  const qtyByDocId = {};
+  const marketplace = currentPlatform.toUpperCase();
+  skus.forEach(sku => {
+    const mapping = findMapping(marketplace, sku);
+    if(!mapping) return;
+    const pkg = findPackaging(mapping.sellerId, mapping.productId);
+    if(!pkg) return;
+    const docId = `${mapping.sellerId}_${mapping.productId}`;
+    qtyByDocId[docId] = (qtyByDocId[docId] || 0) + skuQty[sku];
+  });
+
+  const docIds = Object.keys(qtyByDocId);
+  if(docIds.length){
+    const col = db.collection('users').doc(cropperUser.uid).collection('buyerProductPackaging');
+    await Promise.all(docIds.map(docId => col.doc(docId).update({
+      packagingStock: firebase.firestore.FieldValue.increment(-qtyByDocId[docId]),
+      labelStock: firebase.firestore.FieldValue.increment(-qtyByDocId[docId])
+    }).catch(err => console.error(`Stock update failed for ${docId}:`, err))));
+  }
+
+  try{ await markerRef.set({ consumedAt: firebase.firestore.FieldValue.serverTimestamp(), skuQty, courierFilter: courierFilter || null }); }
+  catch(err){ console.error('Failed to mark this export as stock-consumed — a reprint of the same file may double-deduct:', err); }
+
+  await loadPackaging(); // pick up the new numbers
+  renderStockPanel(lastDetectedRows);
+}
 
 async function processPdf(courierFilter){
   if(!pdfBytes){ alert('Upload a PDF first.'); return; }
@@ -1402,6 +1527,13 @@ async function processPdf(courierFilter){
     a.click();
     URL.revokeObjectURL(url);
     status.textContent = `Done — ${outDoc.getPageCount()} label(s) exported${courierFilter ? ' for ' + courierFilter : ''}.`;
+
+    // Reduce packaging/label stock for whatever was actually exported just
+    // now — after the download itself succeeded, and independent of the
+    // "Require sending order first" toggle (see the function's own comment
+    // for the reprint-safe dedup this relies on).
+    try{ await consumeStockForExport(pageIndexOrder, courierFilter, amazonSkuMode); }
+    catch(err){ console.error('Packaging/label stock update failed (download itself still succeeded):', err); }
   }catch(err){
     console.error(err);
     status.textContent = 'Something went wrong — check the file is a valid PDF.';
