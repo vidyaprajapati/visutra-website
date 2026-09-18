@@ -64,6 +64,13 @@
     <h2>Purchase Register</h2>
     <table><thead><tr><th>Date</th><th>Seller</th><th>Order #</th><th>Taxable</th><th>GST</th><th>Total</th></tr></thead>
     <tbody id="registerTable"></tbody></table>
+
+    <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">By Item (HSN-wise)</h3>
+    <div style="max-height:320px;overflow-y:auto">
+      <table><thead><tr><th>Date</th><th>Seller</th><th>Product</th><th>HSN</th><th>Qty</th><th>Rate %</th><th>Taxable</th><th>GST Amt</th><th>Total</th></tr></thead>
+      <tbody id="itemsTable"></tbody></table>
+    </div>
+
     <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn primary" onclick="exportExcel()">Download Excel</button>
       <button class="btn" onclick="exportJson()">Download JSON</button>
@@ -81,6 +88,7 @@
 <script>
 let currentUser = null;
 let purchasesCache = [];
+let purchaseProductsCache = []; // for backfilling hsn on older items that predate it being tracked
 let reportRows = [];
 let reportPeriodLabel = '';
 let reportFileTag = '';
@@ -178,6 +186,8 @@ auth.onAuthStateChanged(async user => {
 
   const purSnap = await db.collection('users').doc(currentUser.uid).collection('purchases').where('autoCreatedFromOrder', '==', true).get();
   purchasesCache = purSnap.docs.map(d => ({id:d.id, ...d.data()}));
+  const ppSnap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').get();
+  purchaseProductsCache = ppSnap.docs.map(d => ({id: d.id, ...d.data()}));
 });
 
 function generateReport(){
@@ -233,6 +243,17 @@ function generateReport(){
     <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}</td><td>${esc(r.orderNumber)}</td>
     <td>${fmtMoney(r.taxable)}</td><td>${fmtMoney(r.gst)}</td><td>${fmtMoney(r.total)}</td></tr>
   `).join('');
+
+  const itemRows = [];
+  reportRows.forEach(r => r.items.forEach(li => {
+    const currentHsn = (purchaseProductsCache.find(p => p.id === li.productId) || {}).hsn || '';
+    itemRows.push({ date: r.date, supplierName: r.supplierName, name: li.name, hsn: li.hsn || currentHsn, qty: li.qty, unit: li.unit, gstRate: li.gstRate || 0, taxable: li.taxable || 0, gstAmt: li.gstAmt || 0, total: li.total || 0 });
+  }));
+  document.getElementById('itemsTable').innerHTML = itemRows.map(r => `
+    <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}</td><td>${esc(r.name)}</td><td>${esc(r.hsn || '—')}</td>
+    <td>${r.qty} ${esc(r.unit||'')}</td><td>${r.gstRate}%</td><td>${fmtMoney(r.taxable)}</td><td>${fmtMoney(r.gstAmt)}</td><td>${fmtMoney(r.total)}</td></tr>
+  `).join('') || '<tr><td colspan="9" style="color:var(--muted)">No purchase line items this period.</td></tr>';
+
   document.getElementById('registerCard').classList.remove('hidden');
 }
 
@@ -242,6 +263,13 @@ function exportExcel(){
   const rows = reportRows.map(r => [r.date, r.supplierName, r.orderNumber, r.taxable, r.gst, r.total]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([header].concat(rows)), 'Purchase Register');
+
+  const itemsHeader = ['Date','Seller','Product','HSN','Qty','Unit','GST Rate','Taxable','GST Amount','Total'];
+  const itemsRows = [];
+  reportRows.forEach(r => r.items.forEach(li => {
+    itemsRows.push([r.date, r.supplierName, li.name, li.hsn || '', li.qty, li.unit || '', li.gstRate || 0, li.taxable || 0, li.gstAmt || 0, li.total || 0]);
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([itemsHeader].concat(itemsRows)), 'Purchase Items');
 
   const byRate = {};
   reportRows.forEach(r => r.items.forEach(li => {
@@ -272,7 +300,7 @@ function exportJson(){
     purchases: reportRows.map(r => ({
       date: r.date, seller: r.supplierName, orderNumber: r.orderNumber,
       taxableValue: fix2(r.taxable), gstAmount: fix2(r.gst), total: fix2(r.total),
-      items: r.items.map(li => ({ name: li.name, qty: li.qty, unit: li.unit, gstRate: li.gstRate, taxable: fix2(li.taxable||0), gstAmt: fix2(li.gstAmt||0), total: fix2(li.total||0) }))
+      items: r.items.map(li => ({ name: li.name, hsn: li.hsn || '', qty: li.qty, unit: li.unit, gstRate: li.gstRate, taxable: fix2(li.taxable||0), gstAmt: fix2(li.gstAmt||0), total: fix2(li.total||0) }))
     }))
   };
   const blob = new Blob([JSON.stringify(json, null, 2)], {type:'application/json'});

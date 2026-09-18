@@ -76,8 +76,27 @@ async function loadSellers(){
     <td class="row-actions">
       <a class="btn small" href="seller-products.html?sellerId=${encodeURIComponent(l.sellerUid)}">View Products</a>
       <a class="btn small primary" href="place-order.html?sellerId=${encodeURIComponent(l.sellerUid)}">Place Order</a>
+      <button class="btn small danger" onclick="unlinkSeller('${l.id}', '${esc(l.sellerName || l.sellerEmail || 'this seller')}')">Remove</button>
     </td></tr>
   `).join('') || '<tr><td colspan="3" style="color:var(--muted)">No sellers have linked your account yet. Share your login email (from My Account) with a seller to get started.</td></tr>';
+}
+
+/* Removing a seller only ever changes THIS row's status — never deletes it,
+   since sellerLinks also carries the history other things read (e.g. which
+   supplier your past purchases from them are filed under). Requires a
+   Firestore rules update to allow the buyer side of this specific, narrow
+   change — see BILLING-SETUP.md. */
+async function unlinkSeller(linkId, sellerLabel){
+  if(!confirm(`Remove ${sellerLabel} from My Sellers? Your order and purchase history with them is kept — you'd need them to link you again to place new orders.`)) return;
+  try{
+    await db.collection('sellerLinks').doc(linkId).update({
+      status: 'REMOVED_BY_BUYER',
+      removedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await loadSellers();
+  }catch(err){
+    alert(`Could not remove: ${err.message}`);
+  }
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
