@@ -29,15 +29,20 @@
     <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first, then get linked by a seller from their Customers page.</p>
   </div>
 
+  <div class="card" id="noSellersCard" style="display:none;background:#FFF7ED;border:1.5px solid #E8A32C">
+    <h2>No Sellers Linked Yet</h2>
+    <p class="sub">That's fine — you can still map SKUs, define packaging/label sizes, and assign them to your own products by picking "Myself" as the seller below. Placing actual orders (Place Order, sending a Label-Based Auto Order) does need a real linked seller, though — share your login email (from <a href="../account.html">My Account</a>) with a seller whenever you're ready for that.</p>
+  </div>
+
   <div class="card" id="mappingFormCard">
     <h2 id="mappingFormTitle">Add SKU Mapping</h2>
-    <p class="sub">Links one of a linked seller's products to whatever SKU each marketplace uses for it, plus your own internal SKU if you use one. A seller's SKU is <b>not</b> globally unique — that's exactly why this maps seller + product together, not the SKU text alone.</p>
+    <p class="sub">Links a product to whatever SKU each marketplace uses for it, plus your own internal SKU if you use one. Pick "Myself" below to map against your own products (no seller needed) or a linked seller's product — a SKU isn't globally unique either way, which is why this maps source + product together, not the SKU text alone.</p>
     <div class="grid2">
-      <div class="field"><label>Seller</label><select id="mSeller" onchange="onMappingSellerChange()"><option value="">Select seller…</option></select></div>
-      <div class="field"><label>Seller Product</label><select id="mProduct" onchange="onMappingProductChange()"><option value="">Select seller first…</option></select></div>
+      <div class="field"><label>Source</label><select id="mSeller" onchange="onMappingSellerChange()"><option value="">Select…</option></select></div>
+      <div class="field"><label>Product</label><select id="mProduct" onchange="onMappingProductChange()"><option value="">Select source first…</option></select></div>
     </div>
     <div class="grid2">
-      <div class="field"><label>Seller SKU (from the product, read-only)</label><input id="mSellerSku" readonly style="background:var(--ivory);color:var(--muted)"></div>
+      <div class="field"><label>SKU (from the product, read-only)</label><input id="mSellerSku" readonly style="background:var(--ivory);color:var(--muted)"></div>
       <div class="field"><label>Buyer Internal SKU (optional)</label><input id="mBuyerSku" placeholder="e.g. BUY-WMC-001"></div>
     </div>
     <div class="grid3">
@@ -85,10 +90,10 @@
 
   <div class="card" id="packagingFormCard">
     <h2 id="packagingFormTitle">Assign Sizes to a Product</h2>
-    <p class="sub">Pick a seller + product, then just pick which packaging size and label size it uses from the lists above — no stock to enter here, since stock lives on the size itself and several products can share one size.</p>
+    <p class="sub">Pick "Myself" (your own products) or a linked seller + their product, then just pick which packaging size and label size it uses from the lists above — no stock to enter here, since stock lives on the size itself and several products can share one size.</p>
     <div class="grid2">
-      <div class="field"><label>Seller</label><select id="pkgSeller" onchange="onPackagingSellerChange()"><option value="">Select seller…</option></select></div>
-      <div class="field"><label>Seller Product</label><select id="pkgProduct" onchange="onPackagingProductChange()"><option value="">Select seller first…</option></select></div>
+      <div class="field"><label>Source</label><select id="pkgSeller" onchange="onPackagingSellerChange()"><option value="">Select…</option></select></div>
+      <div class="field"><label>Product</label><select id="pkgProduct" onchange="onPackagingProductChange()"><option value="">Select source first…</option></select></div>
     </div>
     <div class="grid2">
       <div class="field"><label>Packaging size</label><select id="pkgPackagingSizeId"><option value="">None</option></select></div>
@@ -170,12 +175,16 @@ auth.onAuthStateChanged(async user => {
   const data = snap.data() || {};
   const isBuyer = !!(data.roles && data.roles.buyer);
   document.getElementById('notBuyerCard').style.display = isBuyer ? 'none' : 'block';
-  document.getElementById('mappingFormCard').style.display = isBuyer ? 'block' : 'none';
-  document.getElementById('packagingFormCard').style.display = isBuyer ? 'block' : 'none';
   document.getElementById('packagingSizesCard').style.display = isBuyer ? 'block' : 'none';
   document.getElementById('labelSizesCard').style.display = isBuyer ? 'block' : 'none';
+  // Both forms below always work now — "Myself" is always a selectable
+  // pseudo-seller for mapping/assigning against your own products, so
+  // neither form actually needs a real linked seller to be useful.
+  document.getElementById('mappingFormCard').style.display = isBuyer ? 'block' : 'none';
+  document.getElementById('packagingFormCard').style.display = isBuyer ? 'block' : 'none';
 
   await loadLinkedSellers();
+  document.getElementById('noSellersCard').style.display = (isBuyer && !sellersCache.length) ? 'block' : 'none';
   await loadMappings();
   await loadUnmapped();
   await loadPackagingSizes();
@@ -183,23 +192,31 @@ auth.onAuthStateChanged(async user => {
   await loadPackaging();
 });
 
-/* ---------------- Linked sellers + their buyer-visible products ---------------- */
+/* ---------------- Linked sellers + their buyer-visible products ----------------
+   "Myself" is always offered as a pseudo-seller — its uid is just the
+   signed-in user's own — so SKU mapping and packaging/label size assignment
+   both work for someone's own products (the ones they already sell/manage
+   in their own Products master, same one used for GST Billing) with no
+   seller relationship required at all. Ordering FROM someone genuinely does
+   need a real seller (Place Order, Label-Based Auto Order's actual send-
+   order step) — those still require an entry in sellersCache. */
+const SELF_SELLER_LABEL = 'Myself (my own products — no seller needed)';
 async function loadLinkedSellers(){
   const snap = await db.collection('sellerLinks').where('buyerUid', '==', currentUser.uid).get();
   sellersCache = snap.docs.map(d => d.data()).filter(l => l.status === 'ACTIVE')
     .map(l => ({ sellerUid: l.sellerUid, sellerName: l.sellerName || l.sellerEmail || 'Seller' }));
 
+  const selfOption = `<option value="${currentUser.uid}">${esc(SELF_SELLER_LABEL)}</option>`;
+  const sellerOptions = sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
+
   const sel = document.getElementById('mSeller');
-  sel.innerHTML = '<option value="">Select seller…</option>' +
-    sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
+  sel.innerHTML = '<option value="">Select…</option>' + selfOption + sellerOptions;
 
   const pkgSel = document.getElementById('pkgSeller');
-  pkgSel.innerHTML = '<option value="">Select seller…</option>' +
-    sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
+  pkgSel.innerHTML = '<option value="">Select…</option>' + selfOption + sellerOptions;
 
   const fSel = document.getElementById('fSeller');
-  fSel.innerHTML = '<option value="">All sellers</option>' +
-    sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
+  fSel.innerHTML = '<option value="">All</option>' + selfOption + sellerOptions;
 }
 async function onMappingSellerChange(){
   const sellerUid = document.getElementById('mSeller').value;
@@ -208,14 +225,21 @@ async function onMappingSellerChange(){
   sellerProductsCache = [];
   if(!sellerUid){ prodSel.innerHTML = '<option value="">Select seller first…</option>'; return; }
   prodSel.innerHTML = '<option value="">Loading…</option>';
-  const snap = await db.collection('users').doc(sellerUid).collection('products').where('buyerVisibility', '==', true).get();
+  // Your own products (sellerUid === yourself) show your FULL catalog — the
+  // buyerVisibility flag only makes sense when it's someone ELSE deciding
+  // what to expose to you as a buyer; it has no meaning against your own list.
+  const isSelf = sellerUid === currentUser.uid;
+  const query = isSelf
+    ? db.collection('users').doc(sellerUid).collection('products')
+    : db.collection('users').doc(sellerUid).collection('products').where('buyerVisibility', '==', true);
+  const snap = await query.get();
   sellerProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.active !== false);
   prodSel.innerHTML = '<option value="">Select product…</option>' +
     sellerProductsCache.map(p => `<option value="${p.id}">${esc(p.name)}${p.sku ? ' ('+esc(p.sku)+')' : ''}</option>`).join('');
 }
 function onMappingProductChange(){
   const p = sellerProductsCache.find(x => x.id === document.getElementById('mProduct').value);
-  document.getElementById('mSellerSku').value = p ? (p.sku || '(seller has not set a SKU for this product)') : '';
+  document.getElementById('mSellerSku').value = p ? (p.sku || '(no SKU set on this product yet)') : '';
 }
 
 /* ---------------- Packaging & Label Sizes (shared stock pools) ----------------
@@ -357,7 +381,11 @@ async function onPackagingSellerChange(){
   packagingProductsCache = [];
   if(!sellerUid){ prodSel.innerHTML = '<option value="">Select seller first…</option>'; return; }
   prodSel.innerHTML = '<option value="">Loading…</option>';
-  const snap = await db.collection('users').doc(sellerUid).collection('products').where('buyerVisibility', '==', true).get();
+  const isSelf = sellerUid === currentUser.uid;
+  const query = isSelf
+    ? db.collection('users').doc(sellerUid).collection('products')
+    : db.collection('users').doc(sellerUid).collection('products').where('buyerVisibility', '==', true);
+  const snap = await query.get();
   packagingProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.active !== false);
   prodSel.innerHTML = '<option value="">Select product…</option>' +
     packagingProductsCache.map(p => `<option value="${p.id}">${esc(p.name)}${p.sku ? ' ('+esc(p.sku)+')' : ''}</option>`).join('');
@@ -396,17 +424,17 @@ function renderPackaging(){
 }
 async function savePackaging(){
   const sellerUid = document.getElementById('pkgSeller').value;
-  const seller = sellersCache.find(s => s.sellerUid === sellerUid);
+  const sellerName = sellerUid ? resolveSellerName(sellerUid) : null;
   const productId = document.getElementById('pkgProduct').value;
   const product = packagingProductsCache.find(p => p.id === productId);
-  if(!seller || !product){ showMsg('packagingMsg', 'Select a seller and one of their products.', false); return; }
+  if(!sellerName || !product){ showMsg('packagingMsg', 'Select a seller (or "Myself") and one of the products.', false); return; }
 
   const packagingSizeId = document.getElementById('pkgPackagingSizeId').value || null;
   const labelSizeId = document.getElementById('pkgLabelSizeId').value || null;
   const pszSize = packagingSizeId ? packagingSizesCache.find(s => s.id === packagingSizeId) : null;
   const lszSize = labelSizeId ? labelSizesCache.find(s => s.id === labelSizeId) : null;
   const data = {
-    sellerUid, sellerName: seller.sellerName, productId, productName: product.name,
+    sellerUid, sellerName, productId, productName: product.name,
     packagingSizeId, packagingSizeName: pszSize ? pszSize.name : '',
     labelSizeId, labelSizeName: lszSize ? lszSize.name : '',
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -472,12 +500,21 @@ function renderMappings(){
     </td></tr>
   `).join('') || '<tr><td colspan="9" style="color:var(--muted)">No SKU mappings yet.</td></tr>';
 }
+/* Resolves a display name for either a real linked seller or the "Myself"
+   pseudo-seller — used wherever a mapping/assignment needs a sellerName to
+   store, since sellersCache never contains a "Myself" entry (it isn't a
+   real sellerLinks row). */
+function resolveSellerName(sellerUid){
+  if(sellerUid === currentUser.uid) return SELF_SELLER_LABEL;
+  const s = sellersCache.find(x => x.sellerUid === sellerUid);
+  return s ? s.sellerName : null;
+}
 async function saveMapping(){
   const sellerUid = document.getElementById('mSeller').value;
-  const seller = sellersCache.find(s => s.sellerUid === sellerUid);
+  const sellerName = sellerUid ? resolveSellerName(sellerUid) : null;
   const productId = document.getElementById('mProduct').value;
   const product = sellerProductsCache.find(p => p.id === productId);
-  if(!seller || !product){ showMsg('mappingMsg', 'Select a seller and one of their products.', false); return; }
+  if(!sellerName || !product){ showMsg('mappingMsg', 'Select a seller (or "Myself") and one of the products.', false); return; }
 
   const amazonSku = document.getElementById('mAmazonSku').value.trim();
   const meeshoSku = document.getElementById('mMeeshoSku').value.trim();
@@ -491,7 +528,7 @@ async function saveMapping(){
   const editId = document.getElementById('mEditId').value;
   const data = {
     sellerId: sellerUid,
-    sellerName: seller.sellerName,
+    sellerName,
     productId,
     productName: product.name,
     sellerSku: product.sku || '',

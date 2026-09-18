@@ -170,11 +170,20 @@ async function processFiles(){
    queue if it isn't mapped yet). */
 async function processHits(hits, fileCount){
   unmappedFound = {};
-  let mergedCount = 0, skippedCount = 0;
+  let mergedCount = 0, skippedCount = 0, selfCount = 0;
   for(const hit of hits){
     if(await isAlreadyProcessed(hit.pageHash)){ skippedCount++; continue; } // already part of a SENT order
     const mapping = findMapping(hit.marketplace, hit.sku);
     if(mapping){
+      if(mapping.sellerId === currentUser.uid){
+        // Mapped to one of your OWN products ("Myself" in Buyer SKU Master)
+        // — there's no seller to order from, so this page (which only ever
+        // builds an order draft) has nothing to do with it. Use the Label
+        // Cropper instead for your own products — it crops/downloads AND
+        // tracks packaging/label stock without needing an order at all.
+        selfCount++;
+        continue;
+      }
       const wasNew = await mergeItemIntoDraft(mapping, hit);
       if(wasNew) mergedCount++; else skippedCount++; // already sitting in today's unsent draft
     } else {
@@ -186,6 +195,7 @@ async function processHits(hits, fileCount){
   }
 
   const msg = `Found ${hits.length} item(s)` + (fileCount ? ` across ${fileCount} file(s)` : '') + `. ${mergedCount} added to today's summary.` +
+    (selfCount ? ` ${selfCount} matched your own products — no order needed for those; use the Label Cropper to print them.` : '') +
     (skippedCount ? ` ${skippedCount} already counted (sent earlier, or already in today's summary).` : '');
   showMsg('uploadMsg', msg, true);
   renderUnmapped();
