@@ -63,9 +63,10 @@
         <h2>Business Profile</h2>
         <p class="sub">This information appears on every invoice you generate. Fill it in before creating your first invoice.</p>
         <div class="grid2">
-          <div class="field"><label>Business name</label><input id="bizName"></div>
-          <div class="field"><label>GSTIN</label><input id="bizGstin" placeholder="e.g. 09BVHPP4321G1ZJ" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('bizGstin','bizGstinMsg','bizState')"><p class="msg" id="bizGstinMsg"></p></div>
+          <div class="field"><label>Legal name (as registered with GST)</label><input id="bizLegalName" placeholder="e.g. Shri Ram Pistons & Rings Ltd."></div>
+          <div class="field"><label>Business / trade name</label><input id="bizName" placeholder="e.g. VISUTRA"></div>
         </div>
+        <div class="field"><label>GSTIN</label><input id="bizGstin" placeholder="e.g. 09BVHPP4321G1ZJ" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('bizGstin','bizGstinMsg','bizState')"><p class="msg" id="bizGstinMsg"></p></div>
         <div class="field"><label>Address</label><textarea id="bizAddress"></textarea></div>
         <div class="grid2">
           <div class="field"><label>State</label><select id="bizState"></select></div>
