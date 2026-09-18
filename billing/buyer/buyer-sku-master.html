@@ -51,6 +51,38 @@
     <p class="msg" id="mappingMsg"></p>
   </div>
 
+  <div class="card" id="packagingFormCard">
+    <h2 id="packagingFormTitle">Packaging &amp; Label Stock</h2>
+    <p class="sub">One entry per seller + product — this is the physical packaging material and pre-printed label stock you keep on hand for that product, tracked separately from money/quantity ordered. It's consumed automatically when you crop &amp; download labels for it in the <a href="../../tools/label-cropper.html">Label Cropper</a>, and a re-download of the exact same labels won't consume it twice.</p>
+    <div class="grid2">
+      <div class="field"><label>Seller</label><select id="pkgSeller" onchange="onPackagingSellerChange()"><option value="">Select seller…</option></select></div>
+      <div class="field"><label>Seller Product</label><select id="pkgProduct" onchange="onPackagingProductChange()"><option value="">Select seller first…</option></select></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Packaging size</label><input id="pkgPackagingSize" placeholder="e.g. 24x18 inch poly bag"></div>
+      <div class="field"><label>Label size</label><input id="pkgLabelSize" placeholder="e.g. 4x6 inch thermal"></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Packaging stock on hand</label><input id="pkgPackagingStock" type="number" min="0" value="0"></div>
+      <div class="field"><label>Label stock on hand</label><input id="pkgLabelStock" type="number" min="0" value="0"></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Packaging — reorder below</label><input id="pkgPackagingMin" type="number" min="0" value="0"></div>
+      <div class="field"><label>Label — reorder below</label><input id="pkgLabelMin" type="number" min="0" value="0"></div>
+    </div>
+    <input type="hidden" id="pkgEditId">
+    <button class="btn primary" onclick="savePackaging()">Save</button>
+    <button class="btn small" onclick="resetPackagingForm()">Clear</button>
+    <p class="msg" id="packagingMsg"></p>
+  </div>
+
+  <div class="card">
+    <h2>Packaging &amp; Label Stock — By Product</h2>
+    <p class="sub">Rows in red are at or below the reorder level you set — time to buy more packaging or labels for that product.</p>
+    <table><thead><tr><th>Seller</th><th>Product</th><th>Packaging Size</th><th>Packaging Stock</th><th>Label Size</th><th>Label Stock</th><th></th></tr></thead>
+    <tbody id="packagingTable"></tbody></table>
+  </div>
+
   <div class="card">
     <h2>SKU Mappings</h2>
     <div class="grid3">
@@ -115,10 +147,12 @@ auth.onAuthStateChanged(async user => {
   const isBuyer = !!(data.roles && data.roles.buyer);
   document.getElementById('notBuyerCard').style.display = isBuyer ? 'none' : 'block';
   document.getElementById('mappingFormCard').style.display = isBuyer ? 'block' : 'none';
+  document.getElementById('packagingFormCard').style.display = isBuyer ? 'block' : 'none';
 
   await loadLinkedSellers();
   await loadMappings();
   await loadUnmapped();
+  await loadPackaging();
 });
 
 /* ---------------- Linked sellers + their buyer-visible products ---------------- */
@@ -129,6 +163,10 @@ async function loadLinkedSellers(){
 
   const sel = document.getElementById('mSeller');
   sel.innerHTML = '<option value="">Select seller…</option>' +
+    sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
+
+  const pkgSel = document.getElementById('pkgSeller');
+  pkgSel.innerHTML = '<option value="">Select seller…</option>' +
     sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
 
   const fSel = document.getElementById('fSeller');
@@ -150,6 +188,107 @@ async function onMappingSellerChange(){
 function onMappingProductChange(){
   const p = sellerProductsCache.find(x => x.id === document.getElementById('mProduct').value);
   document.getElementById('mSellerSku').value = p ? (p.sku || '(seller has not set a SKU for this product)') : '';
+}
+
+/* ---------------- Packaging & Label Stock ----------------
+   One doc per seller+product (docId = `${sellerUid}_${productId}`), so
+   there's exactly one packaging/label stock record per physical product no
+   matter how many marketplace SKUs (rows in buyerSkuMappings) point to it. */
+let packagingProductsCache = []; // buyer-visible products of whichever seller is selected in THIS form (separate from sellerProductsCache, which belongs to the mapping form above)
+let packagingCache = [];
+async function onPackagingSellerChange(){
+  const sellerUid = document.getElementById('pkgSeller').value;
+  const prodSel = document.getElementById('pkgProduct');
+  packagingProductsCache = [];
+  if(!sellerUid){ prodSel.innerHTML = '<option value="">Select seller first…</option>'; return; }
+  prodSel.innerHTML = '<option value="">Loading…</option>';
+  const snap = await db.collection('users').doc(sellerUid).collection('products').where('buyerVisibility', '==', true).get();
+  packagingProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.active !== false);
+  prodSel.innerHTML = '<option value="">Select product…</option>' +
+    packagingProductsCache.map(p => `<option value="${p.id}">${esc(p.name)}${p.sku ? ' ('+esc(p.sku)+')' : ''}</option>`).join('');
+}
+function onPackagingProductChange(){
+  // If this seller+product already has a packaging record, load it straight
+  // into the form instead of leaving the buyer to re-enter what's already set.
+  const sellerUid = document.getElementById('pkgSeller').value;
+  const productId = document.getElementById('pkgProduct').value;
+  const existing = packagingCache.find(p => p.sellerUid === sellerUid && p.productId === productId);
+  if(existing){ fillPackagingForm(existing); } else { clearPackagingFields(); }
+}
+async function loadPackaging(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerProductPackaging').get();
+  packagingCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  renderPackaging();
+}
+function renderPackaging(){
+  document.getElementById('packagingTable').innerHTML = packagingCache.map(p => {
+    const low = (p.packagingStock||0) <= (p.packagingMinQty||0) || (p.labelStock||0) <= (p.labelMinQty||0);
+    return `<tr${low ? ' style="background:#FBE4DE;color:#7A2A12"' : ''}>
+      <td>${esc(p.sellerName)}</td><td>${esc(p.productName)}</td>
+      <td>${esc(p.packagingSize||'—')}</td><td>${p.packagingStock||0}${(p.packagingStock||0) <= (p.packagingMinQty||0) ? ' ⚠' : ''}</td>
+      <td>${esc(p.labelSize||'—')}</td><td>${p.labelStock||0}${(p.labelStock||0) <= (p.labelMinQty||0) ? ' ⚠' : ''}</td>
+      <td class="row-actions">
+        <button class="btn small" onclick="editPackaging('${p.id}')">Edit</button>
+        <button class="btn small danger" onclick="deletePackaging('${p.id}')">Delete</button>
+      </td></tr>`;
+  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No packaging/label stock defined yet.</td></tr>';
+}
+async function savePackaging(){
+  const sellerUid = document.getElementById('pkgSeller').value;
+  const seller = sellersCache.find(s => s.sellerUid === sellerUid);
+  const productId = document.getElementById('pkgProduct').value;
+  const product = packagingProductsCache.find(p => p.id === productId);
+  if(!seller || !product){ showMsg('packagingMsg', 'Select a seller and one of their products.', false); return; }
+
+  const data = {
+    sellerUid, sellerName: seller.sellerName, productId, productName: product.name,
+    packagingSize: document.getElementById('pkgPackagingSize').value.trim(),
+    labelSize: document.getElementById('pkgLabelSize').value.trim(),
+    packagingStock: parseInt(document.getElementById('pkgPackagingStock').value, 10) || 0,
+    labelStock: parseInt(document.getElementById('pkgLabelStock').value, 10) || 0,
+    packagingMinQty: parseInt(document.getElementById('pkgPackagingMin').value, 10) || 0,
+    labelMinQty: parseInt(document.getElementById('pkgLabelMin').value, 10) || 0,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const docId = `${sellerUid}_${productId}`;
+  await db.collection('users').doc(currentUser.uid).collection('buyerProductPackaging').doc(docId).set(data, {merge: true});
+  showMsg('packagingMsg', 'Saved.', true);
+  resetPackagingForm();
+  await loadPackaging();
+}
+function fillPackagingForm(p){
+  document.getElementById('pkgEditId').value = p.id;
+  document.getElementById('pkgPackagingSize').value = p.packagingSize || '';
+  document.getElementById('pkgLabelSize').value = p.labelSize || '';
+  document.getElementById('pkgPackagingStock').value = p.packagingStock || 0;
+  document.getElementById('pkgLabelStock').value = p.labelStock || 0;
+  document.getElementById('pkgPackagingMin').value = p.packagingMinQty || 0;
+  document.getElementById('pkgLabelMin').value = p.labelMinQty || 0;
+}
+function clearPackagingFields(){
+  document.getElementById('pkgEditId').value = '';
+  ['pkgPackagingSize','pkgLabelSize'].forEach(f => document.getElementById(f).value = '');
+  ['pkgPackagingStock','pkgLabelStock','pkgPackagingMin','pkgLabelMin'].forEach(f => document.getElementById(f).value = 0);
+}
+function editPackaging(id){
+  const p = packagingCache.find(x => x.id === id);
+  if(!p) return;
+  document.getElementById('pkgSeller').value = p.sellerUid;
+  onPackagingSellerChange().then(() => {
+    document.getElementById('pkgProduct').value = p.productId;
+    fillPackagingForm(p);
+  });
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+function resetPackagingForm(){
+  document.getElementById('pkgSeller').value = '';
+  document.getElementById('pkgProduct').innerHTML = '<option value="">Select seller first…</option>';
+  clearPackagingFields();
+}
+async function deletePackaging(id){
+  if(!confirm('Delete this packaging/label stock record?')) return;
+  await db.collection('users').doc(currentUser.uid).collection('buyerProductPackaging').doc(id).delete();
+  await loadPackaging();
 }
 
 /* ---------------- Mappings CRUD ---------------- */
