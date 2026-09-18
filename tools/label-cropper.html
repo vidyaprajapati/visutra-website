@@ -1264,11 +1264,20 @@ async function sendToLabelOrder(){
   }));
 
   const unmappedFound = {};
-  let mergedCount = 0, skippedCount = 0;
+  let mergedCount = 0, skippedCount = 0, selfCount = 0;
   for(const hit of hits){
     if(await isAlreadyProcessed(hit.pageHash)){ skippedCount++; continue; }
     const mapping = findMapping(hit.marketplace, hit.sku);
     if(mapping){
+      if(mapping.sellerId === cropperUser.uid){
+        // Mapped to one of your OWN products ("Myself") — there's no seller
+        // to send an order to, so this never goes into a draft. Packaging/
+        // label stock still tracks it fine independently (see the Stock
+        // panel above and processPdf()'s own deduction, neither of which go
+        // through labelOrderDrafts at all).
+        selfCount++;
+        continue;
+      }
       const wasNew = await mergeItemIntoDraft(mapping, hit);
       if(wasNew) mergedCount++; else skippedCount++;
     } else {
@@ -1283,6 +1292,7 @@ async function sendToLabelOrder(){
   await loadTodayDrafts(); // also re-renders the Today's Order Summary card below
 
   status.textContent = `Found ${hits.length} item(s). ${mergedCount} added to today's order summary below.` +
+    (selfCount ? ` ${selfCount} matched your own products (no order needed).` : '') +
     (skippedCount ? ` ${skippedCount} already counted (sent earlier, or already in today's summary).` : '') +
     (Object.keys(unmappedFound).length ? ' Some SKUs need mapping first — see the New SKUs Found box below.' : '');
 
