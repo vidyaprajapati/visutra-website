@@ -257,9 +257,10 @@
       <div class="card">
         <h2>Customers</h2>
         <div class="grid2">
-          <div class="field"><label>Customer / business name</label><input id="cName"></div>
-          <div class="field"><label>GSTIN (leave blank if unregistered)</label><input id="cGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('cGstin','cGstinMsg','cState')"><p class="msg" id="cGstinMsg"></p></div>
+          <div class="field"><label>Legal name (as registered with GST)</label><input id="cLegalName"></div>
+          <div class="field"><label>Customer / trade name</label><input id="cName"></div>
         </div>
+        <div class="field"><label>GSTIN (leave blank if unregistered)</label><input id="cGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('cGstin','cGstinMsg','cState')"><p class="msg" id="cGstinMsg"></p></div>
         <div class="field"><label>Address</label><textarea id="cAddress"></textarea></div>
         <div class="grid3">
           <div class="field"><label>State</label><select id="cState"></select></div>
@@ -272,7 +273,7 @@
       </div>
 
       <div class="card">
-        <table><thead><tr><th>Name</th><th>GSTIN</th><th>State</th><th>Email</th><th>Buyer Link</th><th></th></tr></thead>
+        <table><thead><tr><th>Legal Name</th><th>Name</th><th>GSTIN</th><th>State</th><th>Email</th><th>Buyer Link</th><th></th></tr></thead>
         <tbody id="customersTable"></tbody></table>
         <p class="sub" style="margin-top:10px">To let a customer browse the products you've marked "Buyer Visible" in Product Master, click <b>Link Buyer</b> on their row and enter the email they used to turn on Buyer Features (My Account page) — no need to open Edit first.</p>
         <p class="msg" id="buyerLinkMsg"></p>
