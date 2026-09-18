@@ -33,6 +33,7 @@ a{color:var(--indigo)}
    Billing or Purchase Entry mode is active, so it's clear why the list
    changes when switching modes from the topbar. */
 .sidebar-divider{height:1px;background:var(--thread);margin:10px 24px}
+.sidebar-section-label{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:12px 24px 4px;font-weight:600}
 .main{flex:1;padding:32px;max-width:1100px}
 .card{background:var(--canvas);border:1px solid var(--thread);border-radius:var(--radius);padding:24px;margin-bottom:20px}
 .card h2{margin:0 0 6px;font-family:var(--display);font-size:22px}

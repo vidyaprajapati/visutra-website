@@ -28,12 +28,21 @@ function mountUserMenu(mountId, user, opts) {
   // next to the pill buttons beside it.
   const homeIconSvg = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/><path d="M9.5 20v-6h5v6"/></svg>';
 
+  // Highlights whichever of Buyer/Seller matches the page currently open, so
+  // it's clear at a glance which "side" of the account you're looking at —
+  // every billing/buyer/*.html page is Buyer, everything else under
+  // billing/ (app.html, seller/*.html, account.html, portal.html) is Seller,
+  // since none of those pages are usable without seller/business-side data
+  // even when a buyer relationship is also involved.
+  const isBuyerPage = window.location.pathname.includes('/buyer/');
+  const activePillStyle = `${pillBtnStyle};background:var(--ink,#1F1B16);color:#fff;border-color:var(--ink,#1F1B16)`;
+
   mount.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;font-family:system-ui,sans-serif">
       <a href="${siteRoot}index.html" title="Home" style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;color:inherit;text-decoration:none">${homeIconSvg}</a>
 
-      <a href="${base}buyer/dashboard.html" class="topbar-role-link" style="${pillBtnStyle};text-decoration:none;display:inline-block">Buyer</a>
-      <a href="${base}app.html" class="topbar-role-link" style="${pillBtnStyle};text-decoration:none;display:inline-block">Seller</a>
+      <a href="${base}buyer/dashboard.html" class="topbar-role-link" style="${isBuyerPage ? activePillStyle : pillBtnStyle};text-decoration:none;display:inline-block">Buyer</a>
+      <a href="${base}app.html" class="topbar-role-link" style="${isBuyerPage ? pillBtnStyle : activePillStyle};text-decoration:none;display:inline-block">Seller</a>
 
       <div style="position:relative;display:inline-block">
         <button id="vtUserMenuBtn" style="display:flex;align-items:center;gap:8px;background:transparent;border:none;color:inherit;cursor:pointer;font-size:13px;padding:4px 8px;border-radius:8px;font-family:inherit">
@@ -161,7 +170,7 @@ function mountSiteDrawer(mount, base, siteRoot) {
         <a href="${base}app.html" style="${itemStyle}">GST Billing</a>
         <a href="${base}app.html?view=purchases" style="${itemStyle}">Purchase Entry</a>
         <a href="${base}app.html?view=stock" style="${itemStyle}">Stock Management</a>
-        <a href="${base}app.html?view=purchase-gstr" style="${itemStyle}">Purchase GST Summary</a>
+        <a href="${base}app.html?view=gstr1" style="${itemStyle}">GSTR-1 Filing (Sales &amp; Purchases)</a>
         <a href="${base}seller/order-receive.html" style="${itemStyle}">Order Receive</a>
 
         <div style="${sectionStyle}">Site</div>
