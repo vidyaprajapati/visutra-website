@@ -71,6 +71,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 
 .vlc-bench{display:grid;grid-template-columns:340px 1fr;gap:34px;align-items:start;}
 @media (max-width:900px){.vlc-bench{grid-template-columns:1fr;}}
+@media (max-width:600px){#vlcStockOverviewGrid{grid-template-columns:1fr;}}
 
 /* dropzone */
 .vlc-drop{
@@ -144,6 +145,21 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
   <div class="vlc-hero">
     <h1>Crop A4 dispatch PDFs<br>to thermal-size labels.</h1>
     <p>Upload the shipping-label PDF from Flipkart, Meesho or Amazon, calibrate the crop once per platform, and export a clean thermal-ready PDF. Your files never leave this browser.</p>
+  </div>
+
+  <div id="vlcStockOverview" style="display:none;margin-bottom:26px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
+    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:14px">Current Stock — Packaging &amp; Labels</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:28px" id="vlcStockOverviewGrid">
+      <div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px">Packaging</div>
+        <div id="vlcStockOverviewPackaging"></div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px">Labels</div>
+        <div id="vlcStockOverviewLabels"></div>
+      </div>
+    </div>
+    <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:14px 0 0">Manage sizes, stock and reorder levels in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a>.</p>
   </div>
 
   <div class="vlc-platforms" id="vlcPlatforms">
@@ -345,7 +361,9 @@ let pageAspect = 1 / 1.4142; // fallback A4 portrait ratio (w/h)
 let cropperUser = null;      // this page's own auth capture — separate from assets/auth-guard.js's listener, which only gates page access
 let buyerData = {};
 let mappingsCache = [];      // this buyer's ACTIVE buyerSkuMappings
-let packagingCache = [];     // this buyer's buyerProductPackaging (packaging/label size + stock, one per seller+product)
+let packagingCache = [];     // this buyer's buyerProductPackaging — assignment only (packagingSizeId/labelSizeId), no stock of its own
+let packagingSizesCache = []; // this buyer's buyerPackagingSizes — shared packaging stock pools, one per size
+let labelSizesCache = [];     // this buyer's buyerLabelSizes — shared label stock pools, one per size
 let sellerEmailById = {};
 let todayKey = new Date().toISOString().slice(0, 10);
 let todayDraftsCache = {};   // sellerId -> labelOrderDrafts/{todayKey}_{sellerId}
@@ -358,6 +376,9 @@ firebase.auth().onAuthStateChanged(async user => {
     buyerData = (snap.exists && snap.data()) || {};
     await loadMappings();
     await loadPackaging();
+    await loadPackagingSizes();
+    await loadLabelSizes();
+    renderStockOverviewChart();
     await loadSellerEmails();
     await loadTodayDrafts();
   }catch(err){
@@ -370,8 +391,51 @@ async function loadPackaging(){
   const snap = await db.collection('users').doc(cropperUser.uid).collection('buyerProductPackaging').get();
   packagingCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
 }
+async function loadPackagingSizes(){
+  const snap = await db.collection('users').doc(cropperUser.uid).collection('buyerPackagingSizes').get();
+  packagingSizesCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+}
+async function loadLabelSizes(){
+  const snap = await db.collection('users').doc(cropperUser.uid).collection('buyerLabelSizes').get();
+  labelSizesCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+}
 function findPackaging(sellerUid, productId){
   return packagingCache.find(p => p.sellerUid === sellerUid && p.productId === productId) || null;
+}
+/* Always-visible stock chart in the hero area — unlike the per-file stock
+   panel below (which only shows products found in an uploaded PDF), this
+   shows every packaging/label size you've defined, all the time, so you can
+   check stock without uploading anything first. Bars are simple divs sized
+   relative to the largest stock count in that list — not a canvas/JS chart
+   library, kept consistent with this tool doing everything with plain
+   HTML/CSS already. */
+function renderStockBarList(containerId, sizes){
+  const el = document.getElementById(containerId);
+  if(!sizes.length){
+    el.innerHTML = '<p style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:0">None defined yet.</p>';
+    return;
+  }
+  const maxStock = Math.max(1, ...sizes.map(s => s.stock || 0));
+  el.innerHTML = sizes.map(s => {
+    const low = (s.stock||0) <= (s.minQty||0);
+    const pct = Math.max(2, Math.round((s.stock||0) / maxStock * 100));
+    const barColor = low ? '#C1401F' : '#0E7C6B';
+    return `<div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px">
+        <span>${escapeHtml(s.name)}${low ? ' ⚠' : ''}</span><span style="font-family:var(--font-mono,monospace)">${s.stock||0}</span>
+      </div>
+      <div style="background:var(--paper-2,#E4E7DD);border-radius:4px;height:8px;overflow:hidden">
+        <div style="background:${barColor};width:${pct}%;height:100%"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function renderStockOverviewChart(){
+  const wrap = document.getElementById('vlcStockOverview');
+  if(!packagingSizesCache.length && !labelSizesCache.length){ wrap.style.display = 'none'; return; }
+  renderStockBarList('vlcStockOverviewPackaging', packagingSizesCache);
+  renderStockBarList('vlcStockOverviewLabels', labelSizesCache);
+  wrap.style.display = 'block';
 }
 async function loadMappings(){
   const snap = await db.collection('users').doc(cropperUser.uid).collection('buyerSkuMappings').get();
@@ -1136,28 +1200,43 @@ function renderSkuSummary(){
 }
 /* Shows current packaging/label stock for whichever products the detected
    SKUs resolve to (one row per product, not per SKU — several SKUs can map
-   to the same product). Purely informational here; the actual deduction
-   happens in processPdf() at the moment of an actual crop & download. */
+   to the same product). Stock shown is the shared SIZE-level pool (several
+   products can point at the same size and share one number) — purely
+   informational here; the actual deduction happens in processPdf() at the
+   moment of an actual crop & download. Products that map to a SKU but have
+   NO packaging/label size assigned yet are shown too, with a note — this
+   used to fail silently (the whole panel just wouldn't appear), which
+   looked identical to "no stock at all" even though sizes existed but
+   simply weren't assigned to this product yet. */
 function renderStockPanel(rows){
   const panelEl = document.getElementById('vlcStockPanel');
-  const seenProducts = {}; // `${sellerUid}_${productId}` -> packaging doc
+  const seenProducts = {}; // `${sellerUid}_${productId}` -> { productName, pkg (may be null) }
   rows.forEach(r => {
     const mapping = findMapping(currentPlatform.toUpperCase(), r.sku);
-    if(!mapping) return;
+    if(!mapping) return; // no SKU mapping at all — shown separately in the "New SKUs Found" card
+    const key = `${mapping.sellerId}_${mapping.productId}`;
     const pkg = findPackaging(mapping.sellerId, mapping.productId);
-    if(!pkg) return;
-    seenProducts[`${mapping.sellerId}_${mapping.productId}`] = pkg;
+    seenProducts[key] = { productName: mapping.productName, pkg };
   });
   const list = Object.values(seenProducts);
   if(!list.length){ panelEl.style.display = 'none'; return; }
-  document.getElementById('vlcStockTable').innerHTML = list.map(p => {
-    const pkgLow = (p.packagingStock||0) <= (p.packagingMinQty||0);
-    const lblLow = (p.labelStock||0) <= (p.labelMinQty||0);
+  document.getElementById('vlcStockTable').innerHTML = list.map(entry => {
+    const p = entry.pkg;
+    if(!p){
+      return `<tr style="background:#FFF7ED;color:#8A5A12">
+        <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${escapeHtml(entry.productName)}</td>
+        <td colspan="2" style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">No packaging/label size assigned yet — set it up in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a> → "Assign Sizes to a Product".</td>
+      </tr>`;
+    }
+    const pszSize = packagingSizesCache.find(s => s.id === p.packagingSizeId);
+    const lszSize = labelSizesCache.find(s => s.id === p.labelSizeId);
+    const pkgLow = pszSize && (pszSize.stock||0) <= (pszSize.minQty||0);
+    const lblLow = lszSize && (lszSize.stock||0) <= (lszSize.minQty||0);
     const rowStyle = (pkgLow || lblLow) ? ' style="background:#FBE4DE;color:#7A2A12"' : '';
     return `<tr${rowStyle}>
-      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${escapeHtml(p.productName)}</td>
-      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${p.packagingStock||0}${pkgLow ? ' ⚠ reorder' : ''}</td>
-      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${p.labelStock||0}${lblLow ? ' ⚠ reorder' : ''}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${escapeHtml(entry.productName)}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${pszSize ? escapeHtml(pszSize.name) + ': ' + (pszSize.stock||0) : 'No packaging size assigned'}${pkgLow ? ' ⚠ reorder' : ''}</td>
+      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${lszSize ? escapeHtml(lszSize.name) + ': ' + (lszSize.stock||0) : 'No label size assigned'}${lblLow ? ' ⚠ reorder' : ''}</td>
     </tr>`;
   }).join('');
   panelEl.style.display = 'block';
@@ -1346,34 +1425,41 @@ async function consumeStockForExport(pageIndexOrder, courierFilter, amazonSkuMod
     return;
   }
 
-  // Aggregate by product — several SKUs (e.g. Amazon + Meesho SKUs for the
-  // same physical product) can appear in one export and must add to the
-  // same packaging/label stock, not be treated as separate products.
-  const qtyByDocId = {};
+  // Aggregate by SIZE, not by product — several products (and several SKUs
+  // within one product) can share the same packaging size and/or label
+  // size, and must all draw from that one shared pool rather than each
+  // getting counted against a separate per-product number.
+  const qtyByPackagingSizeId = {};
+  const qtyByLabelSizeId = {};
   const marketplace = currentPlatform.toUpperCase();
   skus.forEach(sku => {
     const mapping = findMapping(marketplace, sku);
     if(!mapping) return;
     const pkg = findPackaging(mapping.sellerId, mapping.productId);
     if(!pkg) return;
-    const docId = `${mapping.sellerId}_${mapping.productId}`;
-    qtyByDocId[docId] = (qtyByDocId[docId] || 0) + skuQty[sku];
+    const qty = skuQty[sku];
+    if(pkg.packagingSizeId) qtyByPackagingSizeId[pkg.packagingSizeId] = (qtyByPackagingSizeId[pkg.packagingSizeId] || 0) + qty;
+    if(pkg.labelSizeId) qtyByLabelSizeId[pkg.labelSizeId] = (qtyByLabelSizeId[pkg.labelSizeId] || 0) + qty;
   });
 
-  const docIds = Object.keys(qtyByDocId);
-  if(docIds.length){
-    const col = db.collection('users').doc(cropperUser.uid).collection('buyerProductPackaging');
-    await Promise.all(docIds.map(docId => col.doc(docId).update({
-      packagingStock: firebase.firestore.FieldValue.increment(-qtyByDocId[docId]),
-      labelStock: firebase.firestore.FieldValue.increment(-qtyByDocId[docId])
-    }).catch(err => console.error(`Stock update failed for ${docId}:`, err))));
-  }
+  const pszCol = db.collection('users').doc(cropperUser.uid).collection('buyerPackagingSizes');
+  const lszCol = db.collection('users').doc(cropperUser.uid).collection('buyerLabelSizes');
+  const updates = [
+    ...Object.keys(qtyByPackagingSizeId).map(id => pszCol.doc(id).update({
+      stock: firebase.firestore.FieldValue.increment(-qtyByPackagingSizeId[id])
+    }).catch(err => console.error(`Packaging size stock update failed for ${id}:`, err))),
+    ...Object.keys(qtyByLabelSizeId).map(id => lszCol.doc(id).update({
+      stock: firebase.firestore.FieldValue.increment(-qtyByLabelSizeId[id])
+    }).catch(err => console.error(`Label size stock update failed for ${id}:`, err)))
+  ];
+  if(updates.length) await Promise.all(updates);
 
   try{ await markerRef.set({ consumedAt: firebase.firestore.FieldValue.serverTimestamp(), skuQty, courierFilter: courierFilter || null }); }
   catch(err){ console.error('Failed to mark this export as stock-consumed — a reprint of the same file may double-deduct:', err); }
 
-  await loadPackaging(); // pick up the new numbers
+  await Promise.all([loadPackagingSizes(), loadLabelSizes()]); // pick up the new numbers
   renderStockPanel(lastDetectedRows);
+  renderStockOverviewChart();
 }
 
 async function processPdf(courierFilter){
