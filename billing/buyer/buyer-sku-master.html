@@ -51,24 +51,48 @@
     <p class="msg" id="mappingMsg"></p>
   </div>
 
+  <div class="card" id="packagingSizesCard">
+    <h2 id="packagingSizeFormTitle">Packaging Sizes</h2>
+    <p class="sub">Define every packaging size you stock, once each, with the quantity on hand — this is a shared pool. Any product assigned to a size below draws from the SAME stock count, so printing a label for one product reduces it for every other product using that same size too.</p>
+    <div class="grid3">
+      <div class="field"><label>Size name</label><input id="pszName" placeholder="e.g. 24x18 inch poly bag"></div>
+      <div class="field"><label>Stock on hand</label><input id="pszStock" type="number" min="0" value="0"></div>
+      <div class="field"><label>Reorder below</label><input id="pszMin" type="number" min="0" value="0"></div>
+    </div>
+    <input type="hidden" id="pszEditId">
+    <button class="btn primary" onclick="savePackagingSize()">Save Packaging Size</button>
+    <button class="btn small" onclick="resetPackagingSizeForm()">Clear</button>
+    <p class="msg" id="packagingSizeMsg"></p>
+    <table style="margin-top:14px"><thead><tr><th>Size</th><th>Stock</th><th>Reorder Below</th><th></th></tr></thead>
+    <tbody id="packagingSizesTable"></tbody></table>
+  </div>
+
+  <div class="card" id="labelSizesCard">
+    <h2 id="labelSizeFormTitle">Label Sizes</h2>
+    <p class="sub">Same idea as packaging sizes above, for pre-printed label stock — one shared pool per size, used across every product assigned to it.</p>
+    <div class="grid3">
+      <div class="field"><label>Size name</label><input id="lszName" placeholder="e.g. 4x6 inch thermal"></div>
+      <div class="field"><label>Stock on hand</label><input id="lszStock" type="number" min="0" value="0"></div>
+      <div class="field"><label>Reorder below</label><input id="lszMin" type="number" min="0" value="0"></div>
+    </div>
+    <input type="hidden" id="lszEditId">
+    <button class="btn primary" onclick="saveLabelSize()">Save Label Size</button>
+    <button class="btn small" onclick="resetLabelSizeForm()">Clear</button>
+    <p class="msg" id="labelSizeMsg"></p>
+    <table style="margin-top:14px"><thead><tr><th>Size</th><th>Stock</th><th>Reorder Below</th><th></th></tr></thead>
+    <tbody id="labelSizesTable"></tbody></table>
+  </div>
+
   <div class="card" id="packagingFormCard">
-    <h2 id="packagingFormTitle">Packaging &amp; Label Stock</h2>
-    <p class="sub">One entry per seller + product — this is the physical packaging material and pre-printed label stock you keep on hand for that product, tracked separately from money/quantity ordered. It's consumed automatically when you crop &amp; download labels for it in the <a href="../../tools/label-cropper.html">Label Cropper</a>, and a re-download of the exact same labels won't consume it twice.</p>
+    <h2 id="packagingFormTitle">Assign Sizes to a Product</h2>
+    <p class="sub">Pick a seller + product, then just pick which packaging size and label size it uses from the lists above — no stock to enter here, since stock lives on the size itself and several products can share one size.</p>
     <div class="grid2">
       <div class="field"><label>Seller</label><select id="pkgSeller" onchange="onPackagingSellerChange()"><option value="">Select seller…</option></select></div>
       <div class="field"><label>Seller Product</label><select id="pkgProduct" onchange="onPackagingProductChange()"><option value="">Select seller first…</option></select></div>
     </div>
     <div class="grid2">
-      <div class="field"><label>Packaging size</label><input id="pkgPackagingSize" placeholder="e.g. 24x18 inch poly bag"></div>
-      <div class="field"><label>Label size</label><input id="pkgLabelSize" placeholder="e.g. 4x6 inch thermal"></div>
-    </div>
-    <div class="grid2">
-      <div class="field"><label>Packaging stock on hand</label><input id="pkgPackagingStock" type="number" min="0" value="0"></div>
-      <div class="field"><label>Label stock on hand</label><input id="pkgLabelStock" type="number" min="0" value="0"></div>
-    </div>
-    <div class="grid2">
-      <div class="field"><label>Packaging — reorder below</label><input id="pkgPackagingMin" type="number" min="0" value="0"></div>
-      <div class="field"><label>Label — reorder below</label><input id="pkgLabelMin" type="number" min="0" value="0"></div>
+      <div class="field"><label>Packaging size</label><select id="pkgPackagingSizeId"><option value="">None</option></select></div>
+      <div class="field"><label>Label size</label><select id="pkgLabelSizeId"><option value="">None</option></select></div>
     </div>
     <input type="hidden" id="pkgEditId">
     <button class="btn primary" onclick="savePackaging()">Save</button>
@@ -78,7 +102,7 @@
 
   <div class="card">
     <h2>Packaging &amp; Label Stock — By Product</h2>
-    <p class="sub">Rows in red are at or below the reorder level you set — time to buy more packaging or labels for that product.</p>
+    <p class="sub">Stock shown here is the shared size-level pool, not something specific to that one product — rows in red mean that SIZE is at or below its reorder level.</p>
     <table><thead><tr><th>Seller</th><th>Product</th><th>Packaging Size</th><th>Packaging Stock</th><th>Label Size</th><th>Label Stock</th><th></th></tr></thead>
     <tbody id="packagingTable"></tbody></table>
   </div>
@@ -148,10 +172,14 @@ auth.onAuthStateChanged(async user => {
   document.getElementById('notBuyerCard').style.display = isBuyer ? 'none' : 'block';
   document.getElementById('mappingFormCard').style.display = isBuyer ? 'block' : 'none';
   document.getElementById('packagingFormCard').style.display = isBuyer ? 'block' : 'none';
+  document.getElementById('packagingSizesCard').style.display = isBuyer ? 'block' : 'none';
+  document.getElementById('labelSizesCard').style.display = isBuyer ? 'block' : 'none';
 
   await loadLinkedSellers();
   await loadMappings();
   await loadUnmapped();
+  await loadPackagingSizes();
+  await loadLabelSizes();
   await loadPackaging();
 });
 
@@ -190,10 +218,137 @@ function onMappingProductChange(){
   document.getElementById('mSellerSku').value = p ? (p.sku || '(seller has not set a SKU for this product)') : '';
 }
 
-/* ---------------- Packaging & Label Stock ----------------
-   One doc per seller+product (docId = `${sellerUid}_${productId}`), so
-   there's exactly one packaging/label stock record per physical product no
-   matter how many marketplace SKUs (rows in buyerSkuMappings) point to it. */
+/* ---------------- Packaging & Label Sizes (shared stock pools) ----------------
+   Sizes are defined once each with their own stock/reorder level; a product
+   is then just ASSIGNED to a size (buyerProductPackaging holds only the
+   assignment, no stock of its own). Multiple products assigned to the same
+   size all draw from that one shared pool — printing a label for any of
+   them reduces it for all of them, which is the actual physical reality
+   (they're drawn from the same box of packaging / roll of labels). */
+let packagingSizesCache = [];
+let labelSizesCache = [];
+async function loadPackagingSizes(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerPackagingSizes').orderBy('name').get();
+  packagingSizesCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  renderPackagingSizes();
+  fillSizeDropdown('pkgPackagingSizeId', packagingSizesCache);
+}
+function renderPackagingSizes(){
+  document.getElementById('packagingSizesTable').innerHTML = packagingSizesCache.map(s => {
+    const low = (s.stock||0) <= (s.minQty||0);
+    return `<tr${low ? ' style="background:#FBE4DE;color:#7A2A12"' : ''}>
+      <td>${esc(s.name)}</td><td>${s.stock||0}${low ? ' ⚠' : ''}</td><td>${s.minQty||0}</td>
+      <td class="row-actions">
+        <button class="btn small" onclick="editPackagingSize('${s.id}')">Edit</button>
+        <button class="btn small danger" onclick="deletePackagingSize('${s.id}')">Delete</button>
+      </td></tr>`;
+  }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No packaging sizes defined yet.</td></tr>';
+}
+async function savePackagingSize(){
+  const name = document.getElementById('pszName').value.trim();
+  if(!name){ showMsg('packagingSizeMsg', 'Enter a size name.', false); return; }
+  const editId = document.getElementById('pszEditId').value;
+  const data = {
+    name,
+    stock: parseInt(document.getElementById('pszStock').value, 10) || 0,
+    minQty: parseInt(document.getElementById('pszMin').value, 10) || 0,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const col = db.collection('users').doc(currentUser.uid).collection('buyerPackagingSizes');
+  if(editId){ await col.doc(editId).set(data, {merge: true}); } else { await col.add(data); }
+  showMsg('packagingSizeMsg', 'Saved.', true);
+  resetPackagingSizeForm();
+  await loadPackagingSizes();
+  renderPackaging();
+}
+function editPackagingSize(id){
+  const s = packagingSizesCache.find(x => x.id === id);
+  if(!s) return;
+  document.getElementById('pszEditId').value = s.id;
+  document.getElementById('pszName').value = s.name;
+  document.getElementById('pszStock').value = s.stock || 0;
+  document.getElementById('pszMin').value = s.minQty || 0;
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+function resetPackagingSizeForm(){
+  document.getElementById('pszEditId').value = '';
+  document.getElementById('pszName').value = '';
+  document.getElementById('pszStock').value = 0;
+  document.getElementById('pszMin').value = 0;
+}
+async function deletePackagingSize(id){
+  if(!confirm('Delete this packaging size? Any product assigned to it will show "None" until reassigned.')) return;
+  await db.collection('users').doc(currentUser.uid).collection('buyerPackagingSizes').doc(id).delete();
+  await loadPackagingSizes();
+  renderPackaging();
+}
+
+async function loadLabelSizes(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerLabelSizes').orderBy('name').get();
+  labelSizesCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  renderLabelSizes();
+  fillSizeDropdown('pkgLabelSizeId', labelSizesCache);
+}
+function renderLabelSizes(){
+  document.getElementById('labelSizesTable').innerHTML = labelSizesCache.map(s => {
+    const low = (s.stock||0) <= (s.minQty||0);
+    return `<tr${low ? ' style="background:#FBE4DE;color:#7A2A12"' : ''}>
+      <td>${esc(s.name)}</td><td>${s.stock||0}${low ? ' ⚠' : ''}</td><td>${s.minQty||0}</td>
+      <td class="row-actions">
+        <button class="btn small" onclick="editLabelSize('${s.id}')">Edit</button>
+        <button class="btn small danger" onclick="deleteLabelSize('${s.id}')">Delete</button>
+      </td></tr>`;
+  }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No label sizes defined yet.</td></tr>';
+}
+async function saveLabelSize(){
+  const name = document.getElementById('lszName').value.trim();
+  if(!name){ showMsg('labelSizeMsg', 'Enter a size name.', false); return; }
+  const editId = document.getElementById('lszEditId').value;
+  const data = {
+    name,
+    stock: parseInt(document.getElementById('lszStock').value, 10) || 0,
+    minQty: parseInt(document.getElementById('lszMin').value, 10) || 0,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const col = db.collection('users').doc(currentUser.uid).collection('buyerLabelSizes');
+  if(editId){ await col.doc(editId).set(data, {merge: true}); } else { await col.add(data); }
+  showMsg('labelSizeMsg', 'Saved.', true);
+  resetLabelSizeForm();
+  await loadLabelSizes();
+  renderPackaging();
+}
+function editLabelSize(id){
+  const s = labelSizesCache.find(x => x.id === id);
+  if(!s) return;
+  document.getElementById('lszEditId').value = s.id;
+  document.getElementById('lszName').value = s.name;
+  document.getElementById('lszStock').value = s.stock || 0;
+  document.getElementById('lszMin').value = s.minQty || 0;
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+function resetLabelSizeForm(){
+  document.getElementById('lszEditId').value = '';
+  document.getElementById('lszName').value = '';
+  document.getElementById('lszStock').value = 0;
+  document.getElementById('lszMin').value = 0;
+}
+async function deleteLabelSize(id){
+  if(!confirm('Delete this label size? Any product assigned to it will show "None" until reassigned.')) return;
+  await db.collection('users').doc(currentUser.uid).collection('buyerLabelSizes').doc(id).delete();
+  await loadLabelSizes();
+  renderPackaging();
+}
+function fillSizeDropdown(selectId, sizesCache){
+  const sel = document.getElementById(selectId);
+  const current = sel.value;
+  sel.innerHTML = '<option value="">None</option>' + sizesCache.map(s => `<option value="${s.id}">${esc(s.name)} (${s.stock||0} in stock)</option>`).join('');
+  if(current && sizesCache.some(s => s.id === current)) sel.value = current;
+}
+
+/* ---------------- Assign packaging/label size to a product ----------------
+   One doc per seller+product (docId = `${sellerUid}_${productId}`) holding
+   ONLY the two size references — the actual stock lives on the size docs
+   above, not here. */
 let packagingProductsCache = []; // buyer-visible products of whichever seller is selected in THIS form (separate from sellerProductsCache, which belongs to the mapping form above)
 let packagingCache = [];
 async function onPackagingSellerChange(){
@@ -208,12 +363,14 @@ async function onPackagingSellerChange(){
     packagingProductsCache.map(p => `<option value="${p.id}">${esc(p.name)}${p.sku ? ' ('+esc(p.sku)+')' : ''}</option>`).join('');
 }
 function onPackagingProductChange(){
-  // If this seller+product already has a packaging record, load it straight
-  // into the form instead of leaving the buyer to re-enter what's already set.
+  // If this seller+product already has a size assignment, load it straight
+  // into the form instead of leaving the buyer to re-pick what's already set.
   const sellerUid = document.getElementById('pkgSeller').value;
   const productId = document.getElementById('pkgProduct').value;
   const existing = packagingCache.find(p => p.sellerUid === sellerUid && p.productId === productId);
-  if(existing){ fillPackagingForm(existing); } else { clearPackagingFields(); }
+  document.getElementById('pkgEditId').value = existing ? existing.id : '';
+  document.getElementById('pkgPackagingSizeId').value = existing ? (existing.packagingSizeId || '') : '';
+  document.getElementById('pkgLabelSizeId').value = existing ? (existing.labelSizeId || '') : '';
 }
 async function loadPackaging(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('buyerProductPackaging').get();
@@ -222,16 +379,20 @@ async function loadPackaging(){
 }
 function renderPackaging(){
   document.getElementById('packagingTable').innerHTML = packagingCache.map(p => {
-    const low = (p.packagingStock||0) <= (p.packagingMinQty||0) || (p.labelStock||0) <= (p.labelMinQty||0);
+    const pszSize = packagingSizesCache.find(s => s.id === p.packagingSizeId);
+    const lszSize = labelSizesCache.find(s => s.id === p.labelSizeId);
+    const pkgLow = pszSize && (pszSize.stock||0) <= (pszSize.minQty||0);
+    const lblLow = lszSize && (lszSize.stock||0) <= (lszSize.minQty||0);
+    const low = pkgLow || lblLow;
     return `<tr${low ? ' style="background:#FBE4DE;color:#7A2A12"' : ''}>
       <td>${esc(p.sellerName)}</td><td>${esc(p.productName)}</td>
-      <td>${esc(p.packagingSize||'—')}</td><td>${p.packagingStock||0}${(p.packagingStock||0) <= (p.packagingMinQty||0) ? ' ⚠' : ''}</td>
-      <td>${esc(p.labelSize||'—')}</td><td>${p.labelStock||0}${(p.labelStock||0) <= (p.labelMinQty||0) ? ' ⚠' : ''}</td>
+      <td>${pszSize ? esc(pszSize.name) : '—'}</td><td>${pszSize ? (pszSize.stock||0) : '—'}${pkgLow ? ' ⚠' : ''}</td>
+      <td>${lszSize ? esc(lszSize.name) : '—'}</td><td>${lszSize ? (lszSize.stock||0) : '—'}${lblLow ? ' ⚠' : ''}</td>
       <td class="row-actions">
         <button class="btn small" onclick="editPackaging('${p.id}')">Edit</button>
         <button class="btn small danger" onclick="deletePackaging('${p.id}')">Delete</button>
       </td></tr>`;
-  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No packaging/label stock defined yet.</td></tr>';
+  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No products assigned to a size yet.</td></tr>';
 }
 async function savePackaging(){
   const sellerUid = document.getElementById('pkgSeller').value;
@@ -240,14 +401,14 @@ async function savePackaging(){
   const product = packagingProductsCache.find(p => p.id === productId);
   if(!seller || !product){ showMsg('packagingMsg', 'Select a seller and one of their products.', false); return; }
 
+  const packagingSizeId = document.getElementById('pkgPackagingSizeId').value || null;
+  const labelSizeId = document.getElementById('pkgLabelSizeId').value || null;
+  const pszSize = packagingSizeId ? packagingSizesCache.find(s => s.id === packagingSizeId) : null;
+  const lszSize = labelSizeId ? labelSizesCache.find(s => s.id === labelSizeId) : null;
   const data = {
     sellerUid, sellerName: seller.sellerName, productId, productName: product.name,
-    packagingSize: document.getElementById('pkgPackagingSize').value.trim(),
-    labelSize: document.getElementById('pkgLabelSize').value.trim(),
-    packagingStock: parseInt(document.getElementById('pkgPackagingStock').value, 10) || 0,
-    labelStock: parseInt(document.getElementById('pkgLabelStock').value, 10) || 0,
-    packagingMinQty: parseInt(document.getElementById('pkgPackagingMin').value, 10) || 0,
-    labelMinQty: parseInt(document.getElementById('pkgLabelMin').value, 10) || 0,
+    packagingSizeId, packagingSizeName: pszSize ? pszSize.name : '',
+    labelSizeId, labelSizeName: lszSize ? lszSize.name : '',
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   const docId = `${sellerUid}_${productId}`;
@@ -256,37 +417,27 @@ async function savePackaging(){
   resetPackagingForm();
   await loadPackaging();
 }
-function fillPackagingForm(p){
-  document.getElementById('pkgEditId').value = p.id;
-  document.getElementById('pkgPackagingSize').value = p.packagingSize || '';
-  document.getElementById('pkgLabelSize').value = p.labelSize || '';
-  document.getElementById('pkgPackagingStock').value = p.packagingStock || 0;
-  document.getElementById('pkgLabelStock').value = p.labelStock || 0;
-  document.getElementById('pkgPackagingMin').value = p.packagingMinQty || 0;
-  document.getElementById('pkgLabelMin').value = p.labelMinQty || 0;
-}
-function clearPackagingFields(){
-  document.getElementById('pkgEditId').value = '';
-  ['pkgPackagingSize','pkgLabelSize'].forEach(f => document.getElementById(f).value = '');
-  ['pkgPackagingStock','pkgLabelStock','pkgPackagingMin','pkgLabelMin'].forEach(f => document.getElementById(f).value = 0);
-}
 function editPackaging(id){
   const p = packagingCache.find(x => x.id === id);
   if(!p) return;
   document.getElementById('pkgSeller').value = p.sellerUid;
   onPackagingSellerChange().then(() => {
     document.getElementById('pkgProduct').value = p.productId;
-    fillPackagingForm(p);
+    document.getElementById('pkgEditId').value = p.id;
+    document.getElementById('pkgPackagingSizeId').value = p.packagingSizeId || '';
+    document.getElementById('pkgLabelSizeId').value = p.labelSizeId || '';
   });
   window.scrollTo({top: 0, behavior: 'smooth'});
 }
 function resetPackagingForm(){
   document.getElementById('pkgSeller').value = '';
   document.getElementById('pkgProduct').innerHTML = '<option value="">Select seller first…</option>';
-  clearPackagingFields();
+  document.getElementById('pkgEditId').value = '';
+  document.getElementById('pkgPackagingSizeId').value = '';
+  document.getElementById('pkgLabelSizeId').value = '';
 }
 async function deletePackaging(id){
-  if(!confirm('Delete this packaging/label stock record?')) return;
+  if(!confirm('Delete this size assignment for the product?')) return;
   await db.collection('users').doc(currentUser.uid).collection('buyerProductPackaging').doc(id).delete();
   await loadPackaging();
 }
