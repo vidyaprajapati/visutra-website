@@ -350,10 +350,26 @@
           <input type="text" class="form-control" id="gstin" placeholder="e.g. 09BVHPP4321G1ZJ" maxlength="15">
           <div class="field-note" id="gstinNote">Detected automatically from your uploaded reports.</div>
         </div>
-        <div class="col-md-6">
-          <label class="field-label" for="period">Return period (label only, for the file name)</label>
-          <input type="text" class="form-control" id="period" placeholder="e.g. Apr-Jun 2026">
+        <div class="col-md-3">
+          <label class="field-label" for="gstFY">Financial Year</label>
+          <select class="form-control" id="gstFY" onchange="onGstFYChange()"></select>
         </div>
+        <div class="col-md-3">
+          <label class="field-label" for="gstFilingType">Filing Type</label>
+          <select class="form-control" id="gstFilingType" onchange="onGstFilingTypeChange()">
+            <option value="monthly">Monthly</option>
+            <option value="quarterly">Quarterly (QRMP)</option>
+          </select>
+        </div>
+        <div class="col-md-6" id="gstMonthWrap">
+          <label class="field-label" for="gstMonth">Month</label>
+          <select class="form-control" id="gstMonth" onchange="onGstPeriodPicked()"></select>
+        </div>
+        <div class="col-md-6 d-none" id="gstQuarterWrap">
+          <label class="field-label" for="gstQuarter">Quarter</label>
+          <select class="form-control" id="gstQuarter" onchange="onGstPeriodPicked()"></select>
+        </div>
+        <div class="field-note">Same Financial-Year / Monthly-or-Quarterly picker as Billing's own GST Filing pages, so periods line up across all three. Drives the file name below and, if you use it, the date range for "Include your own B2B invoices" above.</div>
         <div class="col-md-6">
           <label class="field-label" for="b2clThreshold">B2CL threshold (₹)</label>
           <input type="number" class="form-control" id="b2clThreshold" value="100000">
@@ -724,6 +740,102 @@ var GSTR1 = (function () {
 })();
 
 /* =========================================================================
+   Return period picker — Financial Year + Monthly/Quarterly (QRMP), same
+   convention as Billing's own GST Filing pages (Seller and Buyer), so a
+   period picked here means the same date range everywhere. Auto-selects
+   the current month/quarter/FY at load; nothing here is on a timer, but
+   since "now" is read fresh every time the page loads or the FY changes,
+   the default always reflects the real current period with no separate
+   update needed as time passes.
+   ========================================================================= */
+const FY_MONTHS = [
+  {m:4,label:'April'}, {m:5,label:'May'}, {m:6,label:'June'},
+  {m:7,label:'July'}, {m:8,label:'August'}, {m:9,label:'September'},
+  {m:10,label:'October'}, {m:11,label:'November'}, {m:12,label:'December'},
+  {m:1,label:'January'}, {m:2,label:'February'}, {m:3,label:'March'}
+];
+const FY_QUARTERS = [
+  {q:1, label:'Q1 (Apr – Jun)', months:[4,5,6]},
+  {q:2, label:'Q2 (Jul – Sep)', months:[7,8,9]},
+  {q:3, label:'Q3 (Oct – Dec)', months:[10,11,12]},
+  {q:4, label:'Q4 (Jan – Mar)', months:[1,2,3]}
+];
+function currentFYStartYear(d){ d = d || new Date(); return d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1; }
+function populateGstFY(){
+  var sel = document.getElementById('gstFY');
+  var curStart = currentFYStartYear();
+  var years = [curStart - 2, curStart - 1, curStart];
+  sel.innerHTML = years.map(function (y) { return '<option value="' + y + '">FY ' + y + '-' + String(y+1).slice(2) + '</option>'; }).join('');
+  sel.value = curStart;
+  onGstFYChange();
+}
+function onGstFYChange(){ populateGstMonth(); populateGstQuarter(); onGstPeriodPicked(); }
+function populateGstMonth(){
+  var fyStart = parseInt(document.getElementById('gstFY').value, 10);
+  var sel = document.getElementById('gstMonth');
+  sel.innerHTML = FY_MONTHS.map(function (x) {
+    var year = x.m >= 4 ? fyStart : fyStart + 1;
+    return '<option value="' + year + '-' + String(x.m).padStart(2,'0') + '">' + x.label + ' ' + year + '</option>';
+  }).join('');
+  var now = new Date();
+  var nowVal = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
+  var hasNow = Array.prototype.some.call(sel.options, function (o) { return o.value === nowVal; });
+  if(hasNow) sel.value = nowVal;
+}
+function populateGstQuarter(){
+  var fyStart = parseInt(document.getElementById('gstFY').value, 10);
+  var sel = document.getElementById('gstQuarter');
+  sel.innerHTML = FY_QUARTERS.map(function (q) {
+    var startYear = q.months[0] >= 4 ? fyStart : fyStart + 1;
+    var endYear = q.months[2] >= 4 ? fyStart : fyStart + 1;
+    return '<option value="' + q.q + '">' + q.label + ' ' + startYear + (endYear !== startYear ? '-' + String(endYear).slice(2) : '') + '</option>';
+  }).join('');
+  var now = new Date();
+  if(currentFYStartYear(now) === fyStart){
+    var curMonth = now.getMonth() + 1;
+    var match = FY_QUARTERS.filter(function (x) { return x.months.indexOf(curMonth) !== -1; })[0];
+    if(match) sel.value = match.q;
+  }
+}
+function onGstFilingTypeChange(){
+  var type = document.getElementById('gstFilingType').value;
+  document.getElementById('gstMonthWrap').classList.toggle('d-none', type !== 'monthly');
+  document.getElementById('gstQuarterWrap').classList.toggle('d-none', type !== 'quarterly');
+  onGstPeriodPicked();
+}
+function getGstPeriodRange(){
+  var type = document.getElementById('gstFilingType').value;
+  if(type === 'monthly'){
+    var val = document.getElementById('gstMonth').value;
+    var parts = val.split('-').map(Number);
+    var y = parts[0], m = parts[1];
+    return { start: new Date(y, m-1, 1), end: new Date(y, m, 1), label: val, fileTag: val };
+  }
+  var fyStart = parseInt(document.getElementById('gstFY').value, 10);
+  var qNum = parseInt(document.getElementById('gstQuarter').value, 10);
+  var q = FY_QUARTERS.filter(function (x) { return x.q === qNum; })[0];
+  if(!q) return { start: new Date(NaN), end: new Date(NaN), label: '', fileTag: 'period' };
+  var startMonth = q.months[0];
+  var startYear = startMonth >= 4 ? fyStart : fyStart + 1;
+  var start = new Date(startYear, startMonth - 1, 1);
+  var end = new Date(start.getFullYear(), start.getMonth() + 3, 1);
+  var label = 'Q' + qNum + ' FY' + fyStart + '-' + String(fyStart+1).slice(2);
+  return { start: start, end: end, label: label, fileTag: 'Q' + qNum + '-FY' + fyStart + '-' + String(fyStart+1).slice(2) };
+}
+// Keeps "Include your own B2B invoices" in sync with the period picker by
+// default — From/To still plain date inputs the person can override by
+// hand afterward; this only auto-fills them, it never fights a manual edit
+// back once made (it only runs when the period picker itself changes).
+function onGstPeriodPicked(){
+  var range = getGstPeriodRange();
+  if(isNaN(range.start.getTime())) return;
+  document.getElementById('billingInvFrom').value = range.start.toISOString().slice(0,10);
+  var inclusiveEnd = new Date(range.end.getTime() - 24*60*60*1000);
+  document.getElementById('billingInvTo').value = inclusiveEnd.toISOString().slice(0,10);
+}
+populateGstFY();
+
+/* =========================================================================
    Your own Billing invoices (B2B only) — separate auth listener from
    assets/auth-guard.js, which only gates page access and doesn't expose the
    signed-in user to this script.
@@ -1087,7 +1199,7 @@ document.getElementById('downloadBtn').addEventListener('click', function () {
   var srcRows = r.allTxns.map(function (t) { return [t.source, t.docType, t.invoiceNo, t.invoiceDate, posLabel(t.posStateCode), t.hsn, t.qty, t.rate, t.taxableValue, t.taxAmount, t.invoiceValue, (t.warnings || []).join('; ')]; });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([srcHeader].concat(srcRows)), 'source data');
 
-  var period = document.getElementById('period').value.trim().replace(/[^\w-]+/g, '_') || 'period';
+  var period = (getGstPeriodRange().fileTag || 'period').replace(/[^\w-]+/g, '_');
   var fname = 'GSTR1_' + (r.sellerGstin || 'seller') + '_' + period + '.xlsx';
   XLSX.writeFile(wb, fname);
 });
