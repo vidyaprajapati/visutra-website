@@ -319,6 +319,26 @@
       <div class="file-list" id="fileList"></div>
     </div>
 
+    <div class="step-card" id="billingInvoicesCard">
+      <div class="step-badge"><span class="n">1b</span> Optional</div>
+      <h3>Include your own B2B invoices from Billing</h3>
+      <p class="sub">If you also invoice some business customers directly (not through a marketplace), pull those in here so they end up in the same B2B table as your Amazon/Flipkart/Meesho sales. Only invoices to GST-registered customers (with a GSTIN on file) are included — this reads them straight from your account, not from a file.</p>
+      <div class="row g-3">
+        <div class="col-md-4">
+          <label class="field-label" for="billingInvFrom">From</label>
+          <input type="date" class="form-control" id="billingInvFrom">
+        </div>
+        <div class="col-md-4">
+          <label class="field-label" for="billingInvTo">To</label>
+          <input type="date" class="form-control" id="billingInvTo">
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+          <button class="btn btn-outline-dark w-100" id="loadBillingInvBtn" type="button" onclick="loadBillingB2BInvoices()" disabled>Load My B2B Invoices</button>
+        </div>
+      </div>
+      <div class="field-note" id="billingInvNote" style="margin-top:10px"></div>
+    </div>
+
     <div class="step-card">
       <div class="step-badge"><span class="n">2</span> Filing details</div>
       <h3>Confirm before generating</h3>
@@ -592,6 +612,47 @@ var GSTR1 = (function () {
     return toTxns(tcsSalesRows, 1).concat(toTxns(tcsReturnRows, -1));
   }
 
+  // Your own directly-issued invoices to GST-registered (B2B) customers, from
+  // this account's Billing → New Invoice / Invoice History — for a seller who
+  // ALSO sells on Amazon/Flipkart/Meesho but invoices some business customers
+  // directly rather than through a marketplace. B2C invoices from Billing are
+  // deliberately NOT included here: Billing's own GST Filing page already
+  // produces the complete B2CL/B2CS picture for those, and mixing the two
+  // paths for the same B2C sales would double-count them if someone ran both
+  // reports for an overlapping period. One transaction per invoice LINE ITEM
+  // (matching how Amazon/Flipkart rows work above), so multi-rate invoices
+  // correctly split across GST rate rows and the HSN table stays accurate.
+  function normalizeBillingInvoices(invoices) {
+    var txns = [];
+    (invoices || []).forEach(function (inv) {
+      if (inv.deleted) return;
+      if (!inv.customer || !inv.customer.gstin) return; // B2B only — see note above
+      var posCode = inv.customer.stateCode || stateCodeFromGstin(inv.customer.gstin);
+      var warnings = [];
+      if (!posCode) warnings.push('Billing invoice ' + (inv.invoiceNo||'') + ': no state on file for this customer');
+      var items = (inv.items || []).filter(function (li) { return li.productId; });
+      items.forEach(function (li) {
+        var rate = num(li.gstRate);
+        var taxableValue = num(li.taxable);
+        var taxAmount = round2(taxableValue * rate / 100);
+        txns.push(makeTxn({
+          source: 'billing', docType: 'b2b',
+          invoiceNo: inv.invoiceNo, invoiceDate: ddmmyyyyFromIso(inv.date),
+          buyerGstin: inv.customer.gstin, buyerName: inv.customer.legalName || inv.customer.name,
+          posStateCode: posCode, hsn: li.hsn, description: li.name,
+          qty: li.qty, taxableValue: taxableValue,
+          rate: rate, taxAmount: taxAmount, invoiceValue: taxableValue + taxAmount,
+          sign: 1, warnings: warnings
+        }));
+      });
+    });
+    return txns;
+  }
+  function ddmmyyyyFromIso(dateStr) {
+    var parts = (dateStr || '').split('-');
+    return parts.length === 3 ? (parts[2] + '-' + parts[1] + '-' + parts[0]) : (dateStr || '');
+  }
+
   function buildGSTR1(allTxns, sellerStateCode, b2clThreshold) {
     b2clThreshold = b2clThreshold || 100000;
     var b2b = {}, b2cs = {}, hsn = {}, b2clCandidates = {};
@@ -657,16 +718,69 @@ var GSTR1 = (function () {
     STATE_CODES: STATE_CODES, stateCodeFor: stateCodeFor, stateCodeFromGstin: stateCodeFromGstin,
     stateNameFromCode: stateNameFromCode, detectSellerGstin: detectSellerGstin,
     normalizeAmazon: normalizeAmazon, normalizeFlipkart: normalizeFlipkart, normalizeMeesho: normalizeMeesho,
+    normalizeBillingInvoices: normalizeBillingInvoices,
     buildGSTR1: buildGSTR1, round2: round2
   };
 })();
+
+/* =========================================================================
+   Your own Billing invoices (B2B only) — separate auth listener from
+   assets/auth-guard.js, which only gates page access and doesn't expose the
+   signed-in user to this script.
+   ========================================================================= */
+var billingUser = null;
+firebase.auth().onAuthStateChanged(function (user) {
+  if (!user) return;
+  billingUser = user;
+  document.getElementById('loadBillingInvBtn').disabled = false;
+  db.collection('users').doc(user.uid).get().then(function (snap) {
+    var data = (snap.exists && snap.data()) || {};
+    var gstinInput = document.getElementById('gstin');
+    // Only prefill if empty and not already hand-edited — if a marketplace
+    // file gets uploaded afterward, updateGstinField() may still overwrite
+    // this with a value detected from that file, which is fine: both are
+    // "auto-detected", and this is just a fallback for when no file has been
+    // uploaded yet (a seller with only direct invoices to include).
+    if (data.gstin && !gstinInput.value && gstinInput.dataset.userEdited !== '1') {
+      gstinInput.value = data.gstin;
+      document.getElementById('gstinNote').textContent = 'Filled in from your Billing account — check your uploaded reports use the same GSTIN.';
+    }
+  }).catch(function (err) { console.error('Could not read Billing profile for GSTIN prefill:', err); });
+});
+function loadBillingB2BInvoices() {
+  if (!billingUser) return;
+  var noteEl = document.getElementById('billingInvNote');
+  var from = document.getElementById('billingInvFrom').value;
+  var to = document.getElementById('billingInvTo').value;
+  noteEl.textContent = 'Loading…';
+  db.collection('users').doc(billingUser.uid).collection('invoices').get().then(function (snap) {
+    var all = snap.docs.map(function (d) { return d.data(); }).filter(function (inv) { return !inv.deleted; });
+    var inRange = all.filter(function (inv) {
+      var d = inv.date || '';
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return true;
+    });
+    var b2b = inRange.filter(function (inv) { return inv.customer && inv.customer.gstin; });
+    store.billingInvoices = b2b;
+    var skippedB2C = inRange.length - b2b.length;
+    noteEl.textContent = 'Loaded ' + b2b.length + ' B2B invoice(s)' +
+      (from || to ? ' in the selected range' : '') + '.' +
+      (skippedB2C ? ' (' + skippedB2C + ' invoice(s) in range skipped — no GSTIN on the customer, so not B2B.)' : '') +
+      ' They\'ll be included automatically next time you click Generate.';
+  }).catch(function (err) {
+    console.error('Could not load Billing invoices:', err);
+    noteEl.textContent = 'Could not load your invoices (' + (err.code || err.message) + ') — try again.';
+  });
+}
 
 /* =========================================================================
    File parsing + kind detection
    ========================================================================= */
 var store = {
   files: [], // {id, name, kind, rows, sheetName}
-  amazonB2B: [], amazonB2C: [], flipkart: [], meeshoSales: [], meeshoReturns: [], meeshoInvoiceInfo: []
+  amazonB2B: [], amazonB2C: [], flipkart: [], meeshoSales: [], meeshoReturns: [], meeshoInvoiceInfo: [],
+  billingInvoices: [] // raw B2B invoices loaded from this account's own Billing (not a file upload)
 };
 var lastResult = null;
 var fileIdSeq = 0;
@@ -840,7 +954,8 @@ document.getElementById('generateBtn').addEventListener('click', function () {
   var allTxns = []
     .concat(GSTR1.normalizeAmazon(store.amazonB2B, store.amazonB2C))
     .concat(GSTR1.normalizeFlipkart(store.flipkart))
-    .concat(GSTR1.normalizeMeesho(store.meeshoSales, store.meeshoReturns, store.meeshoInvoiceInfo));
+    .concat(GSTR1.normalizeMeesho(store.meeshoSales, store.meeshoReturns, store.meeshoInvoiceInfo))
+    .concat(GSTR1.normalizeBillingInvoices(store.billingInvoices));
 
   var result = GSTR1.buildGSTR1(allTxns, sellerState, threshold);
   result.hsn.forEach(function (h) { h.uqc = uqc; });
