@@ -296,7 +296,7 @@ function editPackagingSize(id){
   document.getElementById('pszName').value = s.name;
   document.getElementById('pszStock').value = s.stock || 0;
   document.getElementById('pszMin').value = s.minQty || 0;
-  window.scrollTo({top: 0, behavior: 'smooth'});
+  document.getElementById('packagingSizesCard').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 function resetPackagingSizeForm(){
   document.getElementById('pszEditId').value = '';
@@ -352,7 +352,7 @@ function editLabelSize(id){
   document.getElementById('lszName').value = s.name;
   document.getElementById('lszStock').value = s.stock || 0;
   document.getElementById('lszMin').value = s.minQty || 0;
-  window.scrollTo({top: 0, behavior: 'smooth'});
+  document.getElementById('labelSizesCard').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 function resetLabelSizeForm(){
   document.getElementById('lszEditId').value = '';
@@ -459,7 +459,7 @@ function editPackaging(id){
     document.getElementById('pkgPackagingSizeId').value = p.packagingSizeId || '';
     document.getElementById('pkgLabelSizeId').value = p.labelSizeId || '';
   });
-  window.scrollTo({top: 0, behavior: 'smooth'});
+  document.getElementById('packagingFormCard').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 function resetPackagingForm(){
   document.getElementById('pkgSeller').value = '';
