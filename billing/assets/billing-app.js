@@ -1018,7 +1018,7 @@ function computePurchaseGstrRows(start, end){
   }).map(p => {
     const supplier = suppliersCache.find(s => s.id === p.supplierId);
     return {
-      date: p.date, supplierName: p.supplierName || (supplier && supplier.name) || 'Unknown',
+      id: p.id, date: p.date, supplierName: p.supplierName || (supplier && supplier.name) || 'Unknown',
       gstin: (supplier && supplier.gstin) || '',
       taxable: p.subtotal || 0, gst: p.gstTotal || 0, total: p.grandTotal || 0, items: p.items || []
     };
@@ -1301,19 +1301,27 @@ function renderPurchases(){
     (p.items||[]).forEach(li => {
       rows.push(`<tr>
         <td>${esc(p.date)}</td>
-        <td><a href="#" onclick="openSupplierLedger('${p.supplierId}');return false;">${esc(p.supplierName)}</a></td>
+        <td><a href="#" onclick="openSupplierLedger('${p.supplierId}');return false;">${esc(p.supplierName)}</a>${p.gstFiled ? ' <span class="badge" title="Filed as part of GST period '+esc(p.gstFiledPeriod||'')+'">Filed</span>' : ''}</td>
         <td>${esc(li.name)}</td>
         <td>${li.qty} ${esc(li.unit)}</td>
         <td>₹${fmtMoney(li.total)}</td>
-        <td class="row-actions"><button class="btn small" onclick="editPurchase('${p.id}')">Edit</button><button class="btn small danger" onclick="deletePurchase('${p.id}')">Delete</button></td>
+        <td class="row-actions">
+          ${p.gstFiled
+            ? `<button class="btn small" disabled title="Filed in a GST return — can't be edited or deleted">Edit</button><button class="btn small" disabled title="Filed in a GST return — can't be deleted">Delete</button>`
+            : `<button class="btn small" onclick="editPurchase('${p.id}')">Edit</button><button class="btn small danger" onclick="deletePurchase('${p.id}')">Delete</button>`}
+        </td>
       </tr>`);
     });
   });
   tbody.innerHTML = rows.join('') || '<tr><td colspan="6" style="color:var(--muted)">No purchases recorded yet.</td></tr>';
 }
 async function deletePurchase(id){
-  if(!confirm('Move this purchase to the Recycle Bin? Any stock it added will be reversed. You can restore it within 30 days.')) return;
   const purchase = purchasesCache.find(p => p.id === id);
+  if(purchase && purchase.gstFiled){
+    alert(`This purchase was filed as part of the ${purchase.gstFiledPeriod||''} GST return and can't be deleted.`);
+    return;
+  }
+  if(!confirm('Move this purchase to the Recycle Bin? Any stock it added will be reversed. You can restore it within 30 days.')) return;
   if(purchase){
     await reverseStockForPurchaseItems(purchase.items || [], new Date().toISOString().slice(0,10), `Reversed: deleted purchase dated ${purchase.date}`);
   }
@@ -1339,35 +1347,47 @@ async function reverseStockForPurchaseItems(items, date, note){
 const TRASH_RETENTION_DAYS = 30;
 let trashedPurchasesCache = [];
 let trashedPaymentsCache = [];
+let trashedInvoicesCache = [];
 function trashDeletedAtMs(doc){
   // deletedAt is a Firestore server timestamp once it round-trips back from
   // Firestore; fall back to "now" only if it's somehow still missing.
   return doc.deletedAt && doc.deletedAt.toDate ? doc.deletedAt.toDate().getTime() : Date.now();
 }
 async function loadTrash(){
-  const [purchSnap, paySnap] = await Promise.all([
+  const [purchSnap, paySnap, invSnap] = await Promise.all([
     db.collection('users').doc(currentUser.uid).collection('purchases').where('deleted','==',true).get(),
-    db.collection('users').doc(currentUser.uid).collection('payments').where('deleted','==',true).get()
+    db.collection('users').doc(currentUser.uid).collection('payments').where('deleted','==',true).get(),
+    db.collection('users').doc(currentUser.uid).collection('invoices').where('deleted','==',true).get()
   ]);
   trashedPurchasesCache = purchSnap.docs.map(d => ({id:d.id, ...d.data()}));
   trashedPaymentsCache = paySnap.docs.map(d => ({id:d.id, ...d.data()}));
+  trashedInvoicesCache = invSnap.docs.map(d => ({id:d.id, ...d.data()}));
 
   // Auto-purge anything past the retention window before rendering, so the
   // bin never grows forever and the person never has to remember to empty it.
+  // Filed invoices are exempt from auto-purge — they're compliance records,
+  // not something that should silently vanish after 30 days regardless of
+  // whether the person meant to keep it that long.
   const cutoff = Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const purchasesToPurge = trashedPurchasesCache.filter(p => trashDeletedAtMs(p) < cutoff);
   const paymentsToPurge = trashedPaymentsCache.filter(p => trashDeletedAtMs(p) < cutoff);
+  const invoicesToPurge = trashedInvoicesCache.filter(i => !i.gstFiled && trashDeletedAtMs(i) < cutoff);
   for(const p of purchasesToPurge){
     await db.collection('users').doc(currentUser.uid).collection('purchases').doc(p.id).delete();
   }
   for(const p of paymentsToPurge){
     await db.collection('users').doc(currentUser.uid).collection('payments').doc(p.id).delete();
   }
+  for(const i of invoicesToPurge){
+    await db.collection('users').doc(currentUser.uid).collection('invoices').doc(i.id).delete();
+  }
   if(purchasesToPurge.length) trashedPurchasesCache = trashedPurchasesCache.filter(p => !purchasesToPurge.includes(p));
   if(paymentsToPurge.length) trashedPaymentsCache = trashedPaymentsCache.filter(p => !paymentsToPurge.includes(p));
+  if(invoicesToPurge.length) trashedInvoicesCache = trashedInvoicesCache.filter(i => !invoicesToPurge.includes(i));
 
   trashedPurchasesCache.sort((a,b) => trashDeletedAtMs(b) - trashDeletedAtMs(a));
   trashedPaymentsCache.sort((a,b) => trashDeletedAtMs(b) - trashDeletedAtMs(a));
+  trashedInvoicesCache.sort((a,b) => trashDeletedAtMs(b) - trashDeletedAtMs(a));
   renderTrash();
 }
 function renderTrash(){
@@ -1392,6 +1412,16 @@ function renderTrash(){
       </tr>`;
     }).join('') || '<tr><td colspan="5" style="color:var(--muted)">Nothing here.</td></tr>';
   }
+  const invTbody = document.getElementById('trashInvoicesTable');
+  if(invTbody){
+    invTbody.innerHTML = trashedInvoicesCache.map(i => {
+      const deletedOn = i.deletedAt && i.deletedAt.toDate ? i.deletedAt.toDate().toISOString().slice(0,10) : '';
+      return `<tr>
+        <td>${esc(i.invoiceNo||'')}</td><td>${esc(i.date||'')}</td><td>${esc(i.customer?.name||'')}</td><td>₹${fmtMoney(i.grandTotal)}</td><td>${esc(deletedOn)}</td>
+        <td class="row-actions"><button class="btn small" onclick="restoreInvoice('${i.id}')">Restore</button></td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="6" style="color:var(--muted)">Nothing here.</td></tr>';
+  }
 }
 async function restorePurchase(id){
   const purchase = trashedPurchasesCache.find(p => p.id === id);
@@ -1411,6 +1441,11 @@ async function restorePurchase(id){
 async function restorePayment(id){
   await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).update({ deleted: false, deletedAt: null });
   await loadPayments();
+  await loadTrash();
+}
+async function restoreInvoice(id){
+  await db.collection('users').doc(currentUser.uid).collection('invoices').doc(id).update({ deleted: false, deletedAt: null });
+  await loadInvoices();
   await loadTrash();
 }
 
@@ -1946,7 +1981,7 @@ async function loadInvoices(){
   invoicesCache = {};
   snap.docs.forEach(d => { invoicesCache[d.id] = d.data(); });
   const rows = [];
-  snap.docs.filter(d => dateInRange(d.data().date||'', 'invoiceHistFrom', 'invoiceHistTo')).forEach(d => {
+  snap.docs.filter(d => !d.data().deleted).filter(d => dateInRange(d.data().date||'', 'invoiceHistFrom', 'invoiceHistTo')).forEach(d => {
     const inv = d.data();
     const items = (inv.items||[]).filter(li => li.productId);
     (items.length ? items : [{name:'—', qty:'', unit:''}]).forEach(li => {
@@ -1954,15 +1989,30 @@ async function loadInvoices(){
         <td>${esc(inv.invoiceNo||'')}</td><td>${esc(inv.date||'')}</td><td>${esc(inv.customer?.name||'')}</td>
         <td>${esc(li.name||'')}</td><td>${li.qty||''} ${esc(li.unit||'')}</td>
         <td>₹${fmtMoney(inv.grandTotal||0)}</td>
-        <td><span class="badge">${inv.emailSent ? 'Sent' : 'Not sent'}</span></td>
+        <td><span class="badge">${inv.emailSent ? 'Sent' : 'Not sent'}</span>${inv.gstFiled ? ' <span class="badge" title="Filed as part of GST period '+esc(inv.gstFiledPeriod||'')+'">Filed</span>' : ''}</td>
         <td class="row-actions">
           <button class="btn small" onclick="redownloadInvoicePdf('${d.id}')">Download PDF</button>
           <a class="btn small" href="invoice-view.html?id=${d.id}" target="_blank">View</a>
+          ${inv.gstFiled
+            ? `<button class="btn small" disabled title="Filed in a GST return — can't be deleted">Delete</button>`
+            : `<button class="btn small danger" onclick="deleteInvoice('${d.id}')">Delete</button>`}
         </td>
       </tr>`);
     });
   });
   document.getElementById('invoicesTable').innerHTML = rows.join('') || '<tr><td colspan="8" style="color:var(--muted)">No invoices yet.</td></tr>';
+}
+async function deleteInvoice(id){
+  const inv = invoicesCache[id];
+  if(inv && inv.gstFiled){
+    alert(`This invoice was filed as part of the ${inv.gstFiledPeriod||''} GST return and can't be deleted.`);
+    return;
+  }
+  if(!confirm('Move this invoice to the Recycle Bin? You can restore it within 30 days. Note: this does not cancel or affect any GST filing already submitted using it — issue a credit note for that instead.')) return;
+  await db.collection('users').doc(currentUser.uid).collection('invoices').doc(id).update({
+    deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  await loadInvoices();
 }
 
 // PDFs are never stored as files anywhere — every download is generated fresh,
@@ -1978,6 +2028,7 @@ function redownloadInvoicePdf(invoiceId){
 /* ---------------- GSTR-1 report (built from saved invoices — no re-entry needed) ---------------- */
 let gstr1Data = null;
 let gstr1Invoices = []; // raw invoices behind the current gstr1Data, kept for the JSON export's per-invoice nesting
+let gstr1CurrentPeriod = null; // {label, fileTag} for whatever period is currently on screen — used by markPeriodAsFiled()
 const B2CL_THRESHOLD = 100000; // current GST rule, effective Aug 2024 (was ₹2.5L before)
 
 function poS(cust){
@@ -2087,7 +2138,7 @@ async function generateGstr1(){
     showMsg('gstrMsg', 'Could not read invoices — check your connection and try again (see browser console for details).', false);
     return;
   }
-  const invoices = snap.docs.map(d => d.data()).filter(inv => {
+  const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(inv => !inv.deleted).filter(inv => {
     const d = parseLocalDate(inv.date);
     return d >= start && d < end;
   });
@@ -2177,6 +2228,10 @@ async function generateGstr1(){
   // a transient read error) would hide Excel/JSON even though Sales data,
   // the primary GSTR-1 requirement, is already correctly computed.
   document.getElementById('gstrDownloadCard').classList.remove('hidden');
+  document.getElementById('gstrMarkFiledPeriodLabel').textContent = period.label;
+  document.getElementById('gstrMarkFiledCard').classList.remove('hidden');
+  document.getElementById('gstrMarkFiledMsg').textContent = '';
+  gstr1CurrentPeriod = period;
 
   // Purchases (inward) side, same period, same button — see "Purchase-side
   // GST data" section above. Wrapped so a failure here never blocks the
@@ -2298,6 +2353,52 @@ function downloadGstr1Json(){
 function ddmmyyyy(dateStr){
   const [y, m, d] = (dateStr || '').split('-');
   return d && m && y ? `${d}-${m}-${y}` : dateStr;
+}
+
+/* Locks every invoice and purchase behind the currently-displayed period so
+   neither can be edited or deleted afterward — see deleteInvoice(),
+   deletePurchase(), and renderPurchases()'s disabled Edit button. This is a
+   one-way action from the UI (no "unfile" button) since un-filing should be
+   a deliberate, rare correction, not a casual undo. */
+async function markPeriodAsFiled(){
+  if(!gstr1CurrentPeriod){ return; }
+  if(!confirm(`Mark ${gstr1CurrentPeriod.label} as filed? Every invoice and purchase in this period will be locked from editing or deletion. This can't be undone from here.`)) return;
+
+  const invoiceIds = gstr1Invoices.map(inv => inv.id).filter(Boolean);
+  const purchaseIds = gstr1PurchaseRows.map(p => p.id).filter(Boolean);
+  if(!invoiceIds.length && !purchaseIds.length){
+    showMsg('gstrMarkFiledMsg', 'Nothing to mark — no invoices or purchases were found for this period.', false);
+    return;
+  }
+
+  showMsg('gstrMarkFiledMsg', 'Marking period as filed…', true);
+  try{
+    const invCol = db.collection('users').doc(currentUser.uid).collection('invoices');
+    const purCol = db.collection('users').doc(currentUser.uid).collection('purchases');
+    const allOps = [
+      ...invoiceIds.map(id => ({ ref: invCol.doc(id) })),
+      ...purchaseIds.map(id => ({ ref: purCol.doc(id) }))
+    ];
+    // Firestore batches cap at 500 writes — chunk defensively even though a
+    // small business is unlikely to file 500+ documents in one period.
+    for(let i = 0; i < allOps.length; i += 400){
+      const batch = db.batch();
+      allOps.slice(i, i + 400).forEach(op => {
+        batch.update(op.ref, {
+          gstFiled: true,
+          gstFiledPeriod: gstr1CurrentPeriod.label,
+          gstFiledAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      });
+      await batch.commit();
+    }
+    showMsg('gstrMarkFiledMsg', `Marked ${invoiceIds.length} invoice(s) and ${purchaseIds.length} purchase(s) as filed.`, true);
+    await loadInvoices();
+    await loadPurchases();
+  }catch(err){
+    console.error('Mark as filed failed:', err);
+    showMsg('gstrMarkFiledMsg', `Could not mark as filed: ${err.message}`, false);
+  }
 }
 
 /* ---------------- Utils ---------------- */
