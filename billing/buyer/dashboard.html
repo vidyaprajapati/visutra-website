@@ -14,7 +14,6 @@
 <div class="topbar">
   <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Buyer Dashboard</b></a>
   <div class="topbar-right">
-    <a class="btn small" href="place-order.html">Place Order</a>
     <div id="userMenuMount"></div>
   </div>
 </div>
@@ -26,6 +25,13 @@
   <div class="card" id="notBuyerCard" style="display:none">
     <h2>Buyer Features Not Enabled</h2>
     <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first — you'll get a login email to share with sellers, who can then link your account.</p>
+  </div>
+
+  <div class="card" id="deleteRequestsCard" style="display:none;background:#FFF7ED;border:1.5px solid #E8A32C">
+    <h2>Invoice Deletion Requests</h2>
+    <p class="sub">A seller wants to delete an invoice from an order you accepted from them. Accepting removes your matching purchase record and reverses the stock it added — this can't be undone once accepted.</p>
+    <table><thead><tr><th>Seller</th><th>Invoice #</th><th>Order #</th><th>Reason</th><th></th></tr></thead>
+    <tbody id="deleteRequestsTable"></tbody></table>
   </div>
 
   <div class="card">
@@ -84,8 +90,83 @@ auth.onAuthStateChanged(async user => {
   const data = snap.data() || {};
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
 
+  await loadDeleteRequests();
   await loadDashboard();
 });
+
+/* ---------------- Invoice Deletion Requests ----------------
+   A seller wants to delete an order-derived invoice, which means undoing
+   the stock effect that order's acceptance already applied on BOTH sides.
+   Neither side can write to the other's data, so this shared request doc
+   is the only coordination point: accepting here does OUR half (delete the
+   purchase, reverse OUR stock) in the same click, and separately signals
+   the seller (via this doc's status) to do their own half on their side. */
+async function loadDeleteRequests(){
+  const snap = await db.collection('invoiceDeleteRequests')
+    .where('buyerUid', '==', currentUser.uid).where('status', '==', 'PENDING').get();
+  const requests = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const card = document.getElementById('deleteRequestsCard');
+  if(!requests.length){ card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  document.getElementById('deleteRequestsTable').innerHTML = requests.map(r => `
+    <tr><td>${esc(r.sellerName||'Seller')}</td><td>${esc(r.invoiceNo||'')}</td><td>${esc(r.orderNumber||'')}</td><td>${esc(r.reason||'')}</td>
+    <td class="row-actions">
+      <button class="btn small primary" onclick="respondToDeleteRequest('${r.id}', true)">Accept</button>
+      <button class="btn small danger" onclick="respondToDeleteRequest('${r.id}', false)">Reject</button>
+    </td></tr>
+  `).join('');
+}
+async function respondToDeleteRequest(requestId, accept){
+  const confirmMsg = accept
+    ? 'Accept this deletion? Your matching purchase record will be removed and its stock reversed. This can\'t be undone.'
+    : 'Reject this deletion request? The seller will see it was declined and the invoice stays as-is.';
+  if(!confirm(confirmMsg)) return;
+
+  try{
+    const reqSnap = await db.collection('invoiceDeleteRequests').doc(requestId).get();
+    if(!reqSnap.exists){ alert('This request no longer exists.'); await loadDeleteRequests(); return; }
+    const req = reqSnap.data();
+    if(req.status !== 'PENDING'){ alert('This request has already been responded to.'); await loadDeleteRequests(); return; }
+
+    if(accept){
+      const orderSnap = await db.collection('marketplaceOrders').doc(req.orderId).get();
+      const order = orderSnap.exists ? orderSnap.data() : null;
+      if(order && order.buyerPurchaseId){
+        const purRef = db.collection('users').doc(currentUser.uid).collection('purchases').doc(order.buyerPurchaseId);
+        const purSnap = await purRef.get();
+        if(purSnap.exists){
+          const purchase = purSnap.data();
+          if(purchase.gstFiled){
+            alert(`Can't accept — this purchase was already filed as part of the ${purchase.gstFiledPeriod||''} GST return on your side. Contact the seller directly to resolve this.`);
+            return;
+          }
+          for(const li of (purchase.items || [])){
+            if(li.linkedProductId){
+              await db.collection('users').doc(currentUser.uid).collection('products').doc(li.linkedProductId).update({
+                stock: firebase.firestore.FieldValue.increment(-li.qty)
+              }).catch(err => console.error(`Stock reversal failed for ${li.linkedProductId}:`, err));
+              await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
+                type: 'purchase-in', productId: li.linkedProductId, qty: -li.qty, date: new Date().toISOString().slice(0,10),
+                note: `Reversed: seller deleted invoice ${req.invoiceNo||''} (order ${req.orderNumber||''})`,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+            }
+          }
+          await purRef.delete();
+        }
+      }
+    }
+
+    await db.collection('invoiceDeleteRequests').doc(requestId).update({
+      status: accept ? 'ACCEPTED' : 'REJECTED',
+      respondedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await loadDeleteRequests();
+    await loadDashboard(); // dues/purchase totals may have shifted
+  }catch(err){
+    alert(`Could not respond to this request: ${err.message}`);
+  }
+}
 
 async function loadDashboard(){
   const [linksSnap, ordersSnap, suppliersSnap, purchasesSnap, paymentsSnap] = await Promise.all([
