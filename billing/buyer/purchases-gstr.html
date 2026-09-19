@@ -62,7 +62,7 @@
 
   <div class="card hidden" id="registerCard">
     <h2>Purchase Register</h2>
-    <table><thead><tr><th>Date</th><th>Seller</th><th>Order #</th><th>Taxable</th><th>GST</th><th>Total</th></tr></thead>
+    <table><thead><tr><th>Date</th><th>Seller</th><th>Order #</th><th>Taxable</th><th>GST</th><th>Total</th><th></th></tr></thead>
     <tbody id="registerTable"></tbody></table>
 
     <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">By Item (HSN-wise)</h3>
@@ -75,6 +75,13 @@
       <button class="btn primary" onclick="exportExcel()">Download Excel</button>
       <button class="btn" onclick="exportJson()">Download JSON</button>
     </div>
+  </div>
+
+  <div class="card hidden" id="markFiledCard">
+    <h2>Mark This Period as Filed</h2>
+    <p class="sub">Once you've used this period's data for your own return/ITC records, mark it filed here — every purchase in this period then locks from deletion, so records behind something already filed can't quietly disappear. This can't be undone from this page.</p>
+    <button class="btn danger" onclick="markPeriodAsFiled()">Mark <span id="markFiledPeriodLabel"></span> as Filed</button>
+    <p class="msg" id="markFiledMsg"></p>
   </div>
 
   </div>
@@ -190,10 +197,12 @@ auth.onAuthStateChanged(async user => {
   purchaseProductsCache = ppSnap.docs.map(d => ({id: d.id, ...d.data()}));
 });
 
+let reportPeriod = null; // {label, fileTag} for markPeriodAsFiled()
 function generateReport(){
   const period = getSelectedPeriodRange();
   reportPeriodLabel = period.label;
   reportFileTag = period.fileTag;
+  reportPeriod = period;
 
   const filtered = purchasesCache.filter(p => {
     const d = parseLocalDate(p.date);
@@ -201,20 +210,23 @@ function generateReport(){
   });
 
   reportRows = filtered.map(p => ({
-    date: p.date, supplierName: p.supplierName || 'Unknown seller', orderNumber: p.orderNumber || '',
-    taxable: p.subtotal || 0, gst: p.gstTotal || 0, total: p.grandTotal || 0, items: p.items || []
+    id: p.id, date: p.date, supplierName: p.supplierName || 'Unknown seller', orderNumber: p.orderNumber || '',
+    taxable: p.subtotal || 0, gst: p.gstTotal || 0, total: p.grandTotal || 0, items: p.items || [], gstFiled: !!p.gstFiled
   }));
 
   const msgEl = document.getElementById('pageMsg');
   if(!reportRows.length){
     msgEl.textContent = 'No purchases from sellers found for this period.';
     msgEl.className = 'msg error';
-    ['totalsCard','rateCard','registerCard'].forEach(id => document.getElementById(id).classList.add('hidden'));
+    ['totalsCard','rateCard','registerCard','markFiledCard'].forEach(id => document.getElementById(id).classList.add('hidden'));
     return;
   }
   msgEl.textContent = `${reportRows.length} purchase(s) in ${period.label}.`;
   msgEl.className = 'msg ok';
   document.getElementById('periodLabel').textContent = period.label;
+  document.getElementById('markFiledPeriodLabel').textContent = period.label;
+  document.getElementById('markFiledCard').classList.remove('hidden');
+  document.getElementById('markFiledMsg').textContent = '';
 
   let taxable = 0, gst = 0, grand = 0;
   const byRate = {};
@@ -240,8 +252,11 @@ function generateReport(){
   document.getElementById('rateCard').classList.remove('hidden');
 
   document.getElementById('registerTable').innerHTML = reportRows.map(r => `
-    <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}</td><td>${esc(r.orderNumber)}</td>
-    <td>${fmtMoney(r.taxable)}</td><td>${fmtMoney(r.gst)}</td><td>${fmtMoney(r.total)}</td></tr>
+    <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}${r.gstFiled ? ' <span class="badge">Filed</span>' : ''}</td><td>${esc(r.orderNumber)}</td>
+    <td>${fmtMoney(r.taxable)}</td><td>${fmtMoney(r.gst)}</td><td>${fmtMoney(r.total)}</td>
+    <td class="row-actions">${r.gstFiled
+      ? `<button class="btn small" disabled title="Filed — can't be deleted">Delete</button>`
+      : `<button class="btn small danger" onclick="deletePurchase('${r.id}')">Delete</button>`}</td></tr>
   `).join('');
 
   const itemRows = [];
@@ -313,6 +328,70 @@ function exportJson(){
 
 function parseLocalDate(s){ const [y,m,d] = (s||'1970-01-01').split('-').map(Number); return new Date(y, m-1, d); }
 function fix2(n){ return Math.round((n||0)*100)/100; }
+/* Deleting a purchase here means the same thing as on the Seller side: soft
+   delete would need a Recycle Bin this page doesn't have, so this is a hard
+   delete after confirmation — but it still reverses any stock the purchase
+   added, exactly like the Seller side's delete does, so Stock stays correct. */
+async function deletePurchase(id){
+  const purchase = purchasesCache.find(p => p.id === id);
+  if(purchase && purchase.gstFiled){
+    alert(`This purchase was filed as part of the ${purchase.gstFiledPeriod||''} period and can't be deleted.`);
+    return;
+  }
+  if(!confirm('Delete this purchase? Any stock it added will be reversed. This can\'t be undone.')) return;
+  try{
+    if(purchase){
+      for(const li of (purchase.items || [])){
+        if(li.linkedProductId){
+          await db.collection('users').doc(currentUser.uid).collection('products').doc(li.linkedProductId).update({
+            stock: firebase.firestore.FieldValue.increment(-li.qty)
+          }).catch(err => console.error(`Stock reversal failed for ${li.linkedProductId}:`, err));
+          await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
+            type: 'purchase-in', productId: li.linkedProductId, qty: -li.qty, date: new Date().toISOString().slice(0,10),
+            note: `Reversed: deleted purchase dated ${purchase.date}`,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+      }
+    }
+    await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).delete();
+    purchasesCache = purchasesCache.filter(p => p.id !== id);
+    generateReport();
+  }catch(err){
+    alert(`Could not delete: ${err.message}`);
+  }
+}
+
+/* Same idea as the Seller side's Mark Period as Filed — locks every purchase
+   in this period from deletion afterward. One-way from this page. */
+async function markPeriodAsFiled(){
+  if(!reportPeriod || !reportRows.length) return;
+  if(!confirm(`Mark ${reportPeriod.label} as filed? Every purchase in this period will be locked from deletion. This can't be undone from here.`)) return;
+  const ids = reportRows.map(r => r.id).filter(Boolean);
+  const msgEl = document.getElementById('markFiledMsg');
+  msgEl.textContent = 'Marking period as filed…';
+  msgEl.className = 'msg ok';
+  try{
+    const col = db.collection('users').doc(currentUser.uid).collection('purchases');
+    for(let i = 0; i < ids.length; i += 400){
+      const batch = db.batch();
+      ids.slice(i, i + 400).forEach(id => {
+        batch.update(col.doc(id), { gstFiled: true, gstFiledPeriod: reportPeriod.label, gstFiledAt: firebase.firestore.FieldValue.serverTimestamp() });
+      });
+      await batch.commit();
+    }
+    ids.forEach(id => {
+      const p = purchasesCache.find(x => x.id === id);
+      if(p) p.gstFiled = true;
+    });
+    msgEl.textContent = `Marked ${ids.length} purchase(s) as filed.`;
+    generateReport();
+  }catch(err){
+    msgEl.textContent = `Could not mark as filed: ${err.message}`;
+    msgEl.className = 'msg error';
+  }
+}
+
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 </script>
