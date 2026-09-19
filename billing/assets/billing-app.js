@@ -1976,14 +1976,30 @@ async function sendInvoiceEmail(inv, invoiceId){
 
 /* ---------------- Invoice history ---------------- */
 let invoicesCache = {};
+let invoiceDeleteRequestsCache = {}; // invoiceId -> latest request doc (with id), for THIS seller
 async function loadInvoices(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('invoices').orderBy('createdAt','desc').limit(100).get();
+  const [snap, reqSnap] = await Promise.all([
+    db.collection('users').doc(currentUser.uid).collection('invoices').orderBy('createdAt','desc').limit(100).get(),
+    db.collection('invoiceDeleteRequests').where('sellerUid','==',currentUser.uid).get()
+  ]);
   invoicesCache = {};
   snap.docs.forEach(d => { invoicesCache[d.id] = d.data(); });
+
+  // Keep only the latest request per invoice — a rejected request can be
+  // followed by a fresh one, and only the newest should drive the row's state.
+  invoiceDeleteRequestsCache = {};
+  reqSnap.docs.map(d => ({id:d.id, ...d.data()})).forEach(r => {
+    const existing = invoiceDeleteRequestsCache[r.invoiceId];
+    const rMs = r.createdAt && r.createdAt.toMillis ? r.createdAt.toMillis() : 0;
+    const eMs = existing && existing.createdAt && existing.createdAt.toMillis ? existing.createdAt.toMillis() : -1;
+    if(!existing || rMs > eMs) invoiceDeleteRequestsCache[r.invoiceId] = r;
+  });
+
   const rows = [];
   snap.docs.filter(d => !d.data().deleted).filter(d => dateInRange(d.data().date||'', 'invoiceHistFrom', 'invoiceHistTo')).forEach(d => {
     const inv = d.data();
     const items = (inv.items||[]).filter(li => li.productId);
+    const req = invoiceDeleteRequestsCache[d.id];
     (items.length ? items : [{name:'—', qty:'', unit:''}]).forEach(li => {
       rows.push(`<tr>
         <td>${esc(inv.invoiceNo||'')}</td><td>${esc(inv.date||'')}</td><td>${esc(inv.customer?.name||'')}</td>
@@ -1993,14 +2009,42 @@ async function loadInvoices(){
         <td class="row-actions">
           <button class="btn small" onclick="redownloadInvoicePdf('${d.id}')">Download PDF</button>
           <a class="btn small" href="invoice-view.html?id=${d.id}" target="_blank">View</a>
-          ${inv.gstFiled
-            ? `<button class="btn small" disabled title="Filed in a GST return — can't be deleted">Delete</button>`
-            : `<button class="btn small danger" onclick="deleteInvoice('${d.id}')">Delete</button>`}
+          ${deleteActionCell(d.id, inv, req)}
         </td>
       </tr>`);
     });
   });
   document.getElementById('invoicesTable').innerHTML = rows.join('') || '<tr><td colspan="8" style="color:var(--muted)">No invoices yet.</td></tr>';
+}
+/* Figures out what the Delete cell should show for one invoice row:
+   - Filed: locked, no request possible.
+   - No order behind it (a regular "New Invoice" to a customer with no
+     linked buyer account, or one that's not currently ACTIVE): deletes
+     immediately, same as before — there's no one to ask.
+   - Has a linked, ACTIVE buyer behind it (an order-derived invoice from
+     order-receive.html — sourceOrderId is set): needs the buyer's sign-off
+     first, since accepting that order already moved stock on both sides. */
+function deleteActionCell(invoiceId, inv, req){
+  if(inv.gstFiled) return `<button class="btn small" disabled title="Filed in a GST return — can't be deleted">Delete</button>`;
+  if(!inv.sourceOrderId) return `<button class="btn small danger" onclick="deleteInvoice('${invoiceId}')">Delete</button>`;
+  if(req){
+    if(req.status === 'PENDING') return `<span class="badge" title="Reason: ${escAttr(req.reason||'')}">Waiting for buyer</span>`;
+    if(req.status === 'REJECTED') return `<span class="badge" title="Buyer's reason, if any: ${escAttr(req.buyerNote||'')}">Buyer declined</span> <button class="btn small danger" onclick="deleteInvoice('${invoiceId}')">Request again</button>`;
+    if(req.status === 'ACCEPTED') return `<button class="btn small danger" onclick="finalizeInvoiceDeletion('${invoiceId}', '${req.id}')">Finalize Deletion</button>`;
+  }
+  return `<button class="btn small danger" onclick="deleteInvoice('${invoiceId}')">Delete</button>`;
+}
+function escAttr(s){ return esc(s).replace(/"/g, '&quot;'); }
+
+/* Reverses the stock this invoice originally deducted (every invoice does,
+   via the 'sale-out' movement written when it was created — see saveInvoice
+   and order-receive.html's Accept flow) — this itself was missing entirely
+   before, so ANY invoice deletion was silently leaving Stock overstated. */
+async function reverseStockForInvoiceItems(items, note){
+  for(const li of (items || [])){
+    if(!li.productId || !li.qty) continue;
+    await addStockMovement('sale-out', li.productId, li.qty, new Date().toISOString().slice(0,10), note);
+  }
 }
 async function deleteInvoice(id){
   const inv = invoicesCache[id];
@@ -2008,11 +2052,72 @@ async function deleteInvoice(id){
     alert(`This invoice was filed as part of the ${inv.gstFiledPeriod||''} GST return and can't be deleted.`);
     return;
   }
-  if(!confirm('Move this invoice to the Recycle Bin? You can restore it within 30 days. Note: this does not cancel or affect any GST filing already submitted using it — issue a credit note for that instead.')) return;
+  if(!inv) return;
+
+  // Order-derived invoice: the buyer's own account has a linked purchase
+  // record with real stock on their side too, from when they accepted this
+  // order — deleting the invoice unilaterally would leave their records
+  // (and their stock) referring to a sale that no longer exists on yours.
+  if(inv.sourceOrderId){
+    const existing = invoiceDeleteRequestsCache[id];
+    if(existing && existing.status === 'PENDING'){ alert('A deletion request for this invoice is already waiting on the buyer.'); return; }
+    const reason = prompt('This invoice came from an accepted buyer order — deleting it needs their sign-off first, since it affects their stock too.\n\nEnter a reason for the buyer to see:');
+    if(reason === null) return; // cancelled
+    if(!reason.trim()){ alert('A reason is required so the buyer knows why.'); return; }
+    try{
+      const orderSnap = await db.collection('marketplaceOrders').doc(inv.sourceOrderId).get();
+      const order = orderSnap.exists ? orderSnap.data() : null;
+      if(!order || !order.buyerUid){ alert('Could not find the original order for this invoice — it may have been altered. Contact support.'); return; }
+      await db.collection('invoiceDeleteRequests').add({
+        sellerUid: currentUser.uid, sellerName: businessData.businessName || currentUser.email,
+        buyerUid: order.buyerUid, buyerEmail: order.buyerEmail || '',
+        invoiceId: id, invoiceNo: inv.invoiceNo || '', orderId: inv.sourceOrderId, orderNumber: order.orderNumber || '',
+        reason: reason.trim(), status: 'PENDING',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      showMsg('invoiceHistMsg', 'Deletion request sent to the buyer — this invoice stays as-is until they respond.', true);
+      await loadInvoices();
+    }catch(err){
+      alert(`Could not send the deletion request: ${err.message}`);
+    }
+    return;
+  }
+
+  // Plain invoice, no order behind it — nobody else's stock depends on it.
+  if(!confirm('Move this invoice to the Recycle Bin? Its stock will be reversed. You can restore it within 30 days. Note: this does not cancel or affect any GST filing already submitted using it — issue a credit note for that instead.')) return;
+  await reverseStockForInvoiceItems(inv.items, `Reversed: deleted invoice ${inv.invoiceNo||''}`);
   await db.collection('users').doc(currentUser.uid).collection('invoices').doc(id).update({
     deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
   });
+  await loadProducts();
+  await loadStockMovements();
   await loadInvoices();
+}
+/* Runs once the buyer has accepted — completes the deletion on the SELLER's
+   own side. The buyer already reversed their own stock and purchase record
+   the moment they accepted (see buyer/dashboard.html); this is the matching
+   seller-side half, kept as a separate manual step because a seller's
+   client has no permission to write to the buyer's data, and vice versa —
+   each side only ever finalizes its own half once it sees the shared
+   request reach the right status. */
+async function finalizeInvoiceDeletion(invoiceId, requestId){
+  const inv = invoicesCache[invoiceId];
+  if(!inv) return;
+  if(!confirm('The buyer has approved this deletion. Finalize it now? This moves the invoice to your Recycle Bin and reverses its stock.')) return;
+  try{
+    await reverseStockForInvoiceItems(inv.items, `Reversed: deleted invoice ${inv.invoiceNo||''} (buyer-approved)`);
+    await db.collection('users').doc(currentUser.uid).collection('invoices').doc(invoiceId).update({
+      deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await db.collection('invoiceDeleteRequests').doc(requestId).update({
+      status: 'COMPLETED', completedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await loadProducts();
+    await loadStockMovements();
+    await loadInvoices();
+  }catch(err){
+    alert(`Could not finalize: ${err.message}`);
+  }
 }
 
 // PDFs are never stored as files anywhere — every download is generated fresh,
