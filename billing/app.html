@@ -211,7 +211,7 @@
     <div id="view-trash" class="view hidden">
       <div class="card">
         <h2>Recycle Bin</h2>
-        <p class="sub">Deleted purchases and payments sit here for 30 days before being permanently removed, in case something was deleted by mistake. Restoring a purchase re-applies any stock it had added.</p>
+        <p class="sub">Deleted purchases, payments and invoices sit here for 30 days before being permanently removed, in case something was deleted by mistake. Restoring a purchase re-applies any stock it had added. Invoices already filed in a GST return never auto-purge, even past 30 days.</p>
       </div>
       <div class="card">
         <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Deleted Purchases</h3>
@@ -222,6 +222,11 @@
         <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Deleted Payments</h3>
         <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Deleted On</th><th></th></tr></thead>
         <tbody id="trashPaymentsTable"></tbody></table>
+      </div>
+      <div class="card">
+        <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Deleted Invoices</h3>
+        <table><thead><tr><th>Invoice #</th><th>Date</th><th>Customer</th><th>Total</th><th>Deleted On</th><th></th></tr></thead>
+        <tbody id="trashInvoicesTable"></tbody></table>
       </div>
     </div>
 
@@ -571,6 +576,13 @@
           <button class="btn primary" onclick="downloadGstr1Excel()">Download Excel (Sales + Purchases)</button>
           <button class="btn" onclick="downloadGstr1Json()">Download JSON (Sales — GST Portal Format)</button>
         </div>
+      </div>
+
+      <div class="card hidden" id="gstrMarkFiledCard">
+        <h2>Mark This Period as Filed</h2>
+        <p class="sub">Once you've actually submitted this return on the GST portal, mark it filed here — every invoice and purchase in this period then becomes locked from editing or deletion, so the records behind an already-submitted return can't drift out of sync with what you filed. This can't be undone from the app; contact yourself-as-support (i.e. edit Firestore directly) if you need to unlock a period marked by mistake.</p>
+        <button class="btn danger" onclick="markPeriodAsFiled()">Mark <span id="gstrMarkFiledPeriodLabel"></span> as Filed</button>
+        <p class="msg" id="gstrMarkFiledMsg"></p>
       </div>
     </div>
 
