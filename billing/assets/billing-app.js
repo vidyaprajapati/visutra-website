@@ -1799,6 +1799,38 @@ async function saveAndGenerate(sendEmail){
   }
   if(stockItems.length){ await loadProducts(); await loadStockMovements(); }
 
+  // This customer is also a linked VISUTRA buyer — meaning this sale, even
+  // though it came in through some other channel (phone, WhatsApp, in
+  // person) rather than through Place Order, still has a real buyer account
+  // on the other end whose own stock should reflect it. Rather than silently
+  // pushing a purchase into their account, this proposes it as an order for
+  // them to confirm — same shape as an accepted marketplace order, so the
+  // EXISTING buyer-side auto-purchase logic (my-orders.html) picks it up
+  // automatically the moment they approve, with no separate code path.
+  if(customer.linkedBuyerUid && customer.linkStatus === 'ACTIVE'){
+    try{
+      await db.collection('marketplaceOrders').add({
+        buyerUid: customer.linkedBuyerUid, buyerEmail: customer.linkedBuyerEmail || customer.email || '',
+        sellerUid: currentUser.uid, sellerName: businessData.businessName || currentUser.email,
+        status: 'PENDING_BUYER_CONFIRMATION', orderType: 'SELLER_RECORDED',
+        orderNumber: invoiceNo,
+        items: stockItems.map(li => ({
+          productId: li.productId, productName: li.name, sellerSku: (productsCache.find(p => p.id === li.productId) || {}).sku || '',
+          unit: li.unit || 'PCS', hsn: li.hsn || '', qty: li.qty, rate: li.rate || 0, gstRate: li.gstRate || 0,
+          taxable: li.taxable || 0, gstAmt: fix2((li.taxable||0) * (li.gstRate||0) / 100), total: fix2((li.taxable||0) * (1 + (li.gstRate||0)/100))
+        })),
+        invoiceId: ref.id, invoiceNo,
+        invoiceSummary: { subtotal: totals.subtotal, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, grandTotal: totals.grand },
+        buyerBusiness: { businessName: customer.name, gstin: customer.gstin, address: customer.address, state: customer.state, stateCode: customer.stateCode, email: customer.email },
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }catch(err){
+      // Non-fatal — the invoice itself is already saved and correct on your
+      // side; only the buyer-side notification failed to go out.
+      console.error('Could not notify linked buyer of this invoice:', err);
+    }
+  }
+
   showMsg('invoiceMsg', 'Generating PDF…', true);
   const pdfBlob = buildInvoicePDF(invoiceData);
 
