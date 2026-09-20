@@ -27,6 +27,13 @@
     <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first — you'll get a login email to share with sellers, who can then link your account.</p>
   </div>
 
+  <div class="card" id="orderConfirmCard" style="display:none;background:#FFF7ED;border:1.5px solid #E8A32C">
+    <h2>Orders to Confirm</h2>
+    <p class="sub">A linked seller recorded a sale to you that didn't come through Place Order (e.g. a phone or WhatsApp order) and wants it reflected in your account. Approving adds it to My Orders and updates your stock, same as any other accepted order.</p>
+    <table><thead><tr><th>Seller</th><th>Invoice #</th><th>Items</th><th>Total</th><th></th></tr></thead>
+    <tbody id="orderConfirmTable"></tbody></table>
+  </div>
+
   <div class="card" id="deleteRequestsCard" style="display:none;background:#FFF7ED;border:1.5px solid #E8A32C">
     <h2>Invoice Deletion Requests</h2>
     <p class="sub">A seller wants to delete an invoice from an order you accepted from them. Accepting removes your matching purchase record and reverses the stock it added — this can't be undone once accepted.</p>
@@ -91,8 +98,144 @@ auth.onAuthStateChanged(async user => {
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
 
   await loadDeleteRequests();
+  await loadOrdersToConfirm();
   await loadDashboard();
 });
+
+/* ---------------- Orders to Confirm (seller-recorded, off-platform sales) ----------------
+   Approving just flips status to ACCEPTED — the exact same status a normal
+   Place Order goes to once a seller accepts it — so My Orders' existing
+   sweep (ensureBuyerPurchaseForOrder) picks it up and creates the purchase
+   + stock with no separate code path needed here. */
+async function loadOrdersToConfirm(){
+  const snap = await db.collection('marketplaceOrders')
+    .where('buyerUid', '==', currentUser.uid).where('status', '==', 'PENDING_BUYER_CONFIRMATION').get();
+  const orders = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const card = document.getElementById('orderConfirmCard');
+  if(!orders.length){ card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  document.getElementById('orderConfirmTable').innerHTML = orders.map(o => {
+    const itemsSummary = (o.items||[]).map(i => `${esc(i.productName)} × ${i.qty}`).join(', ');
+    const total = (o.invoiceSummary && o.invoiceSummary.grandTotal) || 0;
+    return `<tr><td>${esc(o.sellerName||'Seller')}</td><td>${esc(o.invoiceNo||'')}</td><td>${esc(itemsSummary)}</td><td>₹${fmtMoney(total)}</td>
+    <td class="row-actions">
+      <button class="btn small primary" onclick="respondToOrderConfirm('${o.id}', true)">Approve</button>
+      <button class="btn small danger" onclick="respondToOrderConfirm('${o.id}', false)">Reject</button>
+    </td></tr>`;
+  }).join('');
+}
+async function respondToOrderConfirm(orderId, approve){
+  if(approve){
+    if(!confirm('Approve this order? It will be added to My Orders and your stock will update to match.')) return;
+    try{
+      const orderSnap = await db.collection('marketplaceOrders').doc(orderId).get();
+      if(!orderSnap.exists){ alert('This order no longer exists.'); await loadOrdersToConfirm(); return; }
+      const order = { id: orderId, ...orderSnap.data() };
+      await db.collection('marketplaceOrders').doc(orderId).update({
+        status: 'ACCEPTED', acceptedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      order.acceptedAt = { toDate: () => new Date() }; // local stand-in so the purchase date below is "now", matching what re-reading the doc after commit would give
+      await ensureBuyerPurchaseForOrder(order);
+      await loadOrdersToConfirm();
+      await loadDashboard();
+    }catch(err){
+      alert(`Could not approve: ${err.message}`);
+    }
+  } else {
+    const reason = prompt('Reason for rejecting (optional, shown to the seller):') || '';
+    if(!confirm('Reject this order? The seller will see it was declined.')) return;
+    try{
+      await db.collection('marketplaceOrders').doc(orderId).update({
+        status: 'REJECTED', rejectionReason: reason, respondedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      await loadOrdersToConfirm();
+    }catch(err){
+      alert(`Could not reject: ${err.message}`);
+    }
+  }
+}
+
+/* ---------------- Buyer purchase creation (ported from my-orders.html) ----------------
+   Same logic as the sweep that runs there for any ACCEPTED order missing a
+   buyerPurchaseId — duplicated here (not shared, since this is a separate
+   standalone page) so approving completes fully in one step instead of
+   telling the person to go open another page first. */
+async function ensureBuyerPurchaseForOrder(order){
+  const supplierId = await ensureSupplierForSeller(order.sellerUid, order.sellerName);
+  const items = [];
+  const stockIns = [];
+  for(const item of order.items){
+    const { purchaseProductId, linkedProductId } = await ensurePurchaseProductForSellerItem(order.sellerUid, item);
+    items.push({
+      productId: purchaseProductId, name: item.productName, unit: item.unit || 'PCS', hsn: item.hsn || '',
+      qty: item.qty, rate: item.rate || 0, gstRate: item.gstRate || 0,
+      taxable: item.taxable || 0, gstAmt: item.gstAmt || 0, total: item.total || 0,
+      priceMode: 'excl', linkedProductId: linkedProductId || null
+    });
+    if(linkedProductId) stockIns.push({ linkedProductId, qty: item.qty });
+  }
+  const summary = order.invoiceSummary || {};
+  const purchaseData = {
+    supplierId, supplierName: order.sellerName,
+    date: order.acceptedAt?.toDate ? order.acceptedAt.toDate().toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+    items,
+    subtotal: summary.subtotal || 0,
+    gstTotal: (summary.cgst || 0) + (summary.sgst || 0) + (summary.igst || 0),
+    grandTotal: summary.grandTotal || 0,
+    orderId: order.id, orderNumber: order.orderNumber, invoiceId: order.invoiceId, invoiceNo: order.invoiceNo,
+    autoCreatedFromOrder: true,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const purRef = await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
+  for(const s of stockIns){
+    await db.collection('users').doc(currentUser.uid).collection('products').doc(s.linkedProductId).update({
+      stock: firebase.firestore.FieldValue.increment(s.qty)
+    });
+    await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
+      type: 'purchase-in', productId: s.linkedProductId, qty: s.qty, date: purchaseData.date,
+      note: `Purchase from ${order.sellerName} (order ${order.orderNumber || ''})`,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }
+  await db.collection('marketplaceOrders').doc(order.id).update({
+    buyerPurchaseId: purRef.id,
+    buyerPurchaseCreatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+async function ensureSupplierForSeller(sellerUid, sellerName){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers')
+    .where('sellerUid', '==', sellerUid).limit(1).get();
+  if(!snap.empty) return snap.docs[0].id;
+  const ref = await db.collection('users').doc(currentUser.uid).collection('suppliers').add({
+    name: sellerName, sellerUid, gstin: '', address: '', stateCode: '', state: '', email: '', phone: '',
+    autoCreatedFromOrder: true
+  });
+  return ref.id;
+}
+let myProductsCache = null; // lazy-loaded once, only if an approval actually needs it
+async function findMyProductByName(name){
+  if(!myProductsCache){
+    const snap = await db.collection('users').doc(currentUser.uid).collection('products').get();
+    myProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  }
+  const norm = (name || '').trim().toLowerCase();
+  if(!norm) return null;
+  return myProductsCache.find(p => (p.name || '').trim().toLowerCase() === norm) || null;
+}
+async function ensurePurchaseProductForSellerItem(sellerUid, item){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts')
+    .where('sellerUid', '==', sellerUid).where('sellerProductId', '==', item.productId).limit(1).get();
+  if(!snap.empty){
+    const doc = snap.docs[0];
+    return { purchaseProductId: doc.id, linkedProductId: doc.data().linkedProductId || null };
+  }
+  const match = await findMyProductByName(item.productName);
+  const ref = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').add({
+    name: item.productName, hsn: item.hsn || '', unit: item.unit || 'PCS', linkedProductId: match ? match.id : null,
+    sellerUid, sellerProductId: item.productId, autoCreatedFromOrder: true
+  });
+  return { purchaseProductId: ref.id, linkedProductId: match ? match.id : null };
+}
 
 /* ---------------- Invoice Deletion Requests ----------------
    A seller wants to delete an order-derived invoice, which means undoing
