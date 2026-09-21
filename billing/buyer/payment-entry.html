@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Payment Entry | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Payment Entry</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="purchase-entry.html">Purchase Entry</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main">
+
+  <div class="card" id="notBuyerCard" style="display:none">
+    <h2>Buyer Features Not Enabled</h2>
+    <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first — you'll get a login email to share with sellers, who can then link your account.</p>
+  </div>
+
+  <div class="card">
+    <h2>Payment Entry</h2>
+    <p class="sub">Record a payment to a supplier — for a specific purchase, an advance, or just catching up on an old balance. Separate from Purchase Entry, so you can log a payment any time without recording a new purchase.</p>
+    <div class="grid2">
+      <div class="field"><label>Supplier</label><select id="payEntrySupplier"><option value="">Select supplier…</option></select></div>
+      <div class="field"><label>Payment date</label><input id="payEntryDate" type="date"></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Amount (₹)</label><input id="payEntryAmount" type="number" min="0" step="0.01"></div>
+      <div class="field"><label>Mode (Cash / UPI / Bank...)</label><input id="payEntryMode"></div>
+    </div>
+    <div class="field"><label>Note (optional)</label><input id="payEntryNote"></div>
+    <button class="btn primary" onclick="savePaymentEntry()">Save Payment</button>
+    <p class="msg" id="paymentEntryMsg"></p>
+  </div>
+
+  <div class="card">
+    <h2>Payment History</h2>
+    <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Mode</th><th>Note</th></tr></thead>
+    <tbody id="paymentsTable"></tbody></table>
+  </div>
+
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+let suppliersCache = [];
+let paymentsCache = [];
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/payment-entry.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/payment-entry.html');
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('payment-entry', '../');
+
+  const data = snap.data() || {};
+  document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
+
+  document.getElementById('payEntryDate').valueAsDate = new Date();
+  await loadSuppliers();
+  await loadPayments();
+});
+
+async function loadSuppliers(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  suppliersCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  document.getElementById('payEntrySupplier').innerHTML = '<option value="">Select supplier…</option>' +
+    suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}${s.sellerUid ? ' (VISUTRA seller)' : ''}</option>`).join('');
+}
+async function loadPayments(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('payments').orderBy('date','desc').limit(100).get();
+  paymentsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => !p.deleted);
+  document.getElementById('paymentsTable').innerHTML = paymentsCache.map(p => `
+    <tr><td>${esc(p.date)}</td><td>${esc(p.supplierName)}</td><td>₹${fmtMoney(p.amount)}</td><td>${esc(p.mode||'')}</td><td>${esc(p.note||'')}</td></tr>
+  `).join('') || '<tr><td colspan="5" style="color:var(--muted)">No payments recorded yet.</td></tr>';
+}
+async function savePaymentEntry(){
+  const supplierId = document.getElementById('payEntrySupplier').value;
+  const supplier = suppliersCache.find(s => s.id === supplierId);
+  const amount = parseFloat(document.getElementById('payEntryAmount').value) || 0;
+  const date = document.getElementById('payEntryDate').value || new Date().toISOString().slice(0,10);
+  if(!supplier){ showMsg('Select a supplier first.', false); return; }
+  if(amount <= 0){ showMsg('Enter an amount greater than zero.', false); return; }
+
+  try{
+    await db.collection('users').doc(currentUser.uid).collection('payments').add({
+      supplierId, supplierName: supplier.name, date, amount,
+      mode: document.getElementById('payEntryMode').value.trim(),
+      note: document.getElementById('payEntryNote').value.trim(),
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    showMsg(`Payment of ₹${fmtMoney(amount)} to ${supplier.name} recorded.`, true);
+    ['payEntryAmount','payEntryMode','payEntryNote'].forEach(f => document.getElementById(f).value = '');
+    await loadPayments();
+  }catch(err){
+    showMsg(`Could not save: ${err.message}`, false);
+  }
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function showMsg(text, ok){
+  const el = document.getElementById('paymentEntryMsg');
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+</body>
+</html>

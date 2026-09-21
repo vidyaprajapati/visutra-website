@@ -57,7 +57,7 @@
 
   <div class="card">
     <h2>Dues &amp; Payment History</h2>
-    <p class="sub">Every linked seller you've bought from, ranked by balance due — the same purchase/payment records that back your <a href="../app.html?view=supplier-dashboard">Supplier Dashboard</a> in Billing, filtered here to just the sellers you buy from on VISUTRA.</p>
+    <p class="sub">Every supplier you've bought from, ranked by balance due — VISUTRA sellers (from accepted orders) and anyone you've added by hand in <a href="purchase-entry.html">Purchase Entry</a> alike. Same underlying records as your <a href="../app.html?view=supplier-dashboard">Supplier Dashboard</a> in Billing.</p>
     <table><thead><tr><th>Seller</th><th>Total Purchased</th><th>Total Paid</th><th>Balance Due</th><th>Last Payment</th></tr></thead>
     <tbody id="duesTable"></tbody></table>
   </div>
@@ -326,29 +326,29 @@ async function loadDashboard(){
   const allPurchases = purchasesSnap.docs.map(d => ({id: d.id, ...d.data()}));
   const allPayments = paymentsSnap.docs.map(d => ({id: d.id, ...d.data()}));
 
-  // "Sellers I buy from" are suppliers that were auto-created from an
-  // accepted order (they carry a sellerUid) — this is what distinguishes
-  // them from any regular raw-material suppliers on the Billing side, even
-  // though both live in the same suppliers collection.
+  // "Sellers I buy from" (via VISUTRA orders) are suppliers auto-created
+  // from an accepted order — they carry a sellerUid. Dues & payments below
+  // now cover ALL suppliers though, including ones added by hand in
+  // Purchase Entry for off-platform purchases — a supplier's balance due
+  // doesn't stop mattering just because they aren't on VISUTRA.
   const sellerSuppliers = allSuppliers.filter(s => s.sellerUid);
   const sellerSupplierIds = new Set(sellerSuppliers.map(s => s.id));
   const purchasesFromSellers = allPurchases.filter(p => sellerSupplierIds.has(p.supplierId));
-  const paymentsToSellers = allPayments.filter(p => sellerSupplierIds.has(p.supplierId));
 
   const pendingCount = orders.filter(o => o.status === 'PENDING').length;
   const today = new Date();
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0,10);
-  const monthTotal = purchasesFromSellers.filter(p => p.date >= monthStart).reduce((sum,p) => sum + (p.grandTotal||0), 0);
+  const monthTotal = allPurchases.filter(p => p.date >= monthStart).reduce((sum,p) => sum + (p.grandTotal||0), 0);
 
   let totalDues = 0;
-  const duesRows = sellerSuppliers.map(s => {
-    const totalPurchase = purchasesFromSellers.filter(p => p.supplierId === s.id).reduce((sum,p) => sum + (p.grandTotal||0), 0);
-    const supplierPayments = paymentsToSellers.filter(p => p.supplierId === s.id);
+  const duesRows = allSuppliers.map(s => {
+    const totalPurchase = allPurchases.filter(p => p.supplierId === s.id).reduce((sum,p) => sum + (p.grandTotal||0), 0);
+    const supplierPayments = allPayments.filter(p => p.supplierId === s.id);
     const totalPaid = supplierPayments.reduce((sum,p) => sum + (p.amount||0), 0);
     const lastPayment = supplierPayments.sort((a,b) => (b.date||'').localeCompare(a.date||''))[0];
     const balance = totalPurchase - totalPaid;
     totalDues += balance;
-    return { name: s.name, totalPurchase, totalPaid, balance, lastPayment };
+    return { name: s.name, isSeller: !!s.sellerUid, totalPurchase, totalPaid, balance, lastPayment };
   }).filter(r => r.totalPurchase > 0 || r.totalPaid > 0).sort((a,b) => b.balance - a.balance);
 
   const trackedProductIds = new Set();
@@ -365,9 +365,9 @@ async function loadDashboard(){
     ? `${esc(sortedOrders[0].sellerName)} — ${sortedOrders[0].createdAt?.toDate ? sortedOrders[0].createdAt.toDate().toISOString().slice(0,10) : ''}` : '—';
 
   document.getElementById('duesTable').innerHTML = duesRows.map(r => `
-    <tr><td>${esc(r.name)}</td><td>₹${fmtMoney(r.totalPurchase)}</td><td>₹${fmtMoney(r.totalPaid)}</td>
+    <tr><td>${esc(r.name)}${r.isSeller ? ' <span class="badge">VISUTRA</span>' : ''}</td><td>₹${fmtMoney(r.totalPurchase)}</td><td>₹${fmtMoney(r.totalPaid)}</td>
     <td>₹${fmtMoney(r.balance)}</td><td>${r.lastPayment ? esc(r.lastPayment.date) + ' — ₹' + fmtMoney(r.lastPayment.amount) : '—'}</td></tr>
-  `).join('') || '<tr><td colspan="5" style="color:var(--muted)">No purchases from linked sellers yet.</td></tr>';
+  `).join('') || '<tr><td colspan="5" style="color:var(--muted)">No purchases recorded yet.</td></tr>';
 
   document.getElementById('recentOrdersTable').innerHTML = sortedOrders.slice(0, 8).map(o => {
     const date = o.createdAt?.toDate ? o.createdAt.toDate().toISOString().slice(0, 10) : '';

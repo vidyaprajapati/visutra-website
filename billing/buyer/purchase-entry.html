@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Purchase Entry | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Purchase Entry</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="payment-entry.html">Payment Entry</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main">
+
+  <div class="card" id="notBuyerCard" style="display:none">
+    <h2>Buyer Features Not Enabled</h2>
+    <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first — you'll get a login email to share with sellers, who can then link your account.</p>
+  </div>
+
+  <div class="card">
+    <h2>Record a Purchase</h2>
+    <p class="sub">For anything you bought from a supplier who isn't a linked VISUTRA seller (a local shop, a one-off supplier, anyone off-platform) — or even a linked seller, if you'd rather log it by hand than place an order through them. This writes to the same Suppliers/Purchases records your Buyer Dashboard's dues already read from.</p>
+    <div class="grid2">
+      <div class="field"><label>Supplier</label><select id="pSupplier" onchange="onSupplierChange()"><option value="">Select supplier…</option></select></div>
+      <div class="field"><label>Purchase date</label><input id="pDate" type="date"></div>
+    </div>
+
+    <div class="card" id="newSupplierCard" style="display:none;background:var(--ivory);margin:14px 0">
+      <h3 style="margin:0 0 10px;font-family:var(--display);font-size:15px">New Supplier</h3>
+      <div class="grid2">
+        <div class="field"><label>Name</label><input id="nsName" placeholder="e.g. Sharma General Store"></div>
+        <div class="field"><label>GSTIN (optional)</label><input id="nsGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Phone (optional)</label><input id="nsPhone"></div>
+        <div class="field"><label>Email (optional)</label><input id="nsEmail"></div>
+      </div>
+      <button class="btn small primary" onclick="addNewSupplier()">Add Supplier</button>
+      <button class="btn small" onclick="cancelNewSupplier()">Cancel</button>
+    </div>
+    <button class="btn small" id="addSupplierBtn" onclick="showNewSupplierForm()">+ Add a new supplier</button>
+
+    <table class="line-items" style="margin-top:16px">
+      <thead><tr><th>Item</th><th>Qty</th><th>Rate (₹)</th><th>GST %</th><th>Taxable</th><th>GST Amt</th><th>Total</th><th></th></tr></thead>
+      <tbody id="lineItemsTable"></tbody>
+    </table>
+    <button class="btn small" style="margin-top:10px" onclick="addLineItem()">+ Add line item</button>
+
+    <div class="totals-box" id="totalsBox"></div>
+
+    <div class="grid2" style="margin-top:16px">
+      <div class="field"><label>Amount paid now (₹) — optional</label><input id="pPaidNow" type="number" min="0" step="0.01" value="0" oninput="recalcTotals()"></div>
+      <div class="field"><label>Balance to this supplier after this purchase</label><input id="pBalancePreview" type="text" readonly style="background:var(--ivory);color:var(--muted)"></div>
+    </div>
+
+    <button class="btn primary" style="margin-top:10px" onclick="savePurchase()">Save Purchase</button>
+    <p class="msg" id="purchaseMsg"></p>
+  </div>
+
+  <div class="card">
+    <h2>Purchase History</h2>
+    <p class="sub">Click a supplier's name to see their full ledger on your Dashboard.</p>
+    <table><thead><tr><th>Date</th><th>Supplier</th><th>Item</th><th>Qty</th><th>Total</th><th></th></tr></thead>
+    <tbody id="purchasesTable"></tbody></table>
+  </div>
+
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+let suppliersCache = [];
+let purchasesCache = [];
+let paymentsCache = [];
+let lineItems = [];
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/purchase-entry.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/purchase-entry.html');
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('purchase-entry', '../');
+
+  const data = snap.data() || {};
+  document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
+
+  document.getElementById('pDate').valueAsDate = new Date();
+  await loadSuppliers();
+  await loadPurchases();
+  await loadPayments();
+  addLineItem();
+});
+
+async function loadSuppliers(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  suppliersCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const sel = document.getElementById('pSupplier');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">Select supplier…</option>' +
+    suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}${s.sellerUid ? ' (VISUTRA seller)' : ''}</option>`).join('');
+  if(prev && suppliersCache.some(s => s.id === prev)) sel.value = prev;
+}
+function onSupplierChange(){ recalcTotals(); }
+function showNewSupplierForm(){ document.getElementById('newSupplierCard').style.display = 'block'; }
+function cancelNewSupplier(){
+  document.getElementById('newSupplierCard').style.display = 'none';
+  ['nsName','nsGstin','nsPhone','nsEmail'].forEach(f => document.getElementById(f).value = '');
+}
+async function addNewSupplier(){
+  const name = document.getElementById('nsName').value.trim();
+  if(!name){ showMsg('purchaseMsg', 'Enter a supplier name.', false); return; }
+  const data = {
+    name,
+    gstin: document.getElementById('nsGstin').value.trim(),
+    phone: document.getElementById('nsPhone').value.trim(),
+    email: document.getElementById('nsEmail').value.trim(),
+    address: '', stateCode: '', state: ''
+  };
+  const ref = await db.collection('users').doc(currentUser.uid).collection('suppliers').add(data);
+  cancelNewSupplier();
+  await loadSuppliers();
+  document.getElementById('pSupplier').value = ref.id;
+  showMsg('purchaseMsg', `Added ${name}.`, true);
+}
+
+function addLineItem(){
+  lineItems.push({ name: '', qty: 1, rate: 0, gstRate: 0 });
+  renderLineItems();
+}
+function removeLineItem(idx){
+  lineItems.splice(idx, 1);
+  if(!lineItems.length) lineItems.push({ name: '', qty: 1, rate: 0, gstRate: 0 });
+  renderLineItems();
+}
+function updateLineItem(idx, field, value){
+  lineItems[idx][field] = (field === 'name') ? value : (parseFloat(value) || 0);
+  renderLineItems();
+}
+function lineTaxable(li){ return (li.qty||0) * (li.rate||0); }
+function renderLineItems(){
+  document.getElementById('lineItemsTable').innerHTML = lineItems.map((li, idx) => {
+    const taxable = lineTaxable(li);
+    const gstAmt = taxable * (li.gstRate||0) / 100;
+    return `<tr>
+      <td><input value="${escAttr(li.name)}" oninput="updateLineItem(${idx},'name',this.value)" placeholder="e.g. Packing tape"></td>
+      <td><input type="number" min="0" step="1" value="${li.qty}" style="width:70px" oninput="updateLineItem(${idx},'qty',this.value)"></td>
+      <td><input type="number" min="0" step="0.01" value="${li.rate}" style="width:90px" oninput="updateLineItem(${idx},'rate',this.value)"></td>
+      <td><input type="number" min="0" step="0.01" value="${li.gstRate}" style="width:70px" oninput="updateLineItem(${idx},'gstRate',this.value)"></td>
+      <td>₹${fmtMoney(taxable)}</td><td>₹${fmtMoney(gstAmt)}</td><td>₹${fmtMoney(taxable+gstAmt)}</td>
+      <td><button class="btn small danger" onclick="removeLineItem(${idx})">×</button></td>
+    </tr>`;
+  }).join('');
+  recalcTotals();
+}
+function computeTotals(){
+  let subtotal = 0, gstTotal = 0;
+  lineItems.forEach(li => {
+    const taxable = lineTaxable(li);
+    subtotal += taxable;
+    gstTotal += taxable * (li.gstRate||0) / 100;
+  });
+  return { subtotal, gstTotal, grand: subtotal + gstTotal };
+}
+function recalcTotals(){
+  const totals = computeTotals();
+  document.getElementById('totalsBox').innerHTML = `
+    <div class="totals-row"><span>Taxable value</span><span>₹${fmtMoney(totals.subtotal)}</span></div>
+    <div class="totals-row"><span>GST</span><span>₹${fmtMoney(totals.gstTotal)}</span></div>
+    <div class="totals-row grand"><span>Total</span><span>₹${fmtMoney(totals.grand)}</span></div>`;
+
+  const supplierId = document.getElementById('pSupplier').value;
+  const paidNow = parseFloat(document.getElementById('pPaidNow').value) || 0;
+  const priorBalance = supplierId ? computeSupplierBalance(supplierId) : 0;
+  const newBalance = priorBalance + totals.grand - paidNow;
+  document.getElementById('pBalancePreview').value = supplierId ? `₹${fmtMoney(newBalance)}` : '—';
+}
+function computeSupplierBalance(supplierId){
+  const totalPurchase = purchasesCache.filter(p => p.supplierId === supplierId).reduce((sum,p) => sum + (p.grandTotal||0), 0);
+  const totalPaid = paymentsCache.filter(p => p.supplierId === supplierId).reduce((sum,p) => sum + (p.amount||0), 0);
+  return totalPurchase - totalPaid;
+}
+
+async function savePurchase(){
+  const supplierId = document.getElementById('pSupplier').value;
+  const supplier = suppliersCache.find(s => s.id === supplierId);
+  if(!supplier){ showMsg('purchaseMsg', 'Select a supplier first.', false); return; }
+  const validItems = lineItems.filter(li => li.name.trim() && li.qty > 0);
+  if(!validItems.length){ showMsg('purchaseMsg', 'Add at least one item with a name and quantity.', false); return; }
+
+  const totals = computeTotals();
+  const paidNow = parseFloat(document.getElementById('pPaidNow').value) || 0;
+  const date = document.getElementById('pDate').value || new Date().toISOString().slice(0,10);
+
+  const purchaseData = {
+    supplierId, supplierName: supplier.name,
+    date,
+    items: validItems.map(li => ({
+      name: li.name, qty: li.qty, rate: li.rate, gstRate: li.gstRate,
+      taxable: lineTaxable(li), gstAmt: lineTaxable(li) * (li.gstRate||0) / 100,
+      total: lineTaxable(li) * (1 + (li.gstRate||0)/100)
+    })),
+    subtotal: totals.subtotal, gstTotal: totals.gstTotal, grandTotal: totals.grand,
+    recordedByBuyer: true, // distinguishes a manual entry from one auto-created by accepting a VISUTRA order
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+
+  try{
+    await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
+    if(paidNow > 0){
+      await db.collection('users').doc(currentUser.uid).collection('payments').add({
+        supplierId, supplierName: supplier.name, date, amount: paidNow, mode: '', note: 'Paid with purchase',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    const priorBalance = computeSupplierBalance(supplierId);
+    const newBalance = priorBalance + totals.grand - paidNow;
+    showMsg('purchaseMsg', paidNow > 0
+      ? `Purchase saved and ₹${fmtMoney(paidNow)} recorded as paid to ${supplier.name}. Balance now ₹${fmtMoney(newBalance)}.`
+      : `Purchase saved. Balance now ₹${fmtMoney(newBalance)}.`, true);
+
+    lineItems = [];
+    addLineItem();
+    document.getElementById('pPaidNow').value = '0';
+    await loadPurchases();
+    await loadPayments();
+    recalcTotals();
+  }catch(err){
+    showMsg('purchaseMsg', `Could not save: ${err.message}`, false);
+  }
+}
+
+async function loadPurchases(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').limit(100).get();
+  purchasesCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => !p.deleted);
+  renderPurchasesTable();
+}
+async function loadPayments(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('payments').get();
+  paymentsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => !p.deleted);
+}
+function renderPurchasesTable(){
+  const rows = [];
+  purchasesCache.forEach(p => {
+    (p.items||[]).forEach(li => {
+      rows.push(`<tr><td>${esc(p.date)}</td><td>${esc(p.supplierName)}</td><td>${esc(li.name)}</td><td>${li.qty||''}</td><td>₹${fmtMoney(li.total||0)}</td>
+      <td>${p.autoCreatedFromOrder ? '<span class="badge">From VISUTRA order</span>' : ''}</td></tr>`);
+    });
+  });
+  document.getElementById('purchasesTable').innerHTML = rows.join('') || '<tr><td colspan="6" style="color:var(--muted)">No purchases recorded yet.</td></tr>';
+}
+
+function escAttr(s){ return esc(s).replace(/"/g, '&quot;'); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function showMsg(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+</body>
+</html>
