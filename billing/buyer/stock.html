@@ -8,6 +8,7 @@
 <link rel="icon" href="../../favicon.svg">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../assets/billing.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -42,6 +43,31 @@
     <tbody id="movementsTable"></tbody></table>
   </div>
 
+  <div class="card">
+    <h2>Monthly Inventory Reconciliation</h2>
+    <p class="sub">If you resell what you buy from sellers on your own Meesho/Flipkart shop, upload the report(s) you download for the month here to keep this stock accurate. Everything is read in your browser only. Meesho and Flipkart reports are recognised automatically by their columns — delivered items reduce stock, and cancelled/RTO/returned items add stock back, since those physically come back to you. Other formats fall back to treating every row as a sale. The first time you upload, you'll map each SKU to one of your products once — after that, it's remembered automatically in future months.</p>
+    <div class="grid2">
+      <div class="field"><label>Report files (.csv, .xlsx, .xls) — you can select more than one</label><input id="stockFiles" type="file" multiple accept=".csv,.xlsx,.xls"></div>
+      <div class="field"><label>Period / label (e.g. "March 2026")</label><input id="stockPeriod" placeholder="March 2026"></div>
+    </div>
+    <button class="btn" onclick="parseStockFiles()">Read Files</button>
+    <p class="msg" id="stockUploadMsg"></p>
+
+    <div id="stockColumnMapWrap" class="hidden" style="margin-top:18px">
+      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 1 — Which column is the product, and which is the quantity?</h3>
+      <div id="stockColumnMapList"></div>
+      <button class="btn primary" style="margin-top:10px" onclick="aggregateStockUpload()">Next: Match Products</button>
+    </div>
+
+    <div id="stockAggWrap" class="hidden" style="margin-top:18px">
+      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 2 — Match each product/SKU, then apply</h3>
+      <p class="sub">For Meesho/Flipkart sheets, Sold and Returned are read from the status column automatically — Net is what actually changes stock (down for a sale, up for a cancellation/RTO/return).</p>
+      <table><thead><tr><th>From report</th><th>Sold</th><th>Returned</th><th>Net Stock Change</th><th>Matches to</th></tr></thead>
+      <tbody id="stockAggTable"></tbody></table>
+      <button class="btn primary" style="margin-top:14px" onclick="applyStockUpload()">Apply &amp; Update Stock</button>
+    </div>
+  </div>
+
   </div>
 </div>
 
@@ -52,6 +78,10 @@
 <script src="../assets/user-menu.js"></script>
 <script>
 let currentUser = null;
+let productsCache = [];    // ALL of this account's own products — not the seller-purchase-filtered subset used for the display table above
+let skuMappingsCache = []; // marketplace SKU/text -> one of your products, remembered across uploads
+let stockUploadSheets = [];
+let stockAggregation = [];
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -71,7 +101,228 @@ auth.onAuthStateChanged(async user => {
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
 
   await loadStock();
+  await loadProductsAndMappings();
 });
+
+async function loadProductsAndMappings(){
+  const [prodSnap, mapSnap] = await Promise.all([
+    db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get(),
+    db.collection('users').doc(currentUser.uid).collection('skuMappings').get()
+  ]);
+  productsCache = prodSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  skuMappingsCache = mapSnap.docs.map(d => ({id: d.id, ...d.data()}));
+}
+/* Bumps a product's stock by qty (can be negative) and logs the movement —
+   same shape/contract as Billing's own addStockMovement, kept local here
+   since this page doesn't share a script file with app.html. */
+async function addStockMovement(type, productId, qty, date, note){
+  const product = productsCache.find(p => p.id === productId);
+  if(!product || !qty) return;
+  await db.collection('users').doc(currentUser.uid).collection('products').doc(productId).update({
+    stock: firebase.firestore.FieldValue.increment(qty)
+  });
+  await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
+    type, productId, productName: product.name, qty, date, note: note || '',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+
+/* ---------------- Monthly Inventory Reconciliation (Meesho/Flipkart-aware) ----------------
+   Same detection/classification logic as Billing → Stock Management, just
+   operating on this account's OWN products/skuMappings/stockMovements —
+   for a buyer who resells what they've bought from a seller on their own
+   Meesho/Flipkart shop and needs their own inventory reconciled the same
+   way, independent of the seller's own stock. */
+const STOCK_PRODUCT_COL_GUESSES = ['sku','product name','item description','product title/description','description','product'];
+const STOCK_QTY_COL_GUESSES = ['quantity','qty','item quantity'];
+function guessStockColumn(headers, candidates){
+  const lower = headers.map(h => String(h).toLowerCase());
+  for(const c of candidates){ const i = lower.findIndex(h => h === c); if(i !== -1) return i; }
+  for(const c of candidates){ const i = lower.findIndex(h => h.includes(c)); if(i !== -1) return i; }
+  return -1;
+}
+const RETURN_STATUS_PATTERN = /cancel|rto|return/i;
+function detectSheetFormat(headers){
+  const lower = headers.map(h => String(h||'').trim().toLowerCase());
+  const idx = name => lower.indexOf(name);
+  if(idx('reason for credit entry') !== -1 && idx('sku') !== -1 && idx('quantity') !== -1){
+    return { format: 'meesho', reasonIdx: idx('reason for credit entry'), skuIdx: idx('sku'), qtyIdx: idx('quantity') };
+  }
+  if(idx('order date') !== -1 && idx('sku name') !== -1 && idx('order status') !== -1 && idx('gross units') !== -1){
+    return { format: 'flipkart-pnl', skuIdx: idx('sku name'), statusIdx: idx('order status'), qtyIdx: idx('gross units') };
+  }
+  return null;
+}
+async function parseStockFiles(){
+  const input = document.getElementById('stockFiles');
+  const files = input.files;
+  if(!files || !files.length){ showStockMsg('Choose at least one file first.', false); return; }
+  stockUploadSheets = [];
+  for(const file of files){
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array'});
+    wb.SheetNames.forEach(sheetName => {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {header:1, raw:true, defval:''});
+      if(!rows.length) return;
+      const headers = rows[0].map(h => String(h||'').trim());
+      const dataRows = rows.slice(1).filter(r => r.some(c => c !== '' && c !== undefined && c !== null));
+      if(!headers.length || !dataRows.length) return;
+      const detected = detectSheetFormat(headers);
+      if(!detected){
+        const prodGuess = guessStockColumn(headers, STOCK_PRODUCT_COL_GUESSES);
+        const qtyGuess = guessStockColumn(headers, STOCK_QTY_COL_GUESSES);
+        if(prodGuess === -1 || qtyGuess === -1) return;
+      }
+      stockUploadSheets.push({ fileName: file.name, sheetName, headers, rows: dataRows, detected });
+    });
+  }
+  if(!stockUploadSheets.length){ showStockMsg('Could not find any readable order data in the selected files.', false); return; }
+  renderStockColumnMapUI();
+  const autoCount = stockUploadSheets.filter(s => s.detected).length;
+  showStockMsg(`Read ${stockUploadSheets.length} sheet(s) from ${files.length} file(s).` +
+    (autoCount ? ` ${autoCount} recognised automatically (Meesho/Flipkart) — returns and cancellations will be added back to stock, not deducted.` : ' Pick the product and quantity column for each below.'), true);
+}
+function renderStockColumnMapUI(){
+  document.getElementById('stockColumnMapWrap').classList.remove('hidden');
+  document.getElementById('stockAggWrap').classList.add('hidden');
+  document.getElementById('stockColumnMapList').innerHTML = stockUploadSheets.map((s, i) => {
+    if(s.detected){
+      const label = s.detected.format === 'meesho' ? 'Meesho' : 'Flipkart Orders P&L';
+      return `<div class="box" style="margin-bottom:10px">
+        <p style="margin:0;font-size:13px"><span class="badge">${label} — detected automatically</span></p>
+        <p style="margin:6px 0 0;font-size:13px;color:var(--muted)">${esc(s.fileName)} — ${esc(s.sheetName)} (${s.rows.length} rows). Status/reason column read automatically — no columns to pick.</p>
+      </div>`;
+    }
+    const opts = s.headers.map((h, ci) => `<option value="${ci}">${esc(h || ('(column ' + (ci+1) + ')'))}</option>`).join('');
+    return `<div class="box" style="margin-bottom:10px">
+      <p style="margin:0 0 8px;font-size:13px;color:var(--muted)">${esc(s.fileName)} — ${esc(s.sheetName)} (${s.rows.length} rows) — unrecognised format, every row here will be treated as a sale (no return/cancellation detection).</p>
+      <div class="grid2">
+        <div class="field"><label>Product / SKU column</label><select id="stockColProd${i}">${opts}</select></div>
+        <div class="field"><label>Quantity column</label><select id="stockColQty${i}">${opts}</select></div>
+      </div>
+    </div>`;
+  }).join('');
+  stockUploadSheets.forEach((s, i) => {
+    if(s.detected) return;
+    const prodGuess = guessStockColumn(s.headers, STOCK_PRODUCT_COL_GUESSES);
+    const qtyGuess = guessStockColumn(s.headers, STOCK_QTY_COL_GUESSES);
+    document.getElementById('stockColProd'+i).value = prodGuess === -1 ? 0 : prodGuess;
+    document.getElementById('stockColQty'+i).value = qtyGuess === -1 ? 0 : qtyGuess;
+  });
+}
+function aggregateStockUpload(){
+  const agg = new Map();
+  function bump(raw, qty, isReturn){
+    if(!raw) return;
+    const key = raw.toLowerCase();
+    if(!agg.has(key)) agg.set(key, { displayKey: raw, soldQty: 0, returnedQty: 0 });
+    const entry = agg.get(key);
+    if(isReturn) entry.returnedQty += qty; else entry.soldQty += qty;
+  }
+  stockUploadSheets.forEach((s, i) => {
+    if(s.detected && s.detected.format === 'meesho'){
+      const { reasonIdx, skuIdx, qtyIdx } = s.detected;
+      s.rows.forEach(row => {
+        const sku = String(row[skuIdx] ?? '').trim();
+        if(!sku) return;
+        const qty = parseFloat(row[qtyIdx]) || 0;
+        const reason = String(row[reasonIdx] ?? '').trim();
+        if(RETURN_STATUS_PATTERN.test(reason)) bump(sku, qty, true);
+        else if(/delivered/i.test(reason)) bump(sku, qty, false);
+      });
+    } else if(s.detected && s.detected.format === 'flipkart-pnl'){
+      const { skuIdx, statusIdx, qtyIdx } = s.detected;
+      s.rows.forEach(row => {
+        const sku = String(row[skuIdx] ?? '').trim();
+        if(!sku) return;
+        const qty = parseFloat(row[qtyIdx]) || 0;
+        const status = String(row[statusIdx] ?? '').trim();
+        if(RETURN_STATUS_PATTERN.test(status)) bump(sku, qty, true);
+        else if(/delivered/i.test(status)) bump(sku, qty, false);
+      });
+    } else {
+      const prodIdx = parseInt(document.getElementById('stockColProd'+i).value, 10);
+      const qtyIdx = parseInt(document.getElementById('stockColQty'+i).value, 10);
+      s.rows.forEach(row => {
+        const raw = String(row[prodIdx] ?? '').trim();
+        if(!raw) return;
+        bump(raw, parseFloat(row[qtyIdx]) || 0, false);
+      });
+    }
+  });
+  stockAggregation = Array.from(agg.entries())
+    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, soldQty: v.soldQty, returnedQty: v.returnedQty, netChange: v.returnedQty - v.soldQty }))
+    .filter(r => r.soldQty !== 0 || r.returnedQty !== 0)
+    .sort((a,b) => Math.abs(b.netChange) - Math.abs(a.netChange));
+  renderStockAggregationTable();
+}
+function renderStockAggregationTable(){
+  const wrap = document.getElementById('stockAggWrap');
+  if(!stockAggregation.length){
+    wrap.classList.add('hidden');
+    showStockMsg('No quantities found with the columns you picked — check the column selection above.', false);
+    return;
+  }
+  wrap.classList.remove('hidden');
+  document.getElementById('stockAggTable').innerHTML = stockAggregation.map((r, i) => {
+    const known = skuMappingsCache.find(m => m.rawKey === r.rawKey);
+    const options = ['<option value="">Skip — not a stock item</option>']
+      .concat(productsCache.map(p => `<option value="${p.id}" ${known && known.productId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`));
+    const netStyle = r.netChange < 0 ? 'color:var(--paprika-dark)' : (r.netChange > 0 ? 'color:#0E7C6B' : '');
+    return `<tr${known ? '' : ' style="background:#FFF7ED"'}>
+      <td>${esc(r.displayKey)}${known ? '' : ' <span class="badge" title="No saved mapping yet — pick a product on the right">Unmapped</span>'}</td>
+      <td>${r.soldQty || 0}</td>
+      <td>${r.returnedQty || 0}</td>
+      <td style="${netStyle}">${r.netChange > 0 ? '+' : ''}${r.netChange}</td>
+      <td><select id="stockAggMap${i}">${options.join('')}</select></td>
+    </tr>`;
+  }).join('');
+}
+async function applyStockUpload(){
+  const period = document.getElementById('stockPeriod').value.trim() || new Date().toISOString().slice(0,7);
+  const dateVal = new Date().toISOString().slice(0,10);
+  let applied = 0;
+
+  for(let i = 0; i < stockAggregation.length; i++){
+    const row = stockAggregation[i];
+    const sel = document.getElementById('stockAggMap'+i);
+    const productId = sel ? sel.value : '';
+    if(!productId) continue;
+    const product = productsCache.find(p => p.id === productId);
+    if(!product) continue;
+
+    const existingMap = skuMappingsCache.find(m => m.rawKey === row.rawKey);
+    if(existingMap){
+      if(existingMap.productId !== productId){
+        await db.collection('users').doc(currentUser.uid).collection('skuMappings').doc(existingMap.id)
+          .set({ rawKey: row.rawKey, productId, productName: product.name });
+      }
+    } else {
+      await db.collection('users').doc(currentUser.uid).collection('skuMappings').add({
+        rawKey: row.rawKey, productId, productName: product.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+
+    if(row.soldQty) await addStockMovement('sale-out', productId, -row.soldQty, dateVal, `${period} — ${row.displayKey} (sold)`);
+    if(row.returnedQty) await addStockMovement('return-in', productId, row.returnedQty, dateVal, `${period} — ${row.displayKey} (cancelled/RTO/returned)`);
+    applied++;
+  }
+
+  await loadProductsAndMappings();
+  await loadStock();
+
+  document.getElementById('stockColumnMapWrap').classList.add('hidden');
+  document.getElementById('stockAggWrap').classList.add('hidden');
+  document.getElementById('stockFiles').value = '';
+  stockUploadSheets = [];
+  stockAggregation = [];
+  showStockMsg(`Stock updated for ${applied} product(s).`, true);
+}
+function showStockMsg(text, ok){
+  const el = document.getElementById('stockUploadMsg');
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
 
 async function loadStock(){
   const [prodSnap, moveSnap, purchaseProductsSnap] = await Promise.all([
