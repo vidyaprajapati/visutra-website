@@ -44,6 +44,7 @@
 let currentUser = null;
 let businessData = {};
 let ordersCache = [];
+let productsCache = []; // your own Products — loaded once so pending orders can be checked for a deleted/missing product BEFORE Accept is even clicked
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -63,8 +64,27 @@ auth.onAuthStateChanged(async user => {
     showMsg('pageMsg', 'Complete your Business Profile (Billing → Business Profile) before accepting orders — it\'s needed on the GST invoice.', false);
   }
 
+  await loadProducts();
   loadOrders();
 });
+async function loadProducts(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('products').get();
+  productsCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+}
+/* An order's productId is a snapshot from whenever the buyer's SKU mapping
+   was set up — if that exact product was ever deleted and a same-named one
+   created afresh (a very normal thing to do, e.g. after clearing demo
+   data), the NEW product gets a brand-new Firestore ID even though it
+   looks identical to a person reading the name. Falling back to a
+   case-insensitive name match against your CURRENT catalog means an order
+   like that still resolves correctly instead of permanently erroring just
+   because the stale ID doesn't exist anymore. Returns the id to actually
+   use, or null if nothing matches either way. */
+function resolveOrderItemProductId(item){
+  if(productsCache.some(p => p.id === item.productId)) return item.productId;
+  const byName = productsCache.find(p => (p.name||'').trim().toLowerCase() === (item.productName||'').trim().toLowerCase());
+  return byName ? byName.id : null;
+}
 
 const deepLinkOrderId = new URLSearchParams(window.location.search).get('id');
 
@@ -95,9 +115,27 @@ function renderOrders(){
     const date = o.createdAt?.toDate ? o.createdAt.toDate().toISOString().slice(0,10) : '';
     const typeLabel = o.orderType === 'LABEL_AUTO' ? '<span class="badge">Label Auto</span> ' : '';
     let actions = '';
+    let missingWarning = '';
     if(o.status === 'PENDING'){
-      actions = `<button class="btn small primary" onclick="acceptOrder('${o.id}')">Accept</button>
-                 <button class="btn small danger" onclick="rejectOrder('${o.id}')">Reject</button>`;
+      // Checked against your OWN products (no cross-account issue — this is
+      // your own data) so a genuinely unresolvable product shows up before
+      // Accept is even clicked, instead of only failing after the attempt.
+      // resolveOrderItemProductId already tries a name-match fallback, so
+      // this only flags items that don't resolve even that way.
+      const missingNames = (o.items||[]).filter(it => !resolveOrderItemProductId(it)).map(it => it.productName);
+      if(missingNames.length){
+        missingWarning = `<div style="color:var(--paprika-dark);margin-top:6px;font-size:13px">${esc(missingNames.join(', '))} — no longer in your Product Master. Accepting will fail until this is fixed on the buyer's end; reject with a note so they know to re-map it.</div>`;
+        const rejectReason = `${missingNames.join(', ')} no longer exists in my catalog — please re-check your SKU mapping for this item and resend the order.`;
+        // JSON.stringify safely escapes quotes/backslashes for the JS string
+        // literal; esc() then HTML-escapes the whole thing (including that
+        // JSON string's own wrapping quotes) so it survives sitting inside
+        // this double-quoted onclick="..." attribute intact either way.
+        actions = `<button class="btn small primary" disabled title="Can't accept — a product on this order no longer exists">Accept</button>
+                   <button class="btn small danger" onclick="rejectOrder('${o.id}', ${esc(JSON.stringify(rejectReason))})">Reject</button>`;
+      } else {
+        actions = `<button class="btn small primary" onclick="acceptOrder('${o.id}')">Accept</button>
+                   <button class="btn small danger" onclick="rejectOrder('${o.id}')">Reject</button>`;
+      }
     } else if(o.status === 'ACCEPTED' && o.invoiceId){
       actions = `<a class="btn small" href="../invoice-view.html?id=${o.invoiceId}" target="_blank">View Invoice</a>`;
     } else if(o.status === 'REJECTED'){
@@ -116,7 +154,7 @@ function renderOrders(){
     }
     return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}</td><td>${esc(o.buyerBusiness?.businessName || o.buyerEmail)}</td><td>${date}</td>
       <td>${itemsSummary}</td><td><span class="badge">${esc(o.status)}</span></td>
-      <td class="row-actions">${actions}</td></tr>`;
+      <td class="row-actions">${actions}${missingWarning}</td></tr>`;
   }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No orders here.</td></tr>';
 }
 
@@ -139,9 +177,11 @@ async function acceptOrder(orderId){
   const publicInvoiceRef = db.collection('public_invoices').doc(invoiceRef.id);
   const counterRef = db.collection('users').doc(currentUser.uid).collection('meta').doc('invoiceCounter');
   let emailPayload = null; // filled inside the transaction once we know the final numbers, sent after it commits
+  let selfHealedNames = []; // reset at the top of every transaction attempt below — Firestore can retry this callback on contention, and a stale array from an earlier attempt would double-report
 
   try{
     await db.runTransaction(async tx => {
+      selfHealedNames = [];
       const orderSnap = await tx.get(orderRef);
       if(!orderSnap.exists) throw new Error('Order not found.');
       const order = orderSnap.data();
@@ -150,21 +190,29 @@ async function acceptOrder(orderId){
 
       // Read every product FRESH inside the transaction. Price, GST rate,
       // HSN, and stock all come from here — never from anything the buyer's
-      // client sent when the order was placed.
+      // client sent when the order was placed. resolveOrderItemProductId
+      // falls back to a name match when the order's original productId was
+      // deleted and a same-named product created afresh (a new Firestore ID
+      // even though it looks identical by name) — using productsCache
+      // (loaded fresh at page load) purely to pick WHICH id to read; the
+      // actual price/stock/GST used below always comes from tx.get() on
+      // that id, never from the outside cache.
       const productReads = [];
       for(const item of (order.items || [])){
-        const pRef = db.collection('users').doc(currentUser.uid).collection('products').doc(item.productId);
-        productReads.push({ item, ref: pRef, snap: await tx.get(pRef) });
+        const resolvedId = resolveOrderItemProductId(item);
+        const pRef = db.collection('users').doc(currentUser.uid).collection('products').doc(resolvedId || item.productId);
+        productReads.push({ item, resolvedId, ref: pRef, snap: await tx.get(pRef) });
       }
       const counterSnap = await tx.get(counterRef);
 
       // Validate everything before writing anything — a Firestore transaction
       // is all-or-nothing, so throwing here leaves zero partial writes.
-      for(const {item, snap} of productReads){
-        if(!snap.exists) throw new Error(`"${item.productName}" no longer exists in your Product Master.`);
+      for(const {item, resolvedId, snap} of productReads){
+        if(!resolvedId || !snap.exists) throw new Error(`"${item.productName}" no longer exists in your Product Master.`);
         const p = snap.data();
         if(p.active === false) throw new Error(`"${p.name}" is marked Inactive — reactivate it in Product Master before accepting.`);
         if((p.stock || 0) < item.qty) throw new Error(`Insufficient stock for "${p.name}". Available: ${p.stock || 0}, required: ${item.qty}.`);
+        if(resolvedId !== item.productId) selfHealedNames.push(p.name);
       }
 
       // Invoice numbering reuses the SAME FY-based counter as manual invoices
@@ -179,14 +227,19 @@ async function acceptOrder(orderId){
       let subtotal = 0, cgst = 0, sgst = 0, igst = 0;
       const invoiceItems = [];
       const acceptedItems = [];
-      for(const { item, ref, snap } of productReads){
+      for(const { item, resolvedId, ref, snap } of productReads){
         const p = snap.data();
         const taxable = Math.round(item.qty * p.price * 100) / 100;
         const gstAmt = Math.round(taxable * (p.gstRate || 0) / 100 * 100) / 100;
         subtotal += taxable;
         if(sameState){ cgst += gstAmt / 2; sgst += gstAmt / 2; } else { igst += gstAmt; }
-        invoiceItems.push({ productId: item.productId, name: p.name, hsn: p.hsn || '', unit: p.unit || 'PCS', qty: item.qty, rate: p.price, discount: 0, gstRate: p.gstRate || 0, taxable });
-        acceptedItems.push({ productId: item.productId, productName: p.name, sellerSku: p.sku || item.sellerSku || '', unit: p.unit || 'PCS', hsn: p.hsn || '', qty: item.qty, rate: p.price, gstRate: p.gstRate || 0, taxable, gstAmt, total: taxable + gstAmt, marketplaceBreakdown: item.marketplaceBreakdown || null });
+        // productId here is the RESOLVED id (may differ from item.productId
+        // if it was name-matched to a recreated product) — everything
+        // downstream (invoice, stock movement, the order's own record of
+        // what it accepted) must reference the product that's actually
+        // getting its stock deducted, not the original stale id.
+        invoiceItems.push({ productId: resolvedId, name: p.name, hsn: p.hsn || '', unit: p.unit || 'PCS', qty: item.qty, rate: p.price, discount: 0, gstRate: p.gstRate || 0, taxable });
+        acceptedItems.push({ productId: resolvedId, productName: p.name, sellerSku: p.sku || item.sellerSku || '', unit: p.unit || 'PCS', hsn: p.hsn || '', qty: item.qty, rate: p.price, gstRate: p.gstRate || 0, taxable, gstAmt, total: taxable + gstAmt, marketplaceBreakdown: item.marketplaceBreakdown || null });
       }
       const grandTotal = subtotal + cgst + sgst + igst;
 
@@ -212,11 +265,11 @@ async function acceptOrder(orderId){
       tx.set(counterRef, counterData);
       tx.set(invoiceRef, invoiceData);
       tx.set(publicInvoiceRef, invoiceData);
-      for(const { item, ref, snap } of productReads){
+      for(const { item, resolvedId, ref, snap } of productReads){
         tx.update(ref, { stock: firebase.firestore.FieldValue.increment(-item.qty) });
         const moveRef = db.collection('users').doc(currentUser.uid).collection('stockMovements').doc();
         tx.set(moveRef, {
-          type: 'sale-out', productId: item.productId, productName: snap.data().name, qty: -item.qty,
+          type: 'sale-out', productId: resolvedId, productName: snap.data().name, qty: -item.qty,
           date: invoiceData.date, note: `Order ${order.orderNumber} — Invoice ${invoiceNo} — sold to ${invoiceData.customer.name}`,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
@@ -238,7 +291,10 @@ async function acceptOrder(orderId){
       };
     });
 
-    showMsg('pageMsg', 'Order accepted — invoice generated and stock updated. Sending buyer email…', true);
+    const healedNote = selfHealedNames.length
+      ? ` (Note: ${selfHealedNames.join(', ')} matched by name to a different product ID than this order originally pointed to — likely re-created at some point. Worth telling the buyer to refresh their SKU mapping so future orders reference the current one directly.)`
+      : '';
+    showMsg('pageMsg', 'Order accepted — invoice generated and stock updated. Sending buyer email…' + healedNote, true);
     if(emailPayload){
       const emailResult = await sendOrderNotification(emailPayload.toEmail, emailPayload.toName, emailPayload.subject, emailPayload.headline, emailPayload.detailLine, emailPayload.viewLink);
       if(emailResult.sent){
@@ -256,12 +312,23 @@ async function acceptOrder(orderId){
     loadOrders();
   }catch(err){
     showMsg('pageMsg', err.message, false);
+    // This specific failure can never resolve itself by retrying Accept —
+    // the product genuinely isn't in your catalog anymore (deleted, most
+    // likely), so the buyer's SKU mapping or Label Cropper mapping is
+    // pointing at something that no longer exists on your side. Offer to
+    // reject right here with a reason that tells them exactly that, instead
+    // of leaving the order stuck with no clear next step for either side.
+    if(/no longer exists in your Product Master/.test(err.message)){
+      if(confirm(`${err.message}\n\nAccepting will keep failing until this is fixed on the buyer's end. Reject this order now with that reason, so they know to re-map this SKU?`)){
+        await rejectOrder(orderId, `${err.message} Please re-check your SKU mapping for this item (Buyer SKU Master, or the Label Cropper) and resend the order.`);
+      }
+    }
   }
 }
 
-async function rejectOrder(orderId){
-  const reason = window.prompt('Optional rejection reason (shown to the buyer):') || '';
-  if(!confirm('Reject this order?')) return;
+async function rejectOrder(orderId, presetReason){
+  const reason = presetReason !== undefined ? presetReason : (window.prompt('Optional rejection reason (shown to the buyer):') || '');
+  if(presetReason === undefined && !confirm('Reject this order?')) return;
   try{
     await db.collection('marketplaceOrders').doc(orderId).update({
       status: 'REJECTED', rejectionReason: reason, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
