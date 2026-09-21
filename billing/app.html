@@ -173,8 +173,8 @@
       </div>
 
       <div class="card">
-        <h2>Monthly Sales Upload (Stock Deduction)</h2>
-        <p class="sub">Upload the report(s) you download from Meesho, Flipkart and/or Amazon for the month. Everything is read in your browser only. The first time you upload, you'll map each product/SKU to your Product Master once — after that, the same product/SKU is remembered automatically in future months.</p>
+        <h2>Monthly Inventory Reconciliation</h2>
+        <p class="sub">Upload the report(s) you download from Meesho, Flipkart and/or Amazon for the month. Everything is read in your browser only. Meesho and Flipkart reports are recognised automatically by their columns — delivered items reduce stock, and cancelled/RTO/returned items add stock back, since those physically come back to you. Other formats (like Amazon) fall back to treating every row as a sale, same as before. The first time you upload, you'll map each product/SKU to your Product Master once — after that, it's remembered automatically in future months.</p>
         <p class="sub">This only updates stock — it doesn't file GSTR-1. For that, use the same report files in the <a href="../tools/gst-return-tool.html" target="_blank">GST Return Tool ↗</a> (opens in a new tab).</p>
         <div class="grid2">
           <div class="field"><label>Report files (.csv, .xlsx, .xls) — you can select more than one</label><input id="stockFiles" type="file" multiple accept=".csv,.xlsx,.xls"></div>
@@ -191,7 +191,8 @@
 
         <div id="stockAggWrap" class="hidden" style="margin-top:18px">
           <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 2 — Match each product/SKU, then apply</h3>
-          <table><thead><tr><th>From report</th><th>Qty sold this period</th><th>Matches to</th></tr></thead>
+          <p class="sub">For Meesho/Flipkart sheets, Sold and Returned are read from the status column automatically — Net is what actually changes stock (down for a sale, up for a cancellation/RTO/return).</p>
+          <table><thead><tr><th>From report</th><th>Sold</th><th>Returned</th><th>Net Stock Change</th><th>Matches to</th></tr></thead>
           <tbody id="stockAggTable"></tbody></table>
           <button class="btn primary" style="margin-top:14px" onclick="applyStockUpload()">Apply &amp; Update Stock</button>
         </div>
