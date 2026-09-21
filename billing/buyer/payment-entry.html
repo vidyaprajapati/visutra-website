@@ -36,7 +36,9 @@
       <div class="field"><label>Payment date</label><input id="payEntryDate" type="date"></div>
     </div>
     <div class="grid2">
-      <div class="field"><label>Amount (₹)</label><input id="payEntryAmount" type="number" min="0" step="0.01"></div>
+      <div class="field"><label>Amount (₹)</label><input id="payEntryAmount" type="number" min="0" step="0.01" oninput="updateAmountWords('payEntryAmount','payEntryAmountWords')">
+        <p class="sub" id="payEntryAmountWords" style="margin-top:4px"></p>
+      </div>
       <div class="field"><label>Mode (Cash / UPI / Bank...)</label><input id="payEntryMode"></div>
     </div>
     <div class="field"><label>Note (optional)</label><input id="payEntryNote"></div>
@@ -115,6 +117,7 @@ async function savePaymentEntry(){
     });
     showMsg(`Payment of ₹${fmtMoney(amount)} to ${supplier.name} recorded.`, true);
     ['payEntryAmount','payEntryMode','payEntryNote'].forEach(f => document.getElementById(f).value = '');
+    updateAmountWords('payEntryAmount','payEntryAmountWords');
     await loadPayments();
   }catch(err){
     showMsg(`Could not save: ${err.message}`, false);
@@ -123,6 +126,52 @@ async function savePaymentEntry(){
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+
+/* Amount in words (Indian numbering: Lakh/Crore) — shown live under the
+   payment-amount field so a typo (an extra zero, a missing digit) is
+   caught by eye before saving, same idea as a cheque's amount-in-words. */
+function numberToWordsIndian(amount){
+  amount = Math.abs(amount || 0);
+  const rupees = Math.floor(amount);
+  const paise = Math.round((amount - rupees) * 100);
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+    'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  function twoDigits(n){
+    if(n < 20) return ones[n];
+    return tens[Math.floor(n/10)] + (n % 10 ? ' ' + ones[n % 10] : '');
+  }
+  function threeDigits(n){
+    let str = '';
+    if(n >= 100){ str += ones[Math.floor(n/100)] + ' Hundred'; n %= 100; if(n) str += ' '; }
+    str += twoDigits(n);
+    return str;
+  }
+  function rupeesToWords(n){
+    if(n === 0) return 'Zero';
+    let remaining = n;
+    const crore = Math.floor(remaining / 10000000); remaining %= 10000000;
+    const lakh = Math.floor(remaining / 100000); remaining %= 100000;
+    const thousand = Math.floor(remaining / 1000); remaining %= 1000;
+    const hundred = remaining;
+    const parts = [];
+    if(crore) parts.push(threeDigits(crore) + ' Crore');
+    if(lakh) parts.push(twoDigits(lakh) + ' Lakh');
+    if(thousand) parts.push(twoDigits(thousand) + ' Thousand');
+    if(hundred) parts.push(threeDigits(hundred));
+    return parts.join(' ');
+  }
+  let result = rupeesToWords(rupees) + ' Rupees';
+  if(paise > 0) result += ' and ' + twoDigits(paise) + ' Paise';
+  return result + ' Only';
+}
+function updateAmountWords(inputId, outputId){
+  const input = document.getElementById(inputId);
+  const output = document.getElementById(outputId);
+  if(!input || !output) return;
+  const val = parseFloat(input.value);
+  output.textContent = (val && val > 0) ? numberToWordsIndian(val) : '';
+}
 function showMsg(text, ok){
   const el = document.getElementById('paymentEntryMsg');
   el.textContent = text;
