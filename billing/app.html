@@ -36,6 +36,8 @@
     <a href="#customers" class="nav-link" data-view="customers" data-group="billing">Customers</a>
     <a href="#new-invoice" class="nav-link" data-view="new-invoice" data-group="billing">New Invoice</a>
     <a href="#invoices" class="nav-link" data-view="invoices" data-group="billing">Invoice History</a>
+    <a href="#receipt-entry" class="nav-link" data-view="receipt-entry" data-group="billing">Receipt Entry</a>
+    <a href="#customer-dashboard" class="nav-link" data-view="customer-dashboard" data-group="billing">Customer Dashboard</a>
 
     <div class="sidebar-section-label">Purchase Entry</div>
     <a href="#suppliers" class="nav-link" data-view="suppliers" data-group="purchase">Suppliers</a>
@@ -475,6 +477,12 @@
 
         <div class="totals-box" id="totalsBox"></div>
 
+        <div class="grid2" style="margin-top:16px">
+          <div class="field"><label>Amount received now (₹) — optional</label><input id="invReceivedNow" type="number" min="0" step="0.01" value="0" oninput="updateAmountWords('invReceivedNow','invReceivedNowWords')">
+            <p class="sub" id="invReceivedNowWords" style="margin-top:4px"></p>
+          </div>
+        </div>
+
         <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
           <button class="btn primary" onclick="saveAndGenerate(false)">Save &amp; Download PDF</button>
           <button class="btn primary" onclick="saveAndGenerate(true)">Save, Download &amp; Email Buyer</button>
@@ -495,6 +503,75 @@
         <table><thead><tr><th>Invoice #</th><th>Date</th><th>Customer</th><th>Product</th><th>Qty</th><th>Total</th><th>Emailed</th><th></th></tr></thead>
         <tbody id="invoicesTable"></tbody></table>
         <p class="msg" id="invoiceHistMsg"></p>
+      </div>
+    </div>
+
+    <!-- RECEIPT ENTRY (money received from a customer — the receivables counterpart to Payment Entry) -->
+    <div id="view-receipt-entry" class="view hidden">
+      <div class="card">
+        <h2 id="receiptFormTitle">Receipt Entry</h2>
+        <p class="sub">Record money received from a customer — for a specific invoice, an advance, or catching up on an old balance. Separate from New Invoice, so you can log a receipt any time without billing anything new.</p>
+        <div class="grid2">
+          <div class="field"><label>Customer</label><select id="receiptCustomer"></select></div>
+          <div class="field"><label>Receipt date</label><input id="receiptDate" type="date"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Amount (₹)</label><input id="receiptAmount" type="number" min="0" step="0.01" oninput="updateAmountWords('receiptAmount','receiptAmountWords')">
+            <p class="sub" id="receiptAmountWords" style="margin-top:4px"></p>
+          </div>
+          <div class="field"><label>Mode (Cash / UPI / Bank...)</label><input id="receiptMode"></div>
+        </div>
+        <div class="field"><label>Note (optional)</label><input id="receiptNote"></div>
+        <input type="hidden" id="receiptEditId">
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn primary" onclick="saveReceipt()">Save Receipt</button>
+          <button class="btn small hidden" id="receiptCancelEditBtn" onclick="cancelEditReceipt()">Cancel Edit</button>
+        </div>
+        <p class="msg" id="receiptMsg"></p>
+      </div>
+      <div class="card">
+        <h2>Receipt History</h2>
+        <p class="sub">Click a customer's name to open their full dashboard.</p>
+        <div class="grid3" style="align-items:end">
+          <div class="field"><label>From date</label><input id="receiptHistFrom" type="date" onchange="renderReceiptsTable()"></div>
+          <div class="field"><label>To date</label><input id="receiptHistTo" type="date" onchange="renderReceiptsTable()"></div>
+        </div>
+        <table><thead><tr><th>Date</th><th>Customer</th><th>Amount</th><th>Mode</th><th>Note</th><th></th></tr></thead>
+        <tbody id="receiptsEntryTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- CUSTOMER DASHBOARD (receivables — the mirror of Supplier Dashboard) -->
+    <div id="view-customer-dashboard" class="view hidden">
+      <div class="card">
+        <h2>All Customers — Amount Receivable</h2>
+        <p class="sub">Every customer ranked by balance due, highest first, so you can see who to follow up with next.</p>
+        <table><thead><tr><th>Customer</th><th>Total Billed</th><th>Total Received</th><th>Balance Receivable</th><th></th></tr></thead>
+        <tbody id="receivablesTable"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Customer Dashboard</h2>
+        <p class="sub">Pick a customer to review everything at a glance — invoices billed, items sold, amount received, and balance still receivable.</p>
+        <div class="field" style="max-width:320px"><label>Customer</label><select id="custDashCustomer" onchange="renderCustomerDashboard(this.value)"></select></div>
+
+        <div id="custDashSummaryWrap" class="hidden">
+          <div class="grid3" style="margin-top:8px">
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Invoices</h3><p style="font-size:20px;font-weight:700;margin:0" id="custDashEntries">0</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Items Sold</h3><p style="font-size:20px;font-weight:700;margin:0" id="custDashItems">0</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Billed</h3><p style="font-size:20px;font-weight:700;margin:0" id="custDashTotalBilled">₹0.00</p></div>
+          </div>
+          <div class="grid3" style="margin-top:12px">
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Received</h3><p style="font-size:20px;font-weight:700;margin:0" id="custDashTotalReceived">₹0.00</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Balance Receivable</h3><p style="font-size:20px;font-weight:700;margin:0;color:var(--paprika-dark)" id="custDashBalance">₹0.00</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Last Invoice</h3><p style="font-size:14px;font-weight:600;margin:0" id="custDashLastInvoice">—</p></div>
+          </div>
+          <div style="margin-top:18px;max-height:320px;overflow-y:auto">
+            <table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th>Qty</th><th>Billed (Dr)</th><th>Received (Cr)</th><th>Balance</th><th></th></tr></thead>
+            <tbody id="custDashTable"></tbody></table>
+          </div>
+        </div>
+        <p class="sub hidden" id="custDashEmptyMsg">No invoices or receipts recorded for this customer yet.</p>
       </div>
     </div>
 
