@@ -135,9 +135,18 @@ async function respondToOrderConfirm(orderId, approve){
         status: 'ACCEPTED', acceptedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       order.acceptedAt = { toDate: () => new Date() }; // local stand-in so the purchase date below is "now", matching what re-reading the doc after commit would give
-      await ensureBuyerPurchaseForOrder(order);
+      const { unlinkedNames } = await ensureBuyerPurchaseForOrder(order);
       await loadOrdersToConfirm();
       await loadDashboard();
+      if(unlinkedNames.length){
+        // The purchase itself is recorded either way — this is specifically
+        // about why stock DIDN'T move for some items: each one needs a
+        // product in your own Products list with the exact same name (or an
+        // explicit mapping in Buyer SKU Master) before stock can attach to
+        // it. Without this, the "stock didn't update" would otherwise look
+        // like a silent bug rather than a one-time setup step.
+        alert(`Approved. Stock didn't update for: ${unlinkedNames.join(', ')} — add a matching product with that exact name (or map it in Buyer SKU Master) so stock updates next time.`);
+      }
     }catch(err){
       alert(`Could not approve: ${err.message}`);
     }
@@ -164,6 +173,7 @@ async function ensureBuyerPurchaseForOrder(order){
   const supplierId = await ensureSupplierForSeller(order.sellerUid, order.sellerName);
   const items = [];
   const stockIns = [];
+  const unlinkedNames = []; // items with no matching product on your side — stock can't attach to anything for these
   for(const item of order.items){
     const { purchaseProductId, linkedProductId } = await ensurePurchaseProductForSellerItem(order.sellerUid, item);
     items.push({
@@ -173,6 +183,7 @@ async function ensureBuyerPurchaseForOrder(order){
       priceMode: 'excl', linkedProductId: linkedProductId || null
     });
     if(linkedProductId) stockIns.push({ linkedProductId, qty: item.qty });
+    else unlinkedNames.push(item.productName);
   }
   const summary = order.invoiceSummary || {};
   const purchaseData = {
@@ -201,6 +212,7 @@ async function ensureBuyerPurchaseForOrder(order){
     buyerPurchaseId: purRef.id,
     buyerPurchaseCreatedAt: firebase.firestore.FieldValue.serverTimestamp()
   });
+  return { unlinkedNames };
 }
 async function ensureSupplierForSeller(sellerUid, sellerName){
   const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers')
