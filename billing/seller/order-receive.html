@@ -102,6 +102,17 @@ function renderOrders(){
       actions = `<a class="btn small" href="../invoice-view.html?id=${o.invoiceId}" target="_blank">View Invoice</a>`;
     } else if(o.status === 'REJECTED'){
       actions = `<span style="color:var(--muted)">${esc(o.rejectionReason||'No reason given')}</span>`;
+      // A rejected SELLER_RECORDED order still has a real invoice behind it
+      // with stock already deducted when it was created — rejecting it
+      // doesn't undo either of those on its own, so this is the guided path
+      // to actually reverse them, instead of the seller having to notice
+      // the rejection, go find the matching invoice in Invoice History
+      // themselves, and remember it needs deleting.
+      if(o.orderType === 'SELLER_RECORDED' && o.invoiceId && !o.stockReversed){
+        actions += ` <button class="btn small danger" onclick="reverseRejectedOrderInvoice('${o.id}')">Reverse Stock &amp; Cancel Invoice</button>`;
+      } else if(o.stockReversed){
+        actions += ` <span class="badge">Stock reversed</span>`;
+      }
     }
     return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}</td><td>${esc(o.buyerBusiness?.businessName || o.buyerEmail)}</td><td>${date}</td>
       <td>${itemsSummary}</td><td><span class="badge">${esc(o.status)}</span></td>
@@ -175,7 +186,7 @@ async function acceptOrder(orderId){
         subtotal += taxable;
         if(sameState){ cgst += gstAmt / 2; sgst += gstAmt / 2; } else { igst += gstAmt; }
         invoiceItems.push({ productId: item.productId, name: p.name, hsn: p.hsn || '', unit: p.unit || 'PCS', qty: item.qty, rate: p.price, discount: 0, gstRate: p.gstRate || 0, taxable });
-        acceptedItems.push({ productId: item.productId, productName: p.name, sellerSku: p.sku || item.sellerSku || '', unit: p.unit || 'PCS', qty: item.qty, rate: p.price, gstRate: p.gstRate || 0, taxable, gstAmt, total: taxable + gstAmt, marketplaceBreakdown: item.marketplaceBreakdown || null });
+        acceptedItems.push({ productId: item.productId, productName: p.name, sellerSku: p.sku || item.sellerSku || '', unit: p.unit || 'PCS', hsn: p.hsn || '', qty: item.qty, rate: p.price, gstRate: p.gstRate || 0, taxable, gstAmt, total: taxable + gstAmt, marketplaceBreakdown: item.marketplaceBreakdown || null });
       }
       const grandTotal = subtotal + cgst + sgst + igst;
 
@@ -295,6 +306,46 @@ async function sendOrderNotification(toEmail, toName, subject, headline, detailL
   }
 }
 
+// Undoes the two things creating a SELLER_RECORDED order did on this side:
+// the stock it deducted, and the invoice itself (moved to the Recycle Bin,
+// same as a normal invoice delete — restorable there within 30 days).
+async function reverseRejectedOrderInvoice(orderId){
+  const order = ordersCache.find(o => o.id === orderId);
+  if(!order || !order.invoiceId) return;
+  if(!confirm('Reverse this sale? Its stock will be added back and the invoice moved to your Recycle Bin. This can\'t be undone from here.')) return;
+
+  try{
+    const invRef = db.collection('users').doc(currentUser.uid).collection('invoices').doc(order.invoiceId);
+    const invSnap = await invRef.get();
+    if(!invSnap.exists){ alert('Could not find the invoice for this order — it may already have been deleted.'); return; }
+    const inv = invSnap.data();
+    if(inv.gstFiled){
+      alert(`This invoice was already filed as part of the ${inv.gstFiledPeriod||''} GST return and can't be reversed this way — issue a credit note instead.`);
+      return;
+    }
+    if(inv.deleted){
+      alert('This invoice has already been deleted — just marking this order as reversed.');
+    } else {
+      for(const li of (inv.items || [])){
+        if(!li.productId || !li.qty) continue;
+        await db.collection('users').doc(currentUser.uid).collection('products').doc(li.productId).update({
+          stock: firebase.firestore.FieldValue.increment(li.qty)
+        }).catch(err => console.error(`Stock reversal failed for ${li.productId}:`, err));
+        await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
+          type: 'sale-out', productId: li.productId, qty: li.qty, date: new Date().toISOString().slice(0,10),
+          note: `Reversed: buyer rejected order ${order.orderNumber||''} (invoice ${inv.invoiceNo||''})`,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+      await invRef.update({ deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
+    await db.collection('marketplaceOrders').doc(orderId).update({ stockReversed: true });
+    await loadOrders();
+    showMsg('pageMsg', 'Stock reversed and invoice moved to the Recycle Bin.', true);
+  }catch(err){
+    alert(`Could not reverse: ${err.message}`);
+  }
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function showMsg(id, text, ok){
   const el = document.getElementById(id);
