@@ -87,6 +87,8 @@ const VT_BUYER_NAV = [
   { view: 'label-order', href: 'buyer/label-order.html', label: 'Label-Based Auto Order' },
   { view: 'buyer-sku-master', href: 'buyer/buyer-sku-master.html', label: 'Buyer SKU Master' },
   { view: 'my-orders', href: 'buyer/my-orders.html', label: 'My Orders' },
+  { view: 'purchase-entry', href: 'buyer/purchase-entry.html', label: 'Purchase Entry' },
+  { view: 'payment-entry', href: 'buyer/payment-entry.html', label: 'Payment Entry' },
   { view: 'buyer-stock', href: 'buyer/stock.html', label: 'Stock' },
   { view: 'buyer-gstr1', href: 'buyer/purchases-gstr.html', label: 'GSTR-1 Filing' }
 ];
