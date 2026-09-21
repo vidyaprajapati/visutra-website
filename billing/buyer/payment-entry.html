@@ -30,7 +30,7 @@
 
   <div class="card">
     <h2>Payment Entry</h2>
-    <p class="sub">Record a payment to a supplier — for a specific purchase, an advance, or just catching up on an old balance. Separate from Purchase Entry, so you can log a payment any time without recording a new purchase.</p>
+    <p class="sub">Record a payment to a supplier — for a specific purchase, an advance, or just catching up on an old balance. Separate from Purchase Entry, so you can log a payment any time without recording a new purchase. Paying a linked VISUTRA seller needs their confirmation before it counts — see the status column in Payment History below.</p>
     <div class="grid2">
       <div class="field"><label>Supplier</label><select id="payEntrySupplier"><option value="">Select supplier…</option></select></div>
       <div class="field"><label>Payment date</label><input id="payEntryDate" type="date"></div>
@@ -48,7 +48,7 @@
 
   <div class="card">
     <h2>Payment History</h2>
-    <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Mode</th><th>Note</th></tr></thead>
+    <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Mode</th><th>Note</th><th>Status</th></tr></thead>
     <tbody id="paymentsTable"></tbody></table>
   </div>
 
@@ -62,6 +62,7 @@
 <script src="../assets/user-menu.js"></script>
 <script>
 let currentUser = null;
+let buyerName = '';
 let suppliersCache = [];
 let paymentsCache = [];
 
@@ -81,11 +82,38 @@ auth.onAuthStateChanged(async user => {
 
   const data = snap.data() || {};
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
+  buyerName = data.fullName || data.businessName || currentUser.email;
 
   document.getElementById('payEntryDate').valueAsDate = new Date();
   await loadSuppliers();
+  await finalizeRespondedConfirmations();
   await loadPayments();
 });
+
+/* Picks up whatever the seller has decided on any of this buyer's pending
+   payments since last visit — finalizes THIS side accordingly. Neither
+   party can write to the other's data, so this is the buyer's own half of
+   the same two-step dance used for order confirmations and invoice
+   deletion requests elsewhere in Billing. */
+async function finalizeRespondedConfirmations(){
+  const snap = await db.collection('paymentConfirmations')
+    .where('buyerUid', '==', currentUser.uid).where('status', 'in', ['APPROVED', 'REJECTED']).get();
+  const settled = snap.docs.map(d => d.data()).filter(c => c.buyerPaymentId);
+  for(const c of settled){
+    const payRef = db.collection('users').doc(currentUser.uid).collection('payments').doc(c.buyerPaymentId);
+    const paySnap = await payRef.get();
+    if(!paySnap.exists || paySnap.data().status !== 'PENDING_SELLER_CONFIRMATION') continue; // already finalized
+    if(c.status === 'APPROVED'){
+      await payRef.update({ status: 'CONFIRMED' });
+    } else {
+      // Rejected: this payment never actually happened as far as the seller
+      // is concerned, so it must not linger and count toward a lower
+      // balance on the buyer's own side either — remove it outright rather
+      // than leave a "rejected" record that still needs excluding everywhere.
+      await payRef.delete();
+    }
+  }
+}
 
 async function loadSuppliers(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
@@ -96,9 +124,12 @@ async function loadSuppliers(){
 async function loadPayments(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('payments').orderBy('date','desc').limit(100).get();
   paymentsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => !p.deleted);
-  document.getElementById('paymentsTable').innerHTML = paymentsCache.map(p => `
-    <tr><td>${esc(p.date)}</td><td>${esc(p.supplierName)}</td><td>₹${fmtMoney(p.amount)}</td><td>${esc(p.mode||'')}</td><td>${esc(p.note||'')}</td></tr>
-  `).join('') || '<tr><td colspan="5" style="color:var(--muted)">No payments recorded yet.</td></tr>';
+  document.getElementById('paymentsTable').innerHTML = paymentsCache.map(p => {
+    const status = p.status === 'PENDING_SELLER_CONFIRMATION'
+      ? '<span class="badge">Awaiting seller confirmation</span>'
+      : (p.status === 'CONFIRMED' ? '<span class="badge">Confirmed</span>' : '');
+    return `<tr><td>${esc(p.date)}</td><td>${esc(p.supplierName)}</td><td>₹${fmtMoney(p.amount)}</td><td>${esc(p.mode||'')}</td><td>${esc(p.note||'')}</td><td>${status}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No payments recorded yet.</td></tr>';
 }
 async function savePaymentEntry(){
   const supplierId = document.getElementById('payEntrySupplier').value;
@@ -107,15 +138,34 @@ async function savePaymentEntry(){
   const date = document.getElementById('payEntryDate').value || new Date().toISOString().slice(0,10);
   if(!supplier){ showMsg('Select a supplier first.', false); return; }
   if(amount <= 0){ showMsg('Enter an amount greater than zero.', false); return; }
+  const mode = document.getElementById('payEntryMode').value.trim();
+  const note = document.getElementById('payEntryNote').value.trim();
 
   try{
-    await db.collection('users').doc(currentUser.uid).collection('payments').add({
-      supplierId, supplierName: supplier.name, date, amount,
-      mode: document.getElementById('payEntryMode').value.trim(),
-      note: document.getElementById('payEntryNote').value.trim(),
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    showMsg(`Payment of ₹${fmtMoney(amount)} to ${supplier.name} recorded.`, true);
+    if(supplier.sellerUid){
+      // Paying a linked VISUTRA seller directly (not through Billing) needs
+      // their confirmation that it actually arrived before it counts as a
+      // real payment on either side — see finalizeRespondedConfirmations()
+      // for how this resolves once they respond.
+      const payRef = await db.collection('users').doc(currentUser.uid).collection('payments').add({
+        supplierId, supplierName: supplier.name, date, amount, mode, note,
+        status: 'PENDING_SELLER_CONFIRMATION',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      await db.collection('paymentConfirmations').add({
+        buyerUid: currentUser.uid, buyerName, buyerEmail: currentUser.email || '',
+        sellerUid: supplier.sellerUid, buyerPaymentId: payRef.id,
+        date, amount, mode, note, status: 'PENDING',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      showMsg(`Payment of ₹${fmtMoney(amount)} to ${supplier.name} recorded — waiting for them to confirm it arrived.`, true);
+    } else {
+      await db.collection('users').doc(currentUser.uid).collection('payments').add({
+        supplierId, supplierName: supplier.name, date, amount, mode, note,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      showMsg(`Payment of ₹${fmtMoney(amount)} to ${supplier.name} recorded.`, true);
+    }
     ['payEntryAmount','payEntryMode','payEntryNote'].forEach(f => document.getElementById(f).value = '');
     updateAmountWords('payEntryAmount','payEntryAmountWords');
     await loadPayments();

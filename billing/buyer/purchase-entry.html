@@ -262,7 +262,9 @@ async function loadPurchases(){
 }
 async function loadPayments(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('payments').get();
-  paymentsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => !p.deleted);
+  // Excludes payments still awaiting the seller's confirmation — see
+  // payment-entry.html — since those haven't actually been credited yet.
+  paymentsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => !p.deleted && p.status !== 'PENDING_SELLER_CONFIRMATION');
 }
 function renderPurchasesTable(){
   const rows = [];

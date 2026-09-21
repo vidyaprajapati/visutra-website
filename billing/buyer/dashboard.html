@@ -324,7 +324,10 @@ async function loadDashboard(){
   const orders = ordersSnap.docs.map(d => ({id: d.id, ...d.data()}));
   const allSuppliers = suppliersSnap.docs.map(d => ({id: d.id, ...d.data()}));
   const allPurchases = purchasesSnap.docs.map(d => ({id: d.id, ...d.data()}));
-  const allPayments = paymentsSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  // Excludes payments still awaiting the seller's confirmation — those
+  // haven't actually been credited by the seller yet, so counting them here
+  // would understate the balance before it's actually settled.
+  const allPayments = paymentsSnap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.status !== 'PENDING_SELLER_CONFIRMATION');
 
   // "Sellers I buy from" (via VISUTRA orders) are suppliers auto-created
   // from an accepted order — they carry a sellerUid. Dues & payments below
