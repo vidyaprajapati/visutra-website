@@ -55,6 +55,7 @@ auth.onAuthStateChanged(async user => {
     await loadSuppliers();
     await loadPurchaseProducts();
     await loadPayments();
+    await loadReceipts();
     await loadSkuMappings();
     await loadStockMovements();
     addLineItem();
@@ -630,6 +631,7 @@ function renderCustomers(){
     <tr><td>${esc(c.legalName || '—')}</td><td>${esc(c.name)}</td><td>${esc(c.gstin||'—')}</td><td>${esc(c.state||'')}</td><td>${esc(c.email||'')}</td>
     <td>${c.linkStatus === 'ACTIVE' ? `<span class="badge">Linked · ${esc(c.linkedBuyerEmail||'')}</span>` : '<span style="color:var(--muted)">Not linked</span>'}</td>
     <td class="row-actions">
+      <button class="btn small" onclick="goToCustomerDashboard('${c.id}')">Dashboard</button>
       <button class="btn small" onclick="editCustomer('${c.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteCustomer('${c.id}')">Delete</button>
       ${c.linkStatus === 'ACTIVE'
@@ -925,6 +927,201 @@ function getSupplierBalance(supplierId){
   const totalPurchase = purchasesCache.filter(p => p.supplierId === supplierId).reduce((s,p) => s + (p.grandTotal||0), 0);
   const totalPaid = paymentsCache.filter(p => p.supplierId === supplierId).reduce((s,p) => s + (p.amount||0), 0);
   return totalPurchase - totalPaid;
+}
+
+/* ---------------- Receivables — money owed BY customers (mirror of the Payables/Supplier system above) ----------------
+   Invoices are the "Dr" side (what's billed), receipts are the "Cr" side
+   (what's actually been received) — exactly the same shape as
+   purchases/payments, just the other direction of money. */
+let receiptsCache = [];
+function invoicesArray(){
+  // invoicesCache is keyed by id (used elsewhere for O(1) lookup by
+  // invoice id) — this just gives the array view Receivables needs.
+  return Object.keys(invoicesCache).map(id => ({ id, ...invoicesCache[id] })).filter(inv => !inv.deleted);
+}
+// Matches an invoice to a customer: by customerId when the invoice has one
+// (everything billed from here on), falling back to name+GSTIN for
+// invoices saved before this field existed.
+function invoiceBelongsToCustomer(inv, customer){
+  if(inv.customerId) return inv.customerId === customer.id;
+  return inv.customer && inv.customer.name === customer.name && (inv.customer.gstin||'') === (customer.gstin||'');
+}
+function getCustomerBalance(customerId){
+  const customer = customersCache.find(c => c.id === customerId);
+  if(!customer) return 0;
+  const totalBilled = invoicesArray().filter(inv => invoiceBelongsToCustomer(inv, customer)).reduce((s,inv) => s + (inv.grandTotal||0), 0);
+  const totalReceived = receiptsCache.filter(r => r.customerId === customerId).reduce((s,r) => s + (r.amount||0), 0);
+  return totalBilled - totalReceived;
+}
+async function loadReceipts(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('receipts').orderBy('date','desc').get();
+  receiptsCache = snap.docs.map(d => ({id:d.id, ...d.data()})).filter(r => !r.deleted);
+  populateReceiptCustomerDropdowns();
+  renderReceiptsTable();
+  refreshOpenCustomerDashboard();
+}
+function populateReceiptCustomerDropdowns(){
+  const options = '<option value="">Select customer…</option>' +
+    customersCache.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  ['receiptCustomer','custDashCustomer'].forEach(id => {
+    const sel = document.getElementById(id);
+    if(!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = options;
+    if(prev) sel.value = prev;
+  });
+}
+async function saveReceipt(){
+  const customerId = document.getElementById('receiptCustomer').value;
+  const customer = customersCache.find(c => c.id === customerId);
+  if(!customer){ showMsg('receiptMsg', 'Select a customer first.', false); return; }
+  const amount = parseFloat(document.getElementById('receiptAmount').value) || 0;
+  if(amount <= 0){ showMsg('receiptMsg', 'Enter a receipt amount greater than zero.', false); return; }
+  const dateVal = document.getElementById('receiptDate').value || new Date().toISOString().slice(0,10);
+  const mode = document.getElementById('receiptMode').value.trim();
+  const note = document.getElementById('receiptNote').value.trim();
+  const editId = document.getElementById('receiptEditId').value;
+
+  const data = { customerId, customerName: customer.name, date: dateVal, amount, mode, note };
+  if(editId){
+    await db.collection('users').doc(currentUser.uid).collection('receipts').doc(editId).set(data, {merge:true});
+  } else {
+    data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+    await db.collection('users').doc(currentUser.uid).collection('receipts').add(data);
+  }
+  await loadReceipts();
+
+  cancelEditReceipt();
+  showMsg('receiptMsg', editId
+    ? `Receipt updated. Balance now ₹${fmtMoney(getCustomerBalance(customerId))}.`
+    : `Receipt of ₹${fmtMoney(amount)} recorded for ${customer.name}. Balance now ₹${fmtMoney(getCustomerBalance(customerId))}.`, true);
+}
+function editReceipt(id){
+  const r = receiptsCache.find(x => x.id === id);
+  if(!r) return;
+  document.getElementById('receiptEditId').value = id;
+  document.getElementById('receiptCustomer').value = r.customerId;
+  document.getElementById('receiptDate').value = r.date;
+  document.getElementById('receiptAmount').value = r.amount;
+  updateAmountWords('receiptAmount','receiptAmountWords');
+  document.getElementById('receiptMode').value = r.mode || '';
+  document.getElementById('receiptNote').value = r.note || '';
+  document.getElementById('receiptFormTitle').textContent = 'Edit Receipt';
+  document.getElementById('receiptCancelEditBtn').classList.remove('hidden');
+}
+function cancelEditReceipt(){
+  document.getElementById('receiptEditId').value = '';
+  document.getElementById('receiptCustomer').value = '';
+  ['receiptAmount','receiptMode','receiptNote'].forEach(f => document.getElementById(f).value = '');
+  updateAmountWords('receiptAmount','receiptAmountWords');
+  document.getElementById('receiptFormTitle').textContent = 'Receipt Entry';
+  document.getElementById('receiptCancelEditBtn').classList.add('hidden');
+}
+async function deleteReceipt(id){
+  if(!confirm('Move this receipt to the Recycle Bin? You can restore it within 30 days.')) return;
+  await db.collection('users').doc(currentUser.uid).collection('receipts').doc(id).update({
+    deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  await loadReceipts();
+}
+function renderReceiptsTable(){
+  const tbody = document.getElementById('receiptsEntryTable');
+  if(!tbody) return;
+  tbody.innerHTML = receiptsCache.filter(r => dateInRange(r.date, 'receiptHistFrom', 'receiptHistTo')).map(r => `
+    <tr>
+      <td>${esc(r.date)}</td>
+      <td><a href="#" onclick="goToCustomerDashboard('${r.customerId}');return false;">${esc(r.customerName)}</a></td>
+      <td>₹${fmtMoney(r.amount)}</td>
+      <td>${esc(r.mode||'—')}</td>
+      <td>${esc(r.note||'')}</td>
+      <td class="row-actions"><button class="btn small" onclick="editReceipt('${r.id}')">Edit</button><button class="btn small danger" onclick="deleteReceipt('${r.id}')">Delete</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No receipts recorded yet.</td></tr>';
+}
+function renderReceivablesOverview(){
+  const tbody = document.getElementById('receivablesTable');
+  if(!tbody) return;
+  const invoices = invoicesArray();
+  const rows = customersCache.map(c => {
+    const totalBilled = invoices.filter(inv => invoiceBelongsToCustomer(inv, c)).reduce((s,inv) => s + (inv.grandTotal||0), 0);
+    const totalReceived = receiptsCache.filter(r => r.customerId === c.id).reduce((s,r) => s + (r.amount||0), 0);
+    return { id: c.id, name: c.name, totalBilled, totalReceived, balance: totalBilled - totalReceived };
+  }).filter(r => r.totalBilled > 0 || r.totalReceived > 0)
+    .sort((a,b) => b.balance - a.balance);
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td><a href="#" onclick="goToCustomerDashboard('${r.id}');return false;">${esc(r.name)}</a></td>
+      <td>₹${fmtMoney(r.totalBilled)}</td>
+      <td>₹${fmtMoney(r.totalReceived)}</td>
+      <td>₹${fmtMoney(r.balance)}</td>
+      <td class="row-actions"><button class="btn small" onclick="goToCustomerDashboard('${r.id}')">View</button></td>
+    </tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted)">No customer activity yet.</td></tr>';
+}
+function renderCustomerDashboard(customerId){
+  const wrap = document.getElementById('custDashSummaryWrap');
+  const emptyMsg = document.getElementById('custDashEmptyMsg');
+  if(!customerId){ wrap.classList.add('hidden'); emptyMsg.classList.add('hidden'); return; }
+
+  const customer = customersCache.find(c => c.id === customerId);
+  if(!customer){ wrap.classList.add('hidden'); emptyMsg.classList.add('hidden'); return; }
+
+  const invoices = invoicesArray().filter(inv => invoiceBelongsToCustomer(inv, customer)).sort((a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  const receipts = receiptsCache.filter(r => r.customerId === customerId);
+
+  if(!invoices.length && !receipts.length){
+    wrap.classList.add('hidden');
+    emptyMsg.classList.remove('hidden');
+    return;
+  }
+  emptyMsg.classList.add('hidden');
+  wrap.classList.remove('hidden');
+
+  let totalItems = 0;
+  const rows = [];
+  invoices.forEach(inv => (inv.items||[]).filter(li => li.productId).forEach(li => {
+    totalItems += (li.qty||0);
+    rows.push({ date: inv.date, type:'invoice', desc:`${li.name} — Invoice ${inv.invoiceNo}`, qty:`${li.qty} ${li.unit||''}`, debit: li.total || (li.taxable + (li.taxable*(li.gstRate||0)/100)), credit:0, invoiceId: inv.id });
+  }));
+  receipts.forEach(r => {
+    const label = r.note ? `Receipt (${r.mode || '—'}) — ${r.note}` : `Receipt (${r.mode || '—'})`;
+    rows.push({ date:r.date, type:'receipt', desc:label, qty:'', debit:0, credit:r.amount, receiptId:r.id });
+  });
+  rows.sort((a,b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+
+  let totalBilled = 0, totalReceived = 0, running = 0;
+  document.getElementById('custDashTable').innerHTML = rows.map(r => {
+    running += r.debit - r.credit;
+    totalBilled += r.debit; totalReceived += r.credit;
+    const actions = r.invoiceId
+      ? `<a class="btn small" href="invoice-view.html?id=${r.invoiceId}" target="_blank">View Invoice</a>`
+      : `<button class="btn small" onclick="editReceipt('${r.receiptId}')">Edit</button><button class="btn small danger" onclick="deleteReceipt('${r.receiptId}')">Delete</button>`;
+    return `<tr>
+      <td>${esc(r.date)}</td>
+      <td><span class="badge">${r.type === 'invoice' ? 'Invoice' : 'Receipt'}</span></td>
+      <td>${esc(r.desc)}</td>
+      <td>${esc(r.qty)}</td>
+      <td>${r.debit ? '₹'+fmtMoney(r.debit) : ''}</td>
+      <td>${r.credit ? '₹'+fmtMoney(r.credit) : ''}</td>
+      <td>₹${fmtMoney(running)}</td>
+      <td class="row-actions">${actions}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('custDashEntries').textContent = invoices.length;
+  document.getElementById('custDashItems').textContent = totalItems;
+  document.getElementById('custDashTotalBilled').textContent = '₹' + fmtMoney(totalBilled);
+  document.getElementById('custDashTotalReceived').textContent = '₹' + fmtMoney(totalReceived);
+  document.getElementById('custDashBalance').textContent = '₹' + fmtMoney(totalBilled - totalReceived);
+  document.getElementById('custDashLastInvoice').textContent = invoices.length ? `${invoices[invoices.length-1].date} — ₹${fmtMoney(invoices[invoices.length-1].grandTotal)}` : '—';
+}
+function refreshOpenCustomerDashboard(){
+  const sel = document.getElementById('custDashCustomer');
+  if(sel && sel.value) renderCustomerDashboard(sel.value);
+  renderReceivablesOverview();
+}
+function goToCustomerDashboard(customerId){
+  activateView('customer-dashboard');
+  const sel = document.getElementById('custDashCustomer');
+  if(sel){ sel.value = customerId; renderCustomerDashboard(customerId); }
 }
 
 /* ---------------- Supplier Dashboard (pick a supplier, see everything at a glance) ---------------- */
@@ -1781,6 +1978,7 @@ async function saveAndGenerate(sendEmail){
     invoiceNo, date: dateVal, reverseCharge,
     sellerUid: currentUser.uid, // required so the public_invoices Firestore rule can enforce ownership
     business: { ...businessData },
+    customerId: custId, // lets Customer Dashboard match invoices reliably — older invoices predate this field, see its fallback match
     customer: { legalName:customer.legalName, name:customer.name, gstin:customer.gstin, address:customer.address, state:customer.state, stateCode:customer.stateCode, email:customer.email },
     items: lineItems.map(li => ({...li, taxable: lineTaxable(li)})),
     subtotal: totals.subtotal, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, grandTotal: totals.grand,
@@ -1790,6 +1988,18 @@ async function saveAndGenerate(sendEmail){
   };
 
   const ref = await db.collection('users').doc(currentUser.uid).collection('invoices').add(invoiceData);
+
+  // Receivables: if the customer paid something at the moment of billing,
+  // log it as a receipt right away — same idea as Purchase Entry's "amount
+  // paid now" writing a payment, just the receivables mirror of it.
+  const receivedNow = parseFloat(document.getElementById('invReceivedNow').value) || 0;
+  if(receivedNow > 0){
+    await db.collection('users').doc(currentUser.uid).collection('receipts').add({
+      customerId: custId, customerName: customer.name, date: dateVal, amount: receivedNow,
+      mode: '', note: `Received with Invoice ${invoiceNo}`,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }
 
   // Stock OUT: every line item on a saved GST invoice reduces that product's
   // stock, same as a monthly marketplace upload would — logged individually so
@@ -1859,7 +2069,10 @@ async function saveAndGenerate(sendEmail){
 
   lineItems = [];
   addLineItem();
+  document.getElementById('invReceivedNow').value = '0';
+  updateAmountWords('invReceivedNow','invReceivedNowWords');
   loadInvoices();
+  if(receivedNow > 0){ loadReceipts(); refreshOpenCustomerDashboard(); }
 }
 
 function buildInvoicePDF(inv){
