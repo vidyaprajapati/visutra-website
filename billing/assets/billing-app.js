@@ -491,14 +491,36 @@ async function adjustStock(){
   showMsg('adjMsg', 'Stock adjusted.', true);
 }
 
-/* --- Monthly marketplace sales upload: read files -> map columns -> aggregate -> match products -> apply --- */
+/* --- Monthly marketplace sales upload: read files -> map columns -> aggregate -> match products -> apply ---
+   Meesho and Flipkart reports are detected by their actual column headers
+   (not file name or sheet name, which vary) and get their status column
+   read automatically — DELIVERED reduces stock, CANCELLED/RTO/RETURNED adds
+   it back, since a returned item physically comes back into your inventory
+   rather than just vanishing from stock like a real sale would. Anything
+   that doesn't match a known format falls back to the original manual
+   column picker (Amazon, or anything else), which — same as before — has
+   no way to tell a return from a sale and treats every row as sold. */
 const STOCK_PRODUCT_COL_GUESSES = ['sku','product name','item description','product title/description','description','product'];
 const STOCK_QTY_COL_GUESSES = ['quantity','qty','item quantity'];
 function guessStockColumn(headers, candidates){
   const lower = headers.map(h => String(h).toLowerCase());
   for(const c of candidates){ const i = lower.findIndex(h => h === c); if(i !== -1) return i; }
   for(const c of candidates){ const i = lower.findIndex(h => h.includes(c)); if(i !== -1) return i; }
-  return 0;
+  return -1; // no match at all — caller decides whether that disqualifies the sheet
+}
+// Rows whose status/reason contains any of these mean the item came back to
+// you (cancelled before dispatch counts too — it's stock that never left).
+const RETURN_STATUS_PATTERN = /cancel|rto|return/i;
+function detectSheetFormat(headers){
+  const lower = headers.map(h => String(h||'').trim().toLowerCase());
+  const idx = name => lower.indexOf(name);
+  if(idx('reason for credit entry') !== -1 && idx('sku') !== -1 && idx('quantity') !== -1){
+    return { format: 'meesho', reasonIdx: idx('reason for credit entry'), skuIdx: idx('sku'), qtyIdx: idx('quantity'), nameIdx: idx('product name') };
+  }
+  if(idx('order date') !== -1 && idx('sku name') !== -1 && idx('order status') !== -1 && idx('gross units') !== -1){
+    return { format: 'flipkart-pnl', skuIdx: idx('sku name'), statusIdx: idx('order status'), qtyIdx: idx('gross units') };
+  }
+  return null;
 }
 async function parseStockFiles(){
   const input = document.getElementById('stockFiles');
@@ -514,20 +536,41 @@ async function parseStockFiles(){
       const headers = rows[0].map(h => String(h||'').trim());
       const dataRows = rows.slice(1).filter(r => r.some(c => c !== '' && c !== undefined && c !== null));
       if(!headers.length || !dataRows.length) return;
-      stockUploadSheets.push({ fileName: file.name, sheetName, headers, rows: dataRows });
+      const detected = detectSheetFormat(headers);
+      // For anything not auto-detected (Amazon, a different report layout,
+      // or a same-file secondary sheet like Flipkart's own summary tabs),
+      // only keep it if it plausibly has BOTH a product-like and a
+      // quantity-like column — otherwise it's not order-level data at all
+      // (e.g. a "Report Help" text sheet) and showing it for manual mapping
+      // would just be confusing.
+      if(!detected){
+        const prodGuess = guessStockColumn(headers, STOCK_PRODUCT_COL_GUESSES);
+        const qtyGuess = guessStockColumn(headers, STOCK_QTY_COL_GUESSES);
+        if(prodGuess === -1 || qtyGuess === -1) return;
+      }
+      stockUploadSheets.push({ fileName: file.name, sheetName, headers, rows: dataRows, detected });
     });
   }
-  if(!stockUploadSheets.length){ showMsg('stockUploadMsg', 'Could not find any readable rows in the selected files.', false); return; }
+  if(!stockUploadSheets.length){ showMsg('stockUploadMsg', 'Could not find any readable order data in the selected files.', false); return; }
   renderStockColumnMapUI();
-  showMsg('stockUploadMsg', `Read ${stockUploadSheets.length} sheet(s) from ${files.length} file(s). Pick the product and quantity column for each below.`, true);
+  const autoCount = stockUploadSheets.filter(s => s.detected).length;
+  showMsg('stockUploadMsg', `Read ${stockUploadSheets.length} sheet(s) from ${files.length} file(s).` +
+    (autoCount ? ` ${autoCount} recognised automatically (Meesho/Flipkart) — returns and cancellations will be added back to stock, not deducted.` : ' Pick the product and quantity column for each below.'), true);
 }
 function renderStockColumnMapUI(){
   document.getElementById('stockColumnMapWrap').classList.remove('hidden');
   document.getElementById('stockAggWrap').classList.add('hidden');
   document.getElementById('stockColumnMapList').innerHTML = stockUploadSheets.map((s, i) => {
+    if(s.detected){
+      const label = s.detected.format === 'meesho' ? 'Meesho' : 'Flipkart Orders P&L';
+      return `<div class="box" style="margin-bottom:10px">
+        <p style="margin:0;font-size:13px"><span class="badge">${label} — detected automatically</span></p>
+        <p style="margin:6px 0 0;font-size:13px;color:var(--muted)">${esc(s.fileName)} — ${esc(s.sheetName)} (${s.rows.length} rows). Status/reason column read automatically — no columns to pick.</p>
+      </div>`;
+    }
     const opts = s.headers.map((h, ci) => `<option value="${ci}">${esc(h || ('(column ' + (ci+1) + ')'))}</option>`).join('');
     return `<div class="box" style="margin-bottom:10px">
-      <p style="margin:0 0 8px;font-size:13px;color:var(--muted)">${esc(s.fileName)} — ${esc(s.sheetName)} (${s.rows.length} rows)</p>
+      <p style="margin:0 0 8px;font-size:13px;color:var(--muted)">${esc(s.fileName)} — ${esc(s.sheetName)} (${s.rows.length} rows) — unrecognised format, every row here will be treated as a sale (no return/cancellation detection).</p>
       <div class="grid2">
         <div class="field"><label>Product / SKU column</label><select id="stockColProd${i}">${opts}</select></div>
         <div class="field"><label>Quantity column</label><select id="stockColQty${i}">${opts}</select></div>
@@ -535,28 +578,66 @@ function renderStockColumnMapUI(){
     </div>`;
   }).join('');
   stockUploadSheets.forEach((s, i) => {
-    document.getElementById('stockColProd'+i).value = guessStockColumn(s.headers, STOCK_PRODUCT_COL_GUESSES);
-    document.getElementById('stockColQty'+i).value = guessStockColumn(s.headers, STOCK_QTY_COL_GUESSES);
+    if(s.detected) return;
+    const prodGuess = guessStockColumn(s.headers, STOCK_PRODUCT_COL_GUESSES);
+    const qtyGuess = guessStockColumn(s.headers, STOCK_QTY_COL_GUESSES);
+    document.getElementById('stockColProd'+i).value = prodGuess === -1 ? 0 : prodGuess;
+    document.getElementById('stockColQty'+i).value = qtyGuess === -1 ? 0 : qtyGuess;
   });
 }
 function aggregateStockUpload(){
-  const agg = new Map(); // normalized key -> {displayKey, totalQty}
+  // normalized SKU/text -> {displayKey, soldQty, returnedQty, skippedQty, skippedStatuses}
+  const agg = new Map();
+  function bump(raw, qty, isReturn){
+    if(!raw) return;
+    const key = raw.toLowerCase();
+    if(!agg.has(key)) agg.set(key, { displayKey: raw, soldQty: 0, returnedQty: 0, skippedQty: 0, skippedStatuses: new Set() });
+    const entry = agg.get(key);
+    if(isReturn) entry.returnedQty += qty; else entry.soldQty += qty;
+  }
+
   stockUploadSheets.forEach((s, i) => {
-    const prodIdx = parseInt(document.getElementById('stockColProd'+i).value, 10);
-    const qtyIdx = parseInt(document.getElementById('stockColQty'+i).value, 10);
-    s.rows.forEach(row => {
-      const raw = String(row[prodIdx] ?? '').trim();
-      if(!raw) return;
-      const qty = parseFloat(row[qtyIdx]) || 0;
-      const key = raw.toLowerCase();
-      if(!agg.has(key)) agg.set(key, { displayKey: raw, totalQty: 0 });
-      agg.get(key).totalQty += qty;
-    });
+    if(s.detected && s.detected.format === 'meesho'){
+      const { reasonIdx, skuIdx, qtyIdx } = s.detected;
+      s.rows.forEach(row => {
+        const sku = String(row[skuIdx] ?? '').trim();
+        if(!sku) return;
+        const qty = parseFloat(row[qtyIdx]) || 0;
+        const reason = String(row[reasonIdx] ?? '').trim();
+        if(RETURN_STATUS_PATTERN.test(reason)) bump(sku, qty, true);
+        else if(/delivered/i.test(reason)) bump(sku, qty, false);
+        // Anything else (DOOR_STEP_EXCHANGED, LOST, unrecognised) is left
+        // untouched deliberately — neither a clean sale nor a stock return,
+        // and guessing wrong in either direction would misstate inventory.
+      });
+    } else if(s.detected && s.detected.format === 'flipkart-pnl'){
+      const { skuIdx, statusIdx, qtyIdx } = s.detected;
+      s.rows.forEach(row => {
+        const sku = String(row[skuIdx] ?? '').trim();
+        if(!sku) return;
+        const qty = parseFloat(row[qtyIdx]) || 0;
+        const status = String(row[statusIdx] ?? '').trim();
+        if(RETURN_STATUS_PATTERN.test(status)) bump(sku, qty, true);
+        else if(/delivered/i.test(status)) bump(sku, qty, false);
+      });
+    } else {
+      // Unrecognised format — same behaviour as before this change: every
+      // row counts as a plain sale, since there's no status column to tell
+      // a return apart from a delivery.
+      const prodIdx = parseInt(document.getElementById('stockColProd'+i).value, 10);
+      const qtyIdx = parseInt(document.getElementById('stockColQty'+i).value, 10);
+      s.rows.forEach(row => {
+        const raw = String(row[prodIdx] ?? '').trim();
+        if(!raw) return;
+        bump(raw, parseFloat(row[qtyIdx]) || 0, false);
+      });
+    }
   });
+
   stockAggregation = Array.from(agg.entries())
-    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, totalQty: v.totalQty }))
-    .filter(r => r.totalQty !== 0)
-    .sort((a,b) => b.totalQty - a.totalQty);
+    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, soldQty: v.soldQty, returnedQty: v.returnedQty, netChange: v.returnedQty - v.soldQty }))
+    .filter(r => r.soldQty !== 0 || r.returnedQty !== 0)
+    .sort((a,b) => Math.abs(b.netChange) - Math.abs(a.netChange));
   renderStockAggregationTable();
 }
 function renderStockAggregationTable(){
@@ -571,9 +652,12 @@ function renderStockAggregationTable(){
     const known = skuMappingsCache.find(m => m.rawKey === r.rawKey);
     const options = ['<option value="">Skip — not a stock item</option>']
       .concat(productsCache.map(p => `<option value="${p.id}" ${known && known.productId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`));
-    return `<tr>
-      <td>${esc(r.displayKey)}</td>
-      <td>${r.totalQty}</td>
+    const netStyle = r.netChange < 0 ? 'color:var(--paprika-dark)' : (r.netChange > 0 ? 'color:#0E7C6B' : '');
+    return `<tr${known ? '' : ' style="background:#FFF7ED"'}>
+      <td>${esc(r.displayKey)}${known ? '' : ' <span class="badge" title="No saved mapping yet — pick a product on the right">Unmapped</span>'}</td>
+      <td>${r.soldQty || 0}</td>
+      <td>${r.returnedQty || 0}</td>
+      <td style="${netStyle}">${r.netChange > 0 ? '+' : ''}${r.netChange}</td>
       <td><select id="stockAggMap${i}">${options.join('')}</select></td>
     </tr>`;
   }).join('');
@@ -604,7 +688,8 @@ async function applyStockUpload(){
       });
     }
 
-    await addStockMovement('sale-out', productId, -row.totalQty, dateVal, `${period} — ${row.displayKey}`);
+    if(row.soldQty) await addStockMovement('sale-out', productId, -row.soldQty, dateVal, `${period} — ${row.displayKey} (sold)`);
+    if(row.returnedQty) await addStockMovement('return-in', productId, row.returnedQty, dateVal, `${period} — ${row.displayKey} (cancelled/RTO/returned)`);
     applied++;
   }
 
