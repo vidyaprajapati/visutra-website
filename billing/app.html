@@ -543,6 +543,13 @@
 
     <!-- CUSTOMER DASHBOARD (receivables — the mirror of Supplier Dashboard) -->
     <div id="view-customer-dashboard" class="view hidden">
+      <div class="card hidden" id="paymentConfirmCard" style="background:#FFF7ED;border:1.5px solid #E8A32C">
+        <h2>Payment Confirmations</h2>
+        <p class="sub">A linked buyer says they've paid you directly (not through Billing) and is waiting for you to confirm it actually arrived. Approving adds it to your Receipts and their Payment History; rejecting leaves both unchanged.</p>
+        <table><thead><tr><th>Buyer</th><th>Date</th><th>Amount</th><th>Mode</th><th>Note</th><th></th></tr></thead>
+        <tbody id="paymentConfirmTable"></tbody></table>
+      </div>
+
       <div class="card">
         <h2>All Customers — Amount Receivable</h2>
         <p class="sub">Every customer ranked by balance due, highest first, so you can see who to follow up with next.</p>
