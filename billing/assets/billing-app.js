@@ -56,6 +56,7 @@ auth.onAuthStateChanged(async user => {
     await loadPurchaseProducts();
     await loadPayments();
     await loadReceipts();
+    await loadPaymentConfirmations();
     await loadSkuMappings();
     await loadStockMovements();
     addLineItem();
@@ -959,6 +960,78 @@ async function loadReceipts(){
   populateReceiptCustomerDropdowns();
   renderReceiptsTable();
   refreshOpenCustomerDashboard();
+}
+
+/* ---------------- Payment Confirmations (a buyer says they paid you directly) ----------------
+   The buyer's own Payment Entry writes this shared doc when they pay a
+   supplier that's a linked VISUTRA seller — since paying someone doesn't
+   mean it actually reached them, the seller confirms before it becomes a
+   real Receipt. Neither side can write to the other's data, so this shared
+   doc is the coordination point: the seller approves/rejects it here, and
+   the buyer's own client finalizes their own side once it sees the result
+   (see billing/buyer/payment-entry.html's own sweep). */
+async function loadPaymentConfirmations(){
+  const snap = await db.collection('paymentConfirmations')
+    .where('sellerUid', '==', currentUser.uid).where('status', '==', 'PENDING').get();
+  const requests = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const card = document.getElementById('paymentConfirmCard');
+  if(!card) return;
+  if(!requests.length){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  document.getElementById('paymentConfirmTable').innerHTML = requests.map(r => `
+    <tr><td>${esc(r.buyerName||r.buyerEmail||'Buyer')}</td><td>${esc(r.date)}</td><td>₹${fmtMoney(r.amount)}</td><td>${esc(r.mode||'—')}</td><td>${esc(r.note||'')}</td>
+    <td class="row-actions">
+      <button class="btn small primary" onclick="respondToPaymentConfirmation('${r.id}', true)">Approve</button>
+      <button class="btn small danger" onclick="respondToPaymentConfirmation('${r.id}', false)">Reject</button>
+    </td></tr>`).join('');
+}
+// Finds this buyer's linked Customer record, or creates one if the seller
+// never ran Link Buyer for them — same idea as ensureSupplierForSeller on
+// the buyer's side, just the other direction, so a receipt always has
+// somewhere correct to attach to.
+async function ensureCustomerForBuyer(buyerUid, buyerName, buyerEmail){
+  const existing = customersCache.find(c => c.linkedBuyerUid === buyerUid);
+  if(existing) return existing.id;
+  const ref = await db.collection('users').doc(currentUser.uid).collection('customers').add({
+    name: buyerName || buyerEmail || 'Buyer', gstin: '', address: '', stateCode: '', state: '',
+    email: buyerEmail || '', phone: '',
+    linkedBuyerUid: buyerUid, linkedBuyerEmail: buyerEmail || '', linkStatus: 'ACTIVE',
+    autoCreatedFromPayment: true
+  });
+  return ref.id;
+}
+async function respondToPaymentConfirmation(confirmId, approve){
+  const confirmMsg = approve
+    ? 'Approve this payment? It will be added to your Receipts and reflected in the buyer\'s own Payment History.'
+    : 'Reject this payment? The buyer will see it was declined and their pending record is removed.';
+  if(!confirm(confirmMsg)) return;
+
+  try{
+    const reqSnap = await db.collection('paymentConfirmations').doc(confirmId).get();
+    if(!reqSnap.exists){ alert('This request no longer exists.'); await loadPaymentConfirmations(); return; }
+    const req = reqSnap.data();
+    if(req.status !== 'PENDING'){ alert('This request has already been responded to.'); await loadPaymentConfirmations(); return; }
+
+    if(approve){
+      const customerId = await ensureCustomerForBuyer(req.buyerUid, req.buyerName, req.buyerEmail);
+      await loadCustomers(); // pick up a possibly-just-created customer before crediting it
+      const customer = customersCache.find(c => c.id === customerId);
+      await db.collection('users').doc(currentUser.uid).collection('receipts').add({
+        customerId, customerName: customer ? customer.name : (req.buyerName || 'Buyer'),
+        date: req.date, amount: req.amount, mode: req.mode || '', note: req.note || 'Paid directly (confirmed)',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      await loadReceipts();
+    }
+
+    await db.collection('paymentConfirmations').doc(confirmId).update({
+      status: approve ? 'APPROVED' : 'REJECTED',
+      respondedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await loadPaymentConfirmations();
+  }catch(err){
+    alert(`Could not respond: ${err.message}`);
+  }
 }
 function populateReceiptCustomerDropdowns(){
   const options = '<option value="">Select customer…</option>' +
