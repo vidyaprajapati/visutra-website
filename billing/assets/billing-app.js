@@ -1283,7 +1283,7 @@ async function savePurchase(){
   purchaseLineItems = [];
   addPurchaseLineItem();
   document.getElementById('purSupplier').value = '';
-  document.getElementById('purPaidNow').value = '0';
+  document.getElementById('purPaidNow').value = '0'; updateAmountWords('purPaidNow','purPaidNowWords');
   await loadPurchases();
 }
 async function loadPurchases(){
@@ -1456,7 +1456,7 @@ function editPurchase(id){
   document.getElementById('purEditId').value = id;
   document.getElementById('purSupplier').value = purchase.supplierId;
   document.getElementById('purDate').value = purchase.date;
-  document.getElementById('purPaidNow').value = '0';
+  document.getElementById('purPaidNow').value = '0'; updateAmountWords('purPaidNow','purPaidNowWords');
   // Carries hsn forward from the saved item, and backfills it from the
   // Purchase Product's CURRENT hsn when the saved item has none — otherwise
   // editing an old purchase (recorded before hsn existed, or before it was
@@ -1475,7 +1475,7 @@ function editPurchase(id){
 function cancelEditPurchase(){
   document.getElementById('purEditId').value = '';
   document.getElementById('purSupplier').value = '';
-  document.getElementById('purPaidNow').value = '0';
+  document.getElementById('purPaidNow').value = '0'; updateAmountWords('purPaidNow','purPaidNowWords');
   purchaseLineItems = [];
   addPurchaseLineItem();
   document.getElementById('purFormTitle').textContent = 'New Purchase';
@@ -1552,6 +1552,7 @@ async function savePaymentEntry(){
   await loadPayments();
 
   ['payEntryAmount','payEntryMode','payEntryNote'].forEach(f => document.getElementById(f).value = '');
+  updateAmountWords('payEntryAmount','payEntryAmountWords');
   showMsg('paymentEntryMsg', `Payment of ₹${fmtMoney(amount)} recorded for ${supplier.name}. Balance now ₹${fmtMoney(getSupplierBalance(supplierId))}.`, true);
 }
 function renderPaymentsTable(){
@@ -2540,6 +2541,57 @@ async function markPeriodAsFiled(){
 
 /* ---------------- Utils ---------------- */
 function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+
+/* ---------------- Amount in words (Indian numbering: Lakh/Crore, not Million/Billion) ----------------
+   Shown live under every payment-amount field so a typo (an extra zero, a
+   missing digit) is caught by eye before saving, the same way a cheque or a
+   bank transfer form shows the amount in words for exactly that reason. */
+function numberToWordsIndian(amount){
+  amount = Math.abs(amount || 0);
+  const rupees = Math.floor(amount);
+  const paise = Math.round((amount - rupees) * 100);
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
+    'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  function twoDigits(n){
+    if(n < 20) return ones[n];
+    return tens[Math.floor(n/10)] + (n % 10 ? ' ' + ones[n % 10] : '');
+  }
+  function threeDigits(n){
+    let str = '';
+    if(n >= 100){ str += ones[Math.floor(n/100)] + ' Hundred'; n %= 100; if(n) str += ' '; }
+    str += twoDigits(n);
+    return str;
+  }
+  function rupeesToWords(n){
+    if(n === 0) return 'Zero';
+    let remaining = n;
+    const crore = Math.floor(remaining / 10000000); remaining %= 10000000;
+    const lakh = Math.floor(remaining / 100000); remaining %= 100000;
+    const thousand = Math.floor(remaining / 1000); remaining %= 1000;
+    const hundred = remaining;
+    const parts = [];
+    if(crore) parts.push(threeDigits(crore) + ' Crore');
+    if(lakh) parts.push(twoDigits(lakh) + ' Lakh');
+    if(thousand) parts.push(twoDigits(thousand) + ' Thousand');
+    if(hundred) parts.push(threeDigits(hundred));
+    return parts.join(' ');
+  }
+  let result = rupeesToWords(rupees) + ' Rupees';
+  if(paise > 0) result += ' and ' + twoDigits(paise) + ' Paise';
+  return result + ' Only';
+}
+/* Reads a number input and writes its word form into a target element —
+   pass this straight into a field's oninput, and call it once by hand
+   after any place that resets or programmatically sets the field's value
+   (a plain .value= assignment doesn't fire oninput on its own). */
+function updateAmountWords(inputId, outputId){
+  const input = document.getElementById(inputId);
+  const output = document.getElementById(outputId);
+  if(!input || !output) return;
+  const val = parseFloat(input.value);
+  output.textContent = (val && val > 0) ? numberToWordsIndian(val) : '';
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function showMsg(id, text, ok){
   const el = document.getElementById(id);
