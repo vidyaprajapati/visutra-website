@@ -362,7 +362,9 @@
         <div class="totals-box" id="purchaseTotalsBox"></div>
 
         <div class="grid2" style="margin-top:16px">
-          <div class="field"><label>Amount paid to supplier now (₹) — optional</label><input id="purPaidNow" type="number" min="0" step="0.01" value="0" oninput="recalcPurchaseTotals()"></div>
+          <div class="field"><label>Amount paid to supplier now (₹) — optional</label><input id="purPaidNow" type="number" min="0" step="0.01" value="0" oninput="recalcPurchaseTotals(); updateAmountWords('purPaidNow','purPaidNowWords')">
+            <p class="sub" id="purPaidNowWords" style="margin-top:4px"></p>
+          </div>
           <div class="field"><label>Balance to this supplier after this purchase</label><input id="purBalancePreview" type="text" readonly style="background:var(--ivory);color:var(--muted)"></div>
         </div>
 
@@ -397,7 +399,9 @@
           <div class="field"><label>Payment date</label><input id="payEntryDate" type="date"></div>
         </div>
         <div class="grid2">
-          <div class="field"><label>Amount (₹)</label><input id="payEntryAmount" type="number" min="0" step="0.01"></div>
+          <div class="field"><label>Amount (₹)</label><input id="payEntryAmount" type="number" min="0" step="0.01" oninput="updateAmountWords('payEntryAmount','payEntryAmountWords')">
+            <p class="sub" id="payEntryAmountWords" style="margin-top:4px"></p>
+          </div>
           <div class="field"><label>Mode (Cash / UPI / Bank...)</label><input id="payEntryMode"></div>
         </div>
         <div class="field"><label>Note (optional)</label><input id="payEntryNote"></div>
