@@ -530,22 +530,40 @@ async function saveMapping(){
   }
 
   const editId = document.getElementById('mEditId').value;
-  const data = {
-    sellerId: sellerUid,
-    sellerName,
-    productId,
-    productName: product.name,
-    sellerSku: product.sku || '',
-    buyerSku, amazonSku, meeshoSku, flipkartSku,
-    status: 'ACTIVE',
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-  };
+
+  // A seller+product pair may only have ONE mapping — Stock and the
+  // order-acceptance auto-update both key off (sellerId, productId), so a
+  // second mapping for the same pair would just fragment that product's
+  // stock across two rows instead of tracking it in one place. If one
+  // already exists and this isn't an edit of it, stop and point at it.
+  if(!editId){
+    const dupe = mappingsCache.find(m => m.sellerId === sellerUid && m.productId === productId && m.status === 'ACTIVE');
+    if(dupe){
+      showMsg('mappingMsg', `A mapping for this product already exists (Buyer SKU: ${dupe.buyerSku || '—'}). Editing it instead of creating a duplicate.`, false);
+      editMapping(dupe.id);
+      return;
+    }
+  }
+
   const col = db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings');
   if(editId){
+    const data = {
+      sellerId: sellerUid, sellerName, productId, productName: product.name,
+      sellerSku: product.sku || '', buyerSku, amazonSku, meeshoSku, flipkartSku,
+      status: 'ACTIVE', updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
     await col.doc(editId).set(data, {merge: true});
   } else {
-    data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
-    await col.add(data);
+    // stock/reorderLevel default to 0 here and are managed from then on
+    // exclusively by the Stock page (manual edits) and order acceptance
+    // (auto stock-in) — never touched again from this form.
+    await col.add({
+      sellerId: sellerUid, sellerName, productId, productName: product.name,
+      sellerSku: product.sku || '', buyerSku, amazonSku, meeshoSku, flipkartSku,
+      status: 'ACTIVE', stock: 0, reorderLevel: 0,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
   }
 
   // One mapping resolves every occurrence of the SKU(s) it just defined.

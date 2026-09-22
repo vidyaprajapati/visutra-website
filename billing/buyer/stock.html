@@ -117,7 +117,9 @@ async function loadStock(){
     db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').where('status', '==', 'ACTIVE').get(),
     db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').orderBy('createdAt', 'desc').limit(50).get()
   ]);
-  mySkuMappingsCache = mapSnap.docs.map(d => ({id: d.id, ...d.data()})).sort((a,b) => (a.productName||'').localeCompare(b.productName||''));
+  let mappings = mapSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  mappings = await mergeDuplicateMappings(mappings); // one product = one row, see below
+  mySkuMappingsCache = mappings.sort((a,b) => (a.productName||'').localeCompare(b.productName||''));
   renderStockTable();
 
   document.getElementById('movementsTable').innerHTML = moveSnap.docs.map(d => {
@@ -139,6 +141,62 @@ function renderStockTable(){
     </tr>`;
   }).join('') || `<tr><td colspan="7" style="color:var(--muted)">No products in Buyer SKU Master yet — <a href="buyer-sku-master.html">add one</a> to start tracking stock.</td></tr>`;
 }
+// Buyer SKU Master used to let the same seller+product be mapped more than
+// once (fixed going forward in buyer-sku-master.html), which fragmented one
+// product's stock across several rows here. This is a one-time cleanup for
+// any duplicates already sitting in your data: group ACTIVE mappings by
+// (sellerId, productId), keep the oldest one per group as the single row
+// going forward, fold the others' stock into it, and retire the rest
+// (status -> INACTIVE, so they drop out of every ACTIVE query for good —
+// Stock, order-acceptance matching, everything). Runs every load but is a
+// no-op once there's nothing left to merge, so it's safe to leave in place.
+async function mergeDuplicateMappings(mappings){
+  const groups = new Map();
+  mappings.forEach(m => {
+    const key = m.sellerId + '::' + m.productId;
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(m);
+  });
+
+  const survivors = [];
+  for(const group of groups.values()){
+    if(group.length === 1){ survivors.push(group[0]); continue; }
+
+    group.sort((a,b) => (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0));
+    const primary = group[0];
+    const duplicates = group.slice(1);
+    const mergedStock = group.reduce((sum, m) => sum + (m.stock || 0), 0);
+    const mergedReorder = Math.max(...group.map(m => m.reorderLevel || 0));
+    // Keep whichever marketplace SKU codes are actually filled in, in case
+    // a later duplicate had one the original was missing.
+    const pick = field => group.map(m => m[field]).find(v => v) || '';
+
+    const batch = db.batch();
+    const primaryRef = db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(primary.id);
+    batch.set(primaryRef, {
+      stock: mergedStock, reorderLevel: mergedReorder,
+      buyerSku: pick('buyerSku'), amazonSku: pick('amazonSku'), meeshoSku: pick('meeshoSku'), flipkartSku: pick('flipkartSku'),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, {merge: true});
+    duplicates.forEach(d => {
+      const dupRef = db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(d.id);
+      batch.set(dupRef, { status: 'INACTIVE', mergedInto: primary.id, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, {merge: true});
+    });
+    await batch.commit();
+
+    if(mergedStock !== (primary.stock || 0)){
+      await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
+        type: 'manual-adjust', mappingId: primary.id, productName: primary.productName,
+        qty: mergedStock - (primary.stock || 0), date: new Date().toISOString().slice(0,10),
+        note: `Merged ${duplicates.length} duplicate SKU Master mapping(s) for this product into one`,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    survivors.push(Object.assign({}, primary, { stock: mergedStock, reorderLevel: mergedReorder }));
+  }
+  return survivors;
+}
+
 // Manual, absolute-value update — logs the delta as a movement so the
 // history above stays meaningful even for hand-entered corrections.
 async function saveStock(mappingId){
