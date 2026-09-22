@@ -10,6 +10,12 @@ let paymentsCache = [];
 let purchaseLineItems = []; // {productId, name, unit, qty, rate, gstRate} -- productId refers to purchaseProductsCache, NOT the billing Products list
 let currentLedgerSupplierId = null;
 let stockMovementsCache = [];
+// Full, uncapped movement history — separate from stockMovementsCache above
+// (which is capped at the last 200 for the History card), since the monthly
+// report needs every movement on record to reconstruct opening/closing
+// correctly for any month, not just the most recent ones. Lazily fetched
+// once, reused after that.
+let allStockMovementsCache = null;
 let skuMappingsCache = [];
 let stockUploadSheets = []; // {fileName, sheetName, headers, rows} — rows is an array of arrays, header row excluded
 let stockAggregation = []; // {rawKey, displayKey, totalQty} built from stockUploadSheets after column mapping
@@ -463,6 +469,70 @@ async function loadStockMovements(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('stockMovements').orderBy('createdAt','desc').limit(200).get();
   stockMovementsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
   renderStockMovementsTable();
+  // Every place that calls loadStockMovements() does so because stock just
+  // changed, so keep the Monthly Stock Report in sync the same way — it's
+  // a no-op before the month input exists yet (very first load, handled
+  // explicitly right after this call returns).
+  if(document.getElementById('stockReportMonth')) await renderMonthlyStockReport();
+}
+
+/* ---------------- Monthly Stock Report (Opening / Closing + daily movement) ----------------
+   Reconstructed from the full stockMovements history rather than stored
+   per-day, since every stock change (purchase-in, sale-out, adjustment,
+   reconciliation) already writes a movement here (see addStockMovement) —
+   so working backwards from the current live stock gives an exact
+   opening/closing balance for any month, without needing a separate
+   snapshot. Uses allStockMovementsCache (uncapped), not stockMovementsCache
+   (capped at 200 for the History card above), since a month outside the
+   most recent 200 movements would otherwise be miscalculated. */
+async function ensureAllStockMovementsLoaded(){
+  if(allStockMovementsCache) return allStockMovementsCache;
+  const snap = await db.collection('users').doc(currentUser.uid).collection('stockMovements').orderBy('date').get();
+  allStockMovementsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  return allStockMovementsCache;
+}
+function stockReportMonthBounds(monthStr){
+  const [y, m] = monthStr.split('-').map(Number);
+  const start = `${monthStr}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end = `${monthStr}-${String(lastDay).padStart(2,'0')}`;
+  return { start, end };
+}
+async function renderMonthlyStockReport(){
+  const monthInput = document.getElementById('stockReportMonth');
+  if(!monthInput) return;
+  const month = monthInput.value || new Date().toISOString().slice(0,7);
+  monthInput.value = month;
+  const { start, end } = stockReportMonthBounds(month);
+  const movements = await ensureAllStockMovementsLoaded();
+
+  const rows = productsCache.map(p => {
+    const pm = movements.filter(m => m.productId === p.id);
+    // Roll the live stock back past everything that happened AFTER this
+    // month to get the balance as it stood at month-end.
+    const afterEnd = pm.filter(m => m.date > end).reduce((s,m) => s + (m.qty||0), 0);
+    const closing = (p.stock || 0) - afterEnd;
+    const inMonth = pm.filter(m => m.date >= start && m.date <= end);
+    const netInMonth = inMonth.reduce((s,m) => s + (m.qty||0), 0);
+    const opening = closing - netInMonth;
+    const stockIn = inMonth.filter(m => m.qty > 0).reduce((s,m) => s + m.qty, 0);
+    const stockOut = inMonth.filter(m => m.qty < 0).reduce((s,m) => s + m.qty, 0);
+    return { product: p, opening, stockIn, stockOut, closing };
+  });
+  const reportTable = document.getElementById('monthlyStockReportTable');
+  if(reportTable){
+    reportTable.innerHTML = rows.map(r => `
+      <tr><td>${esc(r.product.name)}</td><td>${r.opening}</td><td style="color:#0E7C6B">${r.stockIn?'+':''}${r.stockIn}</td><td style="color:var(--paprika-dark)">${r.stockOut}</td><td><b>${r.closing}</b></td></tr>
+    `).join('') || '<tr><td colspan="5" style="color:var(--muted)">No products yet.</td></tr>';
+  }
+
+  const dayMovs = movements.filter(m => m.date >= start && m.date <= end).sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
+  const dailyTable = document.getElementById('dailyStockMovementTable');
+  if(dailyTable){
+    dailyTable.innerHTML = dayMovs.map(m => `
+      <tr><td>${esc(m.date)}</td><td>${esc(m.productName)}</td><td>${m.qty>0?'+':''}${m.qty}</td><td>${esc(m.note||'')}</td></tr>
+    `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No movements in this month.</td></tr>';
+  }
 }
 /* Shared by purchase stock-in and manual adjustment: bumps a product's stock
    by qty (can be negative) and logs the movement for the history table. */
@@ -476,6 +546,9 @@ async function addStockMovement(type, productId, qty, date, note){
     type, productId, productName: product.name, qty, date, note: note || '',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
+  // Every stock change funnels through here, so invalidating in one place
+  // keeps the Monthly Stock Report correct without touching each call site.
+  allStockMovementsCache = null;
 }
 async function adjustStock(){
   const productId = document.getElementById('adjProduct').value;
