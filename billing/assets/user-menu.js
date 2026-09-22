@@ -106,6 +106,165 @@ function renderBuyerSidebar(activeView, basePath) {
     const active = item.view === activeView ? ' active' : '';
     return '<a href="' + base + item.href + '" class="nav-link' + active + '">' + item.label + '</a>';
   }).join('');
+
+  // Safety net: previously, an order accepted through the normal Place Order
+  // flow only turned into a Purchase Entry + stock-in if the buyer happened
+  // to open My Orders (the only page that ran the sweep below). Every
+  // buyer/*.html page calls renderBuyerSidebar(), so hooking it in here means
+  // stock catches up no matter which buyer page you land on after an
+  // acceptance — Dashboard, Stock, wherever — not just My Orders.
+  if (typeof auth !== 'undefined' && auth && auth.currentUser) {
+    runBuyerStockSweepOnce(auth.currentUser.uid);
+  }
+}
+
+/* ---------------- Site-wide buyer stock sweep ----------------
+   Ported from my-orders.html's onload sweep + ensureBuyerPurchaseForOrder
+   (that page still has its own copy, which still runs too — this is a
+   second safety net, not a replacement, so nothing there needs to change).
+   Finds ACCEPTED orders with no buyerPurchaseId yet and, for each one,
+   creates the matching Purchase Entry and posts the stock-in — exactly what
+   clicking "Save Purchase" on a manual entry does, so an order accepted by
+   a seller behaves the same as a purchase you typed in by hand. Runs at
+   most once per page load (see the _vtStockSweepRan guard). */
+let _vtStockSweepRan = false;
+function runBuyerStockSweepOnce(uid) {
+  if (_vtStockSweepRan) return;
+  _vtStockSweepRan = true;
+  vtBuyerStockSweep(uid).catch(function (err) {
+    console.error('Buyer stock sweep failed:', err);
+  });
+}
+
+async function vtBuyerStockSweep(uid) {
+  const [ordersSnap, prodSnap] = await Promise.all([
+    db.collection('marketplaceOrders').where('buyerUid', '==', uid).where('status', '==', 'ACCEPTED').get(),
+    db.collection('users').doc(uid).collection('products').get()
+  ]);
+  const myProducts = prodSnap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); });
+  const pending = ordersSnap.docs
+    .map(function (d) { return Object.assign({ id: d.id }, d.data()); })
+    .filter(function (o) { return !o.buyerPurchaseId; });
+  if (!pending.length) return;
+
+  const flagged = [];
+  for (const order of pending) {
+    try {
+      const { unlinkedNames } = await vtEnsureBuyerPurchaseForOrder(uid, order, myProducts);
+      if (unlinkedNames.length) flagged.push({ order, unlinkedNames });
+    } catch (err) {
+      console.error('Buyer stock sweep: could not process order', order.id, err);
+    }
+  }
+  if (flagged.length) vtShowUnlinkedStockBanner(flagged);
+}
+
+async function vtEnsureBuyerPurchaseForOrder(uid, order, myProducts) {
+  const supplierId = await vtEnsureSupplierForSeller(uid, order.sellerUid, order.sellerName);
+  const items = [];
+  const stockIns = [];
+  const unlinkedNames = []; // items with no matching product on this buyer's side — stock can't attach for these
+
+  for (const item of order.items) {
+    const linked = await vtEnsurePurchaseProductForSellerItem(uid, order.sellerUid, item, myProducts);
+    items.push({
+      productId: linked.purchaseProductId, name: item.productName, unit: item.unit || 'PCS', hsn: item.hsn || '',
+      qty: item.qty, rate: item.rate || 0, gstRate: item.gstRate || 0,
+      taxable: item.taxable || 0, gstAmt: item.gstAmt || 0, total: item.total || 0,
+      priceMode: 'excl', linkedProductId: linked.linkedProductId || null
+    });
+    if (linked.linkedProductId) stockIns.push({ linkedProductId: linked.linkedProductId, qty: item.qty });
+    else unlinkedNames.push(item.productName);
+  }
+
+  const summary = order.invoiceSummary || {};
+  const purchaseData = {
+    supplierId, supplierName: order.sellerName,
+    date: order.acceptedAt && order.acceptedAt.toDate ? order.acceptedAt.toDate().toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+    items,
+    subtotal: summary.subtotal || 0,
+    gstTotal: (summary.cgst || 0) + (summary.sgst || 0) + (summary.igst || 0),
+    grandTotal: summary.grandTotal || 0,
+    orderId: order.id, orderNumber: order.orderNumber, invoiceId: order.invoiceId, invoiceNo: order.invoiceNo,
+    autoCreatedFromOrder: true,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const purRef = await db.collection('users').doc(uid).collection('purchases').add(purchaseData);
+
+  for (const s of stockIns) {
+    await db.collection('users').doc(uid).collection('products').doc(s.linkedProductId).update({
+      stock: firebase.firestore.FieldValue.increment(s.qty)
+    });
+    await db.collection('users').doc(uid).collection('stockMovements').add({
+      type: 'purchase-in', productId: s.linkedProductId, qty: s.qty, date: purchaseData.date,
+      note: 'Purchase from ' + order.sellerName + ' (order ' + (order.orderNumber || '') + ')',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }
+
+  // Same narrow, rule-guarded update the per-page copies use: a buyer may
+  // only set buyerPurchaseId once, on an already-ACCEPTED order — see
+  // firestore.rules — which is what stops this sweep (and the other two
+  // copies of this logic) from ever double-creating a purchase for one order.
+  await db.collection('marketplaceOrders').doc(order.id).update({
+    buyerPurchaseId: purRef.id,
+    buyerPurchaseCreatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+
+  return { unlinkedNames };
+}
+
+async function vtEnsureSupplierForSeller(uid, sellerUid, sellerName) {
+  const snap = await db.collection('users').doc(uid).collection('suppliers')
+    .where('sellerUid', '==', sellerUid).limit(1).get();
+  if (!snap.empty) return snap.docs[0].id;
+  const ref = await db.collection('users').doc(uid).collection('suppliers').add({
+    name: sellerName, sellerUid, gstin: '', address: '', stateCode: '', state: '', email: '', phone: '',
+    autoCreatedFromOrder: true
+  });
+  return ref.id;
+}
+
+// Auto-links by exact name match against this buyer's own sellable Products
+// (case/whitespace-insensitive) — same rule the Billing app's Purchase
+// Product form and the other two copies of this logic use.
+function vtFindMyProductByName(myProducts, name) {
+  const norm = (name || '').trim().toLowerCase();
+  if (!norm) return null;
+  return myProducts.find(function (p) { return (p.name || '').trim().toLowerCase() === norm; }) || null;
+}
+
+async function vtEnsurePurchaseProductForSellerItem(uid, sellerUid, item, myProducts) {
+  const snap = await db.collection('users').doc(uid).collection('purchaseProducts')
+    .where('sellerUid', '==', sellerUid).where('sellerProductId', '==', item.productId).limit(1).get();
+  if (!snap.empty) {
+    const doc = snap.docs[0];
+    return { purchaseProductId: doc.id, linkedProductId: doc.data().linkedProductId || null };
+  }
+  const match = vtFindMyProductByName(myProducts, item.productName);
+  const ref = await db.collection('users').doc(uid).collection('purchaseProducts').add({
+    name: item.productName, hsn: item.hsn || '', unit: item.unit || 'PCS', linkedProductId: match ? match.id : null,
+    sellerUid, sellerProductId: item.productId, autoCreatedFromOrder: true
+  });
+  return { purchaseProductId: ref.id, linkedProductId: match ? match.id : null };
+}
+
+// Small dismissible corner banner — the same "stock didn't update for X"
+// information dashboard.html's off-platform approve flow already surfaces,
+// now also shown for the normal Place Order flow, which previously failed
+// to link stock completely silently (nothing told the buyer why).
+function vtShowUnlinkedStockBanner(flagged) {
+  const lines = flagged.map(function (f) {
+    return (f.order.orderNumber || f.order.id) + ' (' + (f.order.sellerName || 'seller') + '): ' + f.unlinkedNames.join(', ');
+  });
+  console.warn('Stock did not update for these items — add a matching product with the exact same name (or map it in Buyer SKU Master):\n' + lines.join('\n'));
+
+  const bar = document.createElement('div');
+  bar.style.cssText = 'position:fixed;bottom:16px;right:16px;max-width:360px;background:#FFF4E5;border:1px solid #E4B36B;color:#5A3B00;padding:12px 14px;border-radius:10px;font:13px/1.4 system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,0.15);z-index:20001';
+  bar.innerHTML = '<b>Stock didn\u2019t update for some items:</b><br>' + lines.map(escapeHtmlUM).join('<br>') +
+    '<br><span style="color:#8A6A2E">Add a matching product with the exact same name (or map it in Buyer SKU Master) so stock updates next time.</span>' +
+    '<br><button style="margin-top:8px;font:12px system-ui,sans-serif;padding:4px 10px;border-radius:6px;border:1px solid #5A3B00;background:transparent;color:#5A3B00;cursor:pointer" onclick="this.parentNode.remove()">Dismiss</button>';
+  document.body.appendChild(bar);
 }
 
 function wireDropdown(btnId, dropdownId) {
