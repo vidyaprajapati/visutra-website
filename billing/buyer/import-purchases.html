@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Import Historical Purchases | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Import Historical Purchases</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="purchase-entry.html">Purchase Entry</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main">
+
+  <div class="card" id="notBuyerCard" style="display:none">
+    <h2>Buyer Features Not Enabled</h2>
+    <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first, then get linked by a seller from their Customers page.</p>
+  </div>
+
+  <div class="card">
+    <h2>Import Historical Purchase Data</h2>
+    <p class="sub">Bring your old day-wise purchase records in from Excel/CSV — supplier dues, <a href="purchases-gstr.html">GSTR-1 Filing</a>, and <a href="purchase-entry.html">Purchase Entry</a>'s history will all reflect them, exactly as if you'd typed each one in by hand. A supplier name that doesn't already exist in your <a href="my-sellers.html">My Sellers</a> off-platform list is created automatically.</p>
+    <p class="sub"><b>This does not change your current Stock numbers.</b> These are old purchases you've already used or resold since — adding their quantities to today's stock would double-count. If you also want the stock side of this period recorded, use <a href="stock.html">Stock</a>'s own Monthly Inventory Reconciliation upload for the same months separately, or adjust the current stock number there by hand once you know what's actually on the shelf.</p>
+    <input type="file" id="importFile" accept=".csv,.xlsx,.xls">
+    <button class="btn primary" style="margin-left:8px" onclick="parseImportFile()">Read File</button>
+    <p class="msg" id="importUploadMsg"></p>
+  </div>
+
+  <div class="card hidden" id="columnMapCard">
+    <h2>Step 1 — Match Your Columns</h2>
+    <p class="sub">Date and Supplier are required. Everything else is optional — leave as "Not in my sheet" for anything you don't have, and a sensible default is used instead.</p>
+    <div id="columnMapList"></div>
+
+    <div class="grid2" style="margin-top:14px">
+      <div class="field"><label>The Rate/Amount column is</label>
+        <select id="importValueMode">
+          <option value="total">A total amount for that row (qty ignored)</option>
+          <option value="rate">A per-unit rate (multiplied by Qty)</option>
+        </select>
+      </div>
+      <div class="field"><label>Those amounts are</label>
+        <select id="importPriceMode">
+          <option value="excl">Excl. GST</option>
+          <option value="incl">Incl. GST</option>
+        </select>
+      </div>
+    </div>
+    <div class="field" style="max-width:220px"><label>Default GST % (used where no GST column is mapped)</label><input id="importDefaultGst" type="number" min="0" step="0.01" value="0"></div>
+
+    <button class="btn primary" style="margin-top:10px" onclick="buildImportPreview()">Next: Preview</button>
+  </div>
+
+  <div class="card hidden" id="previewCard">
+    <h2>Step 2 — Preview &amp; Import</h2>
+    <p class="sub" id="previewSummary"></p>
+    <table><thead><tr><th>Date</th><th>Supplier</th><th>Items</th><th>Taxable</th><th>GST</th><th>Total</th><th>Paid</th></tr></thead>
+    <tbody id="previewTable"></tbody></table>
+    <button class="btn primary" style="margin-top:14px" onclick="runImport()">Import All</button>
+    <button class="btn small" style="margin-top:14px" onclick="cancelImportPreview()">Start Over</button>
+    <p class="msg" id="importApplyMsg"></p>
+  </div>
+
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+let suppliersCache = [];
+let importHeaders = [];
+let importRows = [];
+let importGroups = []; // built in buildImportPreview(): one per (date, supplier)
+
+const IMPORT_FIELD_GUESSES = {
+  date: ['date', 'purchase date', 'bill date', 'invoice date'],
+  supplier: ['supplier', 'supplier name', 'party', 'party name', 'vendor', 'seller'],
+  item: ['item', 'item name', 'product', 'product name', 'description'],
+  qty: ['qty', 'quantity'],
+  value: ['amount', 'total', 'rate', 'value', 'purchase amount'],
+  gst: ['gst', 'gst%', 'gst rate', 'tax%', 'tax rate'],
+  paid: ['paid', 'amount paid', 'paid amount']
+};
+const IMPORT_FIELDS = [
+  { key: 'date', label: 'Date', required: true },
+  { key: 'supplier', label: 'Supplier Name', required: true },
+  { key: 'item', label: 'Item Name (optional)', required: false },
+  { key: 'qty', label: 'Qty (optional)', required: false },
+  { key: 'value', label: 'Rate / Amount', required: true },
+  { key: 'gst', label: 'GST % column (optional)', required: false },
+  { key: 'paid', label: 'Amount Paid (optional)', required: false }
+];
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/import-purchases.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/import-purchases.html');
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('import-purchases', '../');
+
+  const data = snap.data() || {};
+  document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
+
+  const supSnap = await db.collection('users').doc(currentUser.uid).collection('suppliers').get();
+  suppliersCache = supSnap.docs.map(d => ({id: d.id, ...d.data()}));
+});
+
+function guessImportColumn(headers, candidates){
+  const lower = headers.map(h => String(h).toLowerCase().trim());
+  for(const c of candidates){ const i = lower.findIndex(h => h === c); if(i !== -1) return i; }
+  for(const c of candidates){ const i = lower.findIndex(h => h.includes(c)); if(i !== -1) return i; }
+  return -1;
+}
+
+async function parseImportFile(){
+  const input = document.getElementById('importFile');
+  const file = input.files && input.files[0];
+  if(!file){ showMsg('importUploadMsg', 'Choose a file first.', false); return; }
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array'});
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, {header:1, raw:true, defval:''});
+    if(!rows.length){ showMsg('importUploadMsg', 'That file appears to be empty.', false); return; }
+    importHeaders = rows[0].map(h => String(h||'').trim());
+    importRows = rows.slice(1).filter(r => r.some(c => c !== '' && c !== undefined && c !== null));
+    if(!importRows.length){ showMsg('importUploadMsg', 'No data rows found below the header row.', false); return; }
+    if(wb.SheetNames.length > 1) showMsg('importUploadMsg', `Read ${importRows.length} row(s) from "${wb.SheetNames[0]}" (the first sheet — other sheets in this file are ignored).`, true);
+    else showMsg('importUploadMsg', `Read ${importRows.length} row(s).`, true);
+    renderColumnMapUI();
+  }catch(err){
+    showMsg('importUploadMsg', `Could not read that file: ${err.message}`, false);
+  }
+}
+
+function renderColumnMapUI(){
+  document.getElementById('columnMapCard').classList.remove('hidden');
+  document.getElementById('previewCard').classList.add('hidden');
+  document.getElementById('columnMapList').innerHTML = IMPORT_FIELDS.map(f => {
+    const opts = ['<option value="-1">Not in my sheet</option>']
+      .concat(importHeaders.map((h, ci) => `<option value="${ci}">${esc(h || ('(column ' + (ci+1) + ')'))}</option>`));
+    return `<div class="field"><label>${esc(f.label)}${f.required ? ' (required)' : ''}</label><select id="importCol_${f.key}">${opts.join('')}</select></div>`;
+  }).join('');
+  IMPORT_FIELDS.forEach(f => {
+    const guess = guessImportColumn(importHeaders, IMPORT_FIELD_GUESSES[f.key] || []);
+    document.getElementById('importCol_'+f.key).value = guess;
+  });
+}
+
+function colVal(row, idx){ return idx === -1 || idx === undefined ? '' : (row[idx] ?? ''); }
+// Accepts native Excel date serials, JS Date objects (raw:true sometimes
+// gives one for date-formatted cells), and common text formats.
+function parseImportDate(raw){
+  if(raw === '' || raw === null || raw === undefined) return null;
+  if(raw instanceof Date && !isNaN(raw)) return raw.toISOString().slice(0,10);
+  if(typeof raw === 'number'){
+    const d = XLSX.SSF.parse_date_code(raw);
+    if(d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+  }
+  const s = String(raw).trim();
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(iso) return `${iso[1]}-${iso[2].padStart(2,'0')}-${iso[3].padStart(2,'0')}`;
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if(dmy){
+    let [, d, m, y] = dmy;
+    if(y.length === 2) y = (parseInt(y,10) > 50 ? '19' : '20') + y;
+    return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  const parsed = new Date(s);
+  return isNaN(parsed) ? null : parsed.toISOString().slice(0,10);
+}
+
+function buildImportPreview(){
+  const col = {};
+  IMPORT_FIELDS.forEach(f => { col[f.key] = parseInt(document.getElementById('importCol_'+f.key).value, 10); });
+  if(col.date === -1 || col.supplier === -1 || col.value === -1){
+    showMsg('importUploadMsg', 'Date, Supplier Name, and Rate/Amount are required — map all three before continuing.', false);
+    return;
+  }
+  const valueMode = document.getElementById('importValueMode').value;
+  const priceMode = document.getElementById('importPriceMode').value;
+  const defaultGst = parseFloat(document.getElementById('importDefaultGst').value) || 0;
+
+  const groups = new Map(); // "date::supplierLower" -> group
+  let skipped = 0;
+
+  importRows.forEach(row => {
+    const date = parseImportDate(colVal(row, col.date));
+    const supplierName = String(colVal(row, col.supplier)).trim();
+    if(!date || !supplierName){ skipped++; return; }
+
+    const qty = col.qty !== -1 ? (parseFloat(colVal(row, col.qty)) || 1) : 1;
+    const rawValue = parseFloat(colVal(row, col.value)) || 0;
+    const gstRate = col.gst !== -1 ? (parseFloat(colVal(row, col.gst)) || 0) : defaultGst;
+    const paid = col.paid !== -1 ? (parseFloat(colVal(row, col.paid)) || 0) : 0;
+    const itemName = col.item !== -1 ? (String(colVal(row, col.item)).trim() || 'Purchase') : 'Purchase';
+
+    const gross = valueMode === 'rate' ? qty * rawValue : rawValue;
+    const taxable = priceMode === 'incl' ? gross / (1 + gstRate/100) : gross;
+    const gstAmt = taxable * gstRate / 100;
+
+    const key = `${date}::${supplierName.toLowerCase()}`;
+    if(!groups.has(key)) groups.set(key, { date, supplierName, items: [], paid: 0 });
+    const g = groups.get(key);
+    g.items.push({ name: itemName, qty, rate: valueMode === 'rate' ? rawValue : (qty ? gross/qty : gross), gstRate, priceMode, taxable, gstAmt, total: taxable + gstAmt });
+    g.paid += paid;
+  });
+
+  importGroups = Array.from(groups.values()).sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
+  if(!importGroups.length){
+    showMsg('importUploadMsg', `No usable rows — ${skipped} skipped for a missing Date or Supplier.`, false);
+    return;
+  }
+
+  const newSupplierNames = new Set();
+  importGroups.forEach(g => {
+    const exists = suppliersCache.some(s => s.name.trim().toLowerCase() === g.supplierName.toLowerCase());
+    if(!exists) newSupplierNames.add(g.supplierName.toLowerCase());
+  });
+
+  document.getElementById('previewSummary').textContent =
+    `${importGroups.length} purchase(s) across ${new Set(importGroups.map(g=>g.supplierName.toLowerCase())).size} supplier(s) (${newSupplierNames.size} new) will be created.` +
+    (skipped ? ` ${skipped} row(s) skipped (missing Date or Supplier).` : '');
+  document.getElementById('previewTable').innerHTML = importGroups.map(g => {
+    const subtotal = g.items.reduce((s,i)=>s+i.taxable,0);
+    const gstTotal = g.items.reduce((s,i)=>s+i.gstAmt,0);
+    return `<tr><td>${esc(g.date)}</td><td>${esc(g.supplierName)}</td><td>${g.items.map(i=>esc(i.name)+' × '+i.qty).join(', ')}</td>
+      <td>₹${fmtMoney(subtotal)}</td><td>₹${fmtMoney(gstTotal)}</td><td>₹${fmtMoney(subtotal+gstTotal)}</td><td>${g.paid ? '₹'+fmtMoney(g.paid) : '—'}</td></tr>`;
+  }).join('');
+
+  document.getElementById('columnMapCard').classList.add('hidden');
+  document.getElementById('previewCard').classList.remove('hidden');
+}
+
+function cancelImportPreview(){
+  importGroups = [];
+  document.getElementById('previewCard').classList.add('hidden');
+  document.getElementById('columnMapCard').classList.remove('hidden');
+}
+
+async function findOrCreateSupplier(name){
+  const existing = suppliersCache.find(s => s.name.trim().toLowerCase() === name.toLowerCase());
+  if(existing) return existing.id;
+  const ref = await db.collection('users').doc(currentUser.uid).collection('suppliers').add({
+    name, gstin: '', phone: '', email: '', address: '', stateCode: '', state: ''
+  });
+  const created = { id: ref.id, name };
+  suppliersCache.push(created); // so a repeated name later in this same import reuses it instead of creating a duplicate
+  return ref.id;
+}
+
+async function runImport(){
+  showMsg('importApplyMsg', `Importing ${importGroups.length} purchase(s)…`, true);
+  let created = 0;
+  try{
+    for(const g of importGroups){
+      const supplierId = await findOrCreateSupplier(g.supplierName);
+      const subtotal = g.items.reduce((s,i)=>s+i.taxable,0);
+      const gstTotal = g.items.reduce((s,i)=>s+i.gstAmt,0);
+
+      // No linkedSkuMappingId on any item, ever, for an import — this is a
+      // backfill of OLD purchases, and stock reversal logic elsewhere
+      // (Delete Purchase, Invoice Deletion Requests) would otherwise treat
+      // deleting one of these as reason to decrement CURRENT stock, which
+      // would be wrong for a purchase that's already long since been used.
+      await db.collection('users').doc(currentUser.uid).collection('purchases').add({
+        supplierId, supplierName: g.supplierName, date: g.date,
+        items: g.items.map(i => ({ name: i.name, qty: i.qty, rate: i.rate, gstRate: i.gstRate, priceMode: i.priceMode, taxable: i.taxable, gstAmt: i.gstAmt, total: i.total })),
+        subtotal, gstTotal, grandTotal: subtotal + gstTotal,
+        recordedByBuyer: true, importedHistorical: true,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      if(g.paid > 0){
+        await db.collection('users').doc(currentUser.uid).collection('payments').add({
+          supplierId, supplierName: g.supplierName, date: g.date, amount: g.paid, mode: '', note: 'Imported historical payment',
+          importedHistorical: true,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+      created++;
+    }
+    showMsg('importApplyMsg', `Imported ${created} purchase(s). Check Purchase Entry's history and My Sellers' Off-Platform Sellers list — supplier dues update automatically from here.`, true);
+    document.getElementById('previewCard').classList.add('hidden');
+    document.getElementById('importFile').value = '';
+    importRows = []; importGroups = [];
+  }catch(err){
+    showMsg('importApplyMsg', `Stopped after ${created} of ${importGroups.length} — ${err.message}. Already-imported rows are saved; re-running will create duplicates for those, so remove them from your sheet before retrying the rest.`, false);
+  }
+}
+
+function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function showMsg(id, text, ok){
+  const el = document.getElementById(id);
+  if(!el) return;
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+</body>
+</html>
