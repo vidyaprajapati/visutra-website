@@ -30,7 +30,7 @@
 
   <div class="card">
     <h2>Record a Purchase</h2>
-    <p class="sub">For anything you bought from a supplier who isn't a linked VISUTRA seller (a local shop, a one-off supplier, anyone off-platform) — or even a linked seller, if you'd rather log it by hand than place an order through them. This writes to the same Suppliers/Purchases records your Buyer Dashboard's dues already read from.</p>
+    <p class="sub">For anything you bought from a supplier who isn't a linked VISUTRA seller (a local shop, a one-off supplier, anyone off-platform) — or even a linked seller, if you'd rather log it by hand than place an order through them. This writes to the same Suppliers/Purchases records your Buyer Dashboard's dues already read from. Pick a linked VISUTRA seller as the supplier and Item becomes a dropdown of their actual catalog (or type your own for anything off-platform). Each line has its own Excl./Incl. GST toggle above the rate — pick which way the price you were quoted was given, enter the GST rate, and Taxable/GST Amt/Total are worked out for you either way.</p>
     <div class="grid2">
       <div class="field"><label>Supplier</label><select id="pSupplier" onchange="onSupplierChange()"><option value="">Select supplier…</option></select></div>
       <div class="field"><label>Purchase date</label><input id="pDate" type="date"></div>
@@ -53,6 +53,8 @@
 
     <table class="line-items" style="margin-top:16px">
       <thead><tr><th>Item</th><th>Qty</th><th>Rate (₹)</th><th>GST %</th><th>Taxable</th><th>GST Amt</th><th>Total</th><th></th></tr></thead>
+      <!-- Rate column: each row has its own Excl./Incl. GST toggle right above the rate input — see renderLineItems() -->
+      
       <tbody id="lineItemsTable"></tbody>
     </table>
     <button class="btn small" style="margin-top:10px" onclick="addLineItem()">+ Add line item</button>
@@ -118,7 +120,7 @@ auth.onAuthStateChanged(async user => {
   const preselectSupplierId = new URLSearchParams(window.location.search).get('supplierId');
   if(preselectSupplierId && suppliersCache.some(s => s.id === preselectSupplierId)){
     document.getElementById('pSupplier').value = preselectSupplierId;
-    recalcTotals();
+    await onSupplierChange();
     document.getElementById('pSupplier').scrollIntoView({behavior: 'smooth', block: 'center'});
   }
 });
@@ -132,7 +134,23 @@ async function loadSuppliers(){
     suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}${s.sellerUid ? ' (VISUTRA seller)' : ''}</option>`).join('');
   if(prev && suppliersCache.some(s => s.id === prev)) sel.value = prev;
 }
-function onSupplierChange(){ recalcTotals(); }
+// Populated only when the selected supplier is a real linked VISUTRA seller
+// (carries sellerUid) — gives the Item column a real dropdown of their
+// actual catalog instead of free text, same buyer-visible query place-order.html
+// uses. Off-platform suppliers (no sellerUid) have no catalog to show, so
+// Item stays a plain text field for those, same as before.
+let selectedSupplierCatalog = [];
+async function onSupplierChange(){
+  const supplierId = document.getElementById('pSupplier').value;
+  const supplier = suppliersCache.find(s => s.id === supplierId);
+  selectedSupplierCatalog = [];
+  if(supplier && supplier.sellerUid){
+    const snap = await db.collection('users').doc(supplier.sellerUid).collection('products')
+      .where('active', '==', true).where('buyerVisibility', '==', true).get();
+    selectedSupplierCatalog = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  }
+  renderLineItems();
+}
 function showNewSupplierForm(){ document.getElementById('newSupplierCard').style.display = 'block'; }
 function cancelNewSupplier(){
   document.getElementById('newSupplierCard').style.display = 'none';
@@ -156,27 +174,71 @@ async function addNewSupplier(){
 }
 
 function addLineItem(){
-  lineItems.push({ name: '', qty: 1, rate: 0, gstRate: 0 });
+  lineItems.push({ name: '', qty: 1, rate: 0, gstRate: 0, priceMode: 'excl', productId: null });
   renderLineItems();
 }
 function removeLineItem(idx){
   lineItems.splice(idx, 1);
-  if(!lineItems.length) lineItems.push({ name: '', qty: 1, rate: 0, gstRate: 0 });
+  if(!lineItems.length) lineItems.push({ name: '', qty: 1, rate: 0, gstRate: 0, priceMode: 'excl', productId: null });
   renderLineItems();
 }
 function updateLineItem(idx, field, value){
   lineItems[idx][field] = (field === 'name') ? value : (parseFloat(value) || 0);
   renderLineItems();
 }
-function lineTaxable(li){ return (li.qty||0) * (li.rate||0); }
+function updateLineItemMode(idx, mode){
+  lineItems[idx].priceMode = mode;
+  renderLineItems();
+}
+// Picking a catalog product fills name/rate/GST% from it (rate is the
+// seller's own Product Master price, which — same convention as
+// place-order.html's "Price (incl. GST)" column — is stored EXCLUSIVE of
+// GST, so priceMode is set to 'excl' to match). "Other" clears productId
+// and falls back to the free-text name field for anything not in the
+// catalog. Editing rate/GST%/qty afterwards is still free — picking from
+// the list is just a fast, accurate starting point, not a lock.
+function pickCatalogItem(idx, value){
+  if(value === '' || value === '__custom__'){
+    lineItems[idx].productId = null;
+    if(value === '') lineItems[idx].name = '';
+    renderLineItems();
+    return;
+  }
+  const p = selectedSupplierCatalog.find(x => x.id === value);
+  if(!p) return;
+  Object.assign(lineItems[idx], { productId: p.id, name: p.name, rate: p.price || 0, gstRate: p.gstRate || 0, priceMode: 'excl' });
+  renderLineItems();
+}
+// Excl. GST (the original behaviour): rate IS the taxable value per unit.
+// Incl. GST: rate is the all-in per-unit price, so the taxable value is
+// backed out — taxable + taxable*(gstRate/100) must equal qty*rate.
+function lineTaxable(li){
+  const gross = (li.qty||0) * (li.rate||0);
+  return li.priceMode === 'incl' ? gross / (1 + (li.gstRate||0)/100) : gross;
+}
 function renderLineItems(){
   document.getElementById('lineItemsTable').innerHTML = lineItems.map((li, idx) => {
     const taxable = lineTaxable(li);
     const gstAmt = taxable * (li.gstRate||0) / 100;
+    const usingCatalogList = selectedSupplierCatalog.length > 0;
+    const itemCell = usingCatalogList
+      ? `<select onchange="pickCatalogItem(${idx}, this.value)" style="${li.productId ? '' : 'margin-bottom:6px'}">
+          <option value="">Select item…</option>
+          ${selectedSupplierCatalog.map(p => `<option value="${p.id}" ${li.productId===p.id?'selected':''}>${escAttr(p.name)}${p.sku ? ' ('+escAttr(p.sku)+')' : ''}</option>`).join('')}
+          <option value="__custom__" ${(!li.productId && li.name) ? 'selected' : ''}>Other — type name below…</option>
+        </select>
+        ${li.productId ? '' : `<input value="${escAttr(li.name)}" oninput="updateLineItem(${idx},'name',this.value)" placeholder="Item name">`}`
+      : `<input value="${escAttr(li.name)}" oninput="updateLineItem(${idx},'name',this.value)" placeholder="e.g. Packing tape">`;
     return `<tr>
-      <td><input value="${escAttr(li.name)}" oninput="updateLineItem(${idx},'name',this.value)" placeholder="e.g. Packing tape"></td>
+      <td>${itemCell}</td>
       <td><input type="number" min="0" step="1" value="${li.qty}" style="width:70px" oninput="updateLineItem(${idx},'qty',this.value)"></td>
-      <td><input type="number" min="0" step="0.01" value="${li.rate}" style="width:90px" oninput="updateLineItem(${idx},'rate',this.value)"></td>
+      <td>
+        <select onchange="updateLineItemMode(${idx}, this.value)" style="margin-bottom:6px;width:100%">
+          <option value="excl" ${li.priceMode!=='incl'?'selected':''}>Excl. GST</option>
+          <option value="incl" ${li.priceMode==='incl'?'selected':''}>Incl. GST</option>
+        </select>
+        <input type="number" min="0" step="0.01" value="${li.rate}" style="width:90px" oninput="updateLineItem(${idx},'rate',this.value)">
+      </td>
       <td><input type="number" min="0" step="0.01" value="${li.gstRate}" style="width:70px" oninput="updateLineItem(${idx},'gstRate',this.value)"></td>
       <td>₹${fmtMoney(taxable)}</td><td>₹${fmtMoney(gstAmt)}</td><td>₹${fmtMoney(taxable+gstAmt)}</td>
       <td><button class="btn small danger" onclick="removeLineItem(${idx})">×</button></td>
@@ -226,11 +288,14 @@ async function savePurchase(){
   const purchaseData = {
     supplierId, supplierName: supplier.name,
     date,
-    items: validItems.map(li => ({
-      name: li.name, qty: li.qty, rate: li.rate, gstRate: li.gstRate,
-      taxable: lineTaxable(li), gstAmt: lineTaxable(li) * (li.gstRate||0) / 100,
-      total: lineTaxable(li) * (1 + (li.gstRate||0)/100)
-    })),
+    items: validItems.map(li => {
+      const taxable = lineTaxable(li);
+      const gstAmt = taxable * (li.gstRate||0) / 100;
+      return {
+        name: li.name, qty: li.qty, rate: li.rate, gstRate: li.gstRate, priceMode: li.priceMode || 'excl',
+        taxable, gstAmt, total: taxable + gstAmt
+      };
+    }),
     subtotal: totals.subtotal, gstTotal: totals.gstTotal, grandTotal: totals.grand,
     recordedByBuyer: true, // distinguishes a manual entry from one auto-created by accepting a VISUTRA order
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
