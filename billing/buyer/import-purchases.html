@@ -34,6 +34,11 @@
     <p class="sub">Bring your old day-wise purchase records in from Excel/CSV — supplier dues, <a href="purchases-gstr.html">GSTR-1 Filing</a>, and <a href="purchase-entry.html">Purchase Entry</a>'s history will all reflect them, exactly as if you'd typed each one in by hand.</p>
     <p class="sub"><b>This does not change your current Stock numbers.</b> These are old purchases you've already used or resold since — adding their quantities to today's stock would double-count. If you also want the stock side of this period recorded, use <a href="stock.html">Stock</a>'s own Monthly Inventory Reconciliation upload for the same months separately, or adjust the current stock number there by hand once you know what's actually on the shelf.</p>
 
+    <div class="box" style="margin-bottom:16px">
+      <p class="sub" style="margin:0 0 8px">New to this? Download the blank template, fill it in, then upload it below — its headers are already exactly what this page expects, so every column maps itself automatically.</p>
+      <button class="btn" onclick="downloadImportTemplate()">⬇ Download Blank Template (.xlsx)</button>
+    </div>
+
     <div class="field" style="max-width:340px"><label>Supplier — applies to every row in this file</label>
       <select id="importSupplier"><option value="">Select supplier…</option></select>
     </div>
@@ -168,6 +173,18 @@ async function addNewSupplier(){
   document.getElementById('importSupplier').value = ref.id;
   cancelNewSupplier();
   showMsg('importUploadMsg', `Added ${name} — now select your file.`, true);
+}
+
+// Headers here are deliberately worded to match IMPORT_FIELD_GUESSES below
+// exactly, so a file built from this template auto-maps every column
+// without the person having to touch Step 1 at all.
+const IMPORT_TEMPLATE_HEADERS = ['Date of Purchase', 'Product Name', 'Qty', 'Purchase Price (Incl. GST)', 'GST %', 'Payment'];
+function downloadImportTemplate(){
+  const ws = XLSX.utils.aoa_to_sheet([IMPORT_TEMPLATE_HEADERS]);
+  ws['!cols'] = IMPORT_TEMPLATE_HEADERS.map(h => ({ wch: Math.max(h.length + 2, 12) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Purchases');
+  XLSX.writeFile(wb, 'VISUTRA-Purchase-Import-Template.xlsx');
 }
 
 function guessImportColumn(headers, candidates){
