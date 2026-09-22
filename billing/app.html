@@ -161,6 +161,21 @@
       </div>
 
       <div class="card">
+        <h2>Monthly Stock Report — Opening &amp; Closing</h2>
+        <p class="sub">Opening and closing stock for each product for the month you pick, reconstructed from every stock movement on record (purchases, sales, adjustments, reconciliation uploads) — not just the last 200 shown in Stock Movement History below.</p>
+        <div class="field" style="max-width:220px"><label>Month</label><input id="stockReportMonth" type="month" onchange="renderMonthlyStockReport()"></div>
+        <table style="margin-top:12px"><thead><tr><th>Product</th><th>Opening Stock</th><th>Stock In</th><th>Stock Out</th><th>Closing Stock</th></tr></thead>
+        <tbody id="monthlyStockReportTable"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Daily Stock Movement — Selected Month</h2>
+        <p class="sub">Every movement within the month picked above, in date order.</p>
+        <table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Note</th></tr></thead>
+        <tbody id="dailyStockMovementTable"></tbody></table>
+      </div>
+
+      <div class="card">
         <h2>Adjust Stock</h2>
         <p class="sub">For an opening balance, a stock count correction, damage, or anything else outside the normal purchase/sale flow. Use a negative number to reduce stock.</p>
         <div class="grid3">
