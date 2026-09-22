@@ -30,22 +30,22 @@
   </div>
 
   <div class="card">
-    <h2>Current Stock — From Your Purchases</h2>
-    <p class="sub">Only products you've actually bought from a linked seller are listed here — not your full product catalog. The stock number itself is your one running total for that product (it goes up whenever a seller accepts your order, or you record a purchase by hand), since a product doesn't have a separate "buyer" and "seller" stock count.</p>
-    <table><thead><tr><th>Product</th><th>Unit</th><th>Current Stock</th><th>Reorder Level</th></tr></thead>
+    <h2>Buyer Stock — Your SKU Master Products</h2>
+    <p class="sub">This is your OWN buyer-side stock — completely separate from the Seller/Billing side's Products &amp; Stock Management, so nothing here ever changes anything there (and vice versa). Every product listed below is one of your ACTIVE <a href="buyer-sku-master.html">Buyer SKU Master</a> mappings — add a mapping there first if a product you want to track isn't listed. Stock updates two ways: you edit it directly here any time, and it also increases automatically when a linked seller accepts an order that matches one of these mappings (matched by that exact seller + their product, never by name).</p>
+    <table><thead><tr><th>Product</th><th>Source</th><th>Unit</th><th>Current Stock</th><th>Reorder Level</th><th>Last Updated</th><th></th></tr></thead>
     <tbody id="stockTable"></tbody></table>
   </div>
 
   <div class="card">
-    <h2>Recent Stock-Ins from Seller Purchases</h2>
-    <p class="sub">Just the stock movements that came from an order a linked seller accepted — a subset of the full log in Billing → Stock Management, filtered to purchases from your sellers.</p>
+    <h2>Recent Stock Movements</h2>
+    <p class="sub">Every change to the stock numbers above — manual edits you make here, automatic stock-ins from accepted seller orders, and reconciliation uploads below. This is a buyer-only log, separate from the Seller/Billing side's own Stock Management movements.</p>
     <table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Note</th></tr></thead>
     <tbody id="movementsTable"></tbody></table>
   </div>
 
   <div class="card">
     <h2>Monthly Inventory Reconciliation</h2>
-    <p class="sub">If you resell what you buy from sellers on your own Meesho/Flipkart shop, upload the report(s) you download for the month here to keep this stock accurate. Everything is read in your browser only. Meesho and Flipkart reports are recognised automatically by their columns — delivered items reduce stock, and cancelled/RTO/returned items add stock back, since those physically come back to you. Other formats fall back to treating every row as a sale. The first time you upload, you'll map each SKU to one of your products once — after that, it's remembered automatically in future months.</p>
+    <p class="sub">If you resell what you buy from sellers on your own Meesho/Flipkart shop, upload the report(s) you download for the month here to keep this stock accurate. Everything is read in your browser only. Meesho and Flipkart reports are recognised automatically by their columns — delivered items reduce stock, and cancelled/RTO/returned items add stock back, since those physically come back to you. Other formats fall back to treating every row as a sale. Each row is matched to one of your Buyer SKU Master products above (not the Seller/Billing side's Products) — the first time you upload, you'll map each SKU to one of them once, remembered automatically for future months.</p>
     <div class="grid2">
       <div class="field"><label>Report files (.csv, .xlsx, .xls) — you can select more than one</label><input id="stockFiles" type="file" multiple accept=".csv,.xlsx,.xls"></div>
       <div class="field"><label>Period / label (e.g. "March 2026")</label><input id="stockPeriod" placeholder="March 2026"></div>
@@ -78,8 +78,15 @@
 <script src="../assets/user-menu.js"></script>
 <script>
 let currentUser = null;
-let productsCache = [];    // ALL of this account's own products — not the seller-purchase-filtered subset used for the display table above
-let skuMappingsCache = []; // marketplace SKU/text -> one of your products, remembered across uploads
+// This buyer's ACTIVE Buyer SKU Master mappings — THIS is the buyer-side
+// product list now (see BUYER-STOCK-REDESIGN.md), each with its own stock
+// and reorderLevel fields living right on the mapping doc. Deliberately
+// never reads users/{uid}/products (the separate Seller/Billing inventory).
+let mySkuMappingsCache = [];
+// rawKey (from an uploaded report) -> one of the mappings above, remembered
+// across uploads — buyer-only, separate from the Seller side's own
+// reconciliation mapping collection (skuMappings) so the two never collide.
+let reconciliationMapCache = [];
 let stockUploadSheets = [];
 let stockAggregation = [];
 
@@ -101,38 +108,86 @@ auth.onAuthStateChanged(async user => {
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
 
   await loadStock();
-  await loadProductsAndMappings();
+  await loadReconciliationMap();
 });
 
-async function loadProductsAndMappings(){
-  const [prodSnap, mapSnap] = await Promise.all([
-    db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get(),
-    db.collection('users').doc(currentUser.uid).collection('skuMappings').get()
+/* ---------------- Buyer Stock table (from Buyer SKU Master) ---------------- */
+async function loadStock(){
+  const [mapSnap, moveSnap] = await Promise.all([
+    db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').where('status', '==', 'ACTIVE').get(),
+    db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').orderBy('createdAt', 'desc').limit(50).get()
   ]);
-  productsCache = prodSnap.docs.map(d => ({id: d.id, ...d.data()}));
-  skuMappingsCache = mapSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  mySkuMappingsCache = mapSnap.docs.map(d => ({id: d.id, ...d.data()})).sort((a,b) => (a.productName||'').localeCompare(b.productName||''));
+  renderStockTable();
+
+  document.getElementById('movementsTable').innerHTML = moveSnap.docs.map(d => {
+    const m = d.data();
+    return `<tr><td>${esc(m.date||'')}</td><td>${esc(m.productName||'Unknown product')}</td><td>${m.qty>0?'+':''}${m.qty}</td><td>${esc(m.note||'')}</td></tr>`;
+  }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No stock movements yet.</td></tr>';
 }
-/* Bumps a product's stock by qty (can be negative) and logs the movement —
-   same shape/contract as Billing's own addStockMovement, kept local here
-   since this page doesn't share a script file with app.html. */
-async function addStockMovement(type, productId, qty, date, note){
-  const product = productsCache.find(p => p.id === productId);
-  if(!product || !qty) return;
-  await db.collection('users').doc(currentUser.uid).collection('products').doc(productId).update({
-    stock: firebase.firestore.FieldValue.increment(qty)
+function renderStockTable(){
+  document.getElementById('stockTable').innerHTML = mySkuMappingsCache.map(m => {
+    const updated = m.updatedAt?.toDate ? m.updatedAt.toDate().toISOString().slice(0,10) : '—';
+    return `<tr>
+      <td>${esc(m.productName)}</td>
+      <td>${esc(m.sellerName||'—')}</td>
+      <td>${esc(m.unit||'PCS')}</td>
+      <td><input type="number" id="stockQty_${m.id}" value="${m.stock||0}" style="width:90px"></td>
+      <td><input type="number" id="stockReorder_${m.id}" value="${m.reorderLevel||0}" style="width:90px"></td>
+      <td>${updated}</td>
+      <td><button class="btn small primary" onclick="saveStock('${m.id}')">Update</button></td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="7" style="color:var(--muted)">No products in Buyer SKU Master yet — <a href="buyer-sku-master.html">add one</a> to start tracking stock.</td></tr>`;
+}
+// Manual, absolute-value update — logs the delta as a movement so the
+// history above stays meaningful even for hand-entered corrections.
+async function saveStock(mappingId){
+  const mapping = mySkuMappingsCache.find(m => m.id === mappingId);
+  if(!mapping) return;
+  const newQty = parseFloat(document.getElementById('stockQty_'+mappingId).value) || 0;
+  const newReorder = parseFloat(document.getElementById('stockReorder_'+mappingId).value) || 0;
+  const delta = newQty - (mapping.stock || 0);
+
+  await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(mappingId).set({
+    stock: newQty, reorderLevel: newReorder, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  }, {merge: true});
+
+  if(delta !== 0){
+    await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
+      type: 'manual-adjust', mappingId, productName: mapping.productName, qty: delta,
+      date: new Date().toISOString().slice(0,10), note: 'Manual update',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }
+  await loadStock();
+}
+
+/* ---------------- Monthly Inventory Reconciliation (Meesho/Flipkart-aware) ----------------
+   Same detection/classification logic as the Seller side's Stock Management,
+   but operating entirely on THIS buyer's own buyerSkuMappings /
+   buyerReconciliationSkuMap / buyerStockMovements — never the Seller/Billing
+   side's products / skuMappings / stockMovements. */
+async function loadReconciliationMap(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerReconciliationSkuMap').get();
+  reconciliationMapCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+}
+/* Bumps a Buyer SKU Master mapping's stock by qty (can be negative) and
+   logs the movement — the buyer-only equivalent of Billing's own
+   addStockMovement, kept local here since this page doesn't share a script
+   file with app.html/billing-app.js. */
+async function addStockMovement(type, mappingId, qty, date, note){
+  const mapping = mySkuMappingsCache.find(m => m.id === mappingId);
+  if(!mapping || !qty) return;
+  await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(mappingId).update({
+    stock: firebase.firestore.FieldValue.increment(qty),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   });
-  await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
-    type, productId, productName: product.name, qty, date, note: note || '',
+  await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
+    type, mappingId, productName: mapping.productName, qty, date, note: note || '',
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
 }
 
-/* ---------------- Monthly Inventory Reconciliation (Meesho/Flipkart-aware) ----------------
-   Same detection/classification logic as Billing → Stock Management, just
-   operating on this account's OWN products/skuMappings/stockMovements —
-   for a buyer who resells what they've bought from a seller on their own
-   Meesho/Flipkart shop and needs their own inventory reconciled the same
-   way, independent of the seller's own stock. */
 const STOCK_PRODUCT_COL_GUESSES = ['sku','product name','item description','product title/description','description','product'];
 const STOCK_QTY_COL_GUESSES = ['quantity','qty','item quantity'];
 function guessStockColumn(headers, candidates){
@@ -265,9 +320,9 @@ function renderStockAggregationTable(){
   }
   wrap.classList.remove('hidden');
   document.getElementById('stockAggTable').innerHTML = stockAggregation.map((r, i) => {
-    const known = skuMappingsCache.find(m => m.rawKey === r.rawKey);
+    const known = reconciliationMapCache.find(m => m.rawKey === r.rawKey);
     const options = ['<option value="">Skip — not a stock item</option>']
-      .concat(productsCache.map(p => `<option value="${p.id}" ${known && known.productId === p.id ? 'selected' : ''}>${esc(p.name)}</option>`));
+      .concat(mySkuMappingsCache.map(m => `<option value="${m.id}" ${known && known.mappingId === m.id ? 'selected' : ''}>${esc(m.productName)}</option>`));
     const netStyle = r.netChange < 0 ? 'color:var(--paprika-dark)' : (r.netChange > 0 ? 'color:#0E7C6B' : '');
     return `<tr${known ? '' : ' style="background:#FFF7ED"'}>
       <td>${esc(r.displayKey)}${known ? '' : ' <span class="badge" title="No saved mapping yet — pick a product on the right">Unmapped</span>'}</td>
@@ -286,30 +341,30 @@ async function applyStockUpload(){
   for(let i = 0; i < stockAggregation.length; i++){
     const row = stockAggregation[i];
     const sel = document.getElementById('stockAggMap'+i);
-    const productId = sel ? sel.value : '';
-    if(!productId) continue;
-    const product = productsCache.find(p => p.id === productId);
-    if(!product) continue;
+    const mappingId = sel ? sel.value : '';
+    if(!mappingId) continue;
+    const mapping = mySkuMappingsCache.find(m => m.id === mappingId);
+    if(!mapping) continue;
 
-    const existingMap = skuMappingsCache.find(m => m.rawKey === row.rawKey);
+    const existingMap = reconciliationMapCache.find(m => m.rawKey === row.rawKey);
     if(existingMap){
-      if(existingMap.productId !== productId){
-        await db.collection('users').doc(currentUser.uid).collection('skuMappings').doc(existingMap.id)
-          .set({ rawKey: row.rawKey, productId, productName: product.name });
+      if(existingMap.mappingId !== mappingId){
+        await db.collection('users').doc(currentUser.uid).collection('buyerReconciliationSkuMap').doc(existingMap.id)
+          .set({ rawKey: row.rawKey, mappingId, productName: mapping.productName });
       }
     } else {
-      await db.collection('users').doc(currentUser.uid).collection('skuMappings').add({
-        rawKey: row.rawKey, productId, productName: product.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      await db.collection('users').doc(currentUser.uid).collection('buyerReconciliationSkuMap').add({
+        rawKey: row.rawKey, mappingId, productName: mapping.productName, createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
     }
 
-    if(row.soldQty) await addStockMovement('sale-out', productId, -row.soldQty, dateVal, `${period} — ${row.displayKey} (sold)`);
-    if(row.returnedQty) await addStockMovement('return-in', productId, row.returnedQty, dateVal, `${period} — ${row.displayKey} (cancelled/RTO/returned)`);
+    if(row.soldQty) await addStockMovement('sale-out', mappingId, -row.soldQty, dateVal, `${period} — ${row.displayKey} (sold)`);
+    if(row.returnedQty) await addStockMovement('return-in', mappingId, row.returnedQty, dateVal, `${period} — ${row.displayKey} (cancelled/RTO/returned)`);
     applied++;
   }
 
-  await loadProductsAndMappings();
   await loadStock();
+  await loadReconciliationMap();
 
   document.getElementById('stockColumnMapWrap').classList.add('hidden');
   document.getElementById('stockAggWrap').classList.add('hidden');
@@ -322,42 +377,6 @@ function showStockMsg(text, ok){
   const el = document.getElementById('stockUploadMsg');
   el.textContent = text;
   el.className = 'msg ' + (ok ? 'ok' : 'error');
-}
-
-async function loadStock(){
-  const [prodSnap, moveSnap, purchaseProductsSnap] = await Promise.all([
-    db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get(),
-    db.collection('users').doc(currentUser.uid).collection('stockMovements').orderBy('createdAt', 'desc').limit(200).get(),
-    db.collection('users').doc(currentUser.uid).collection('purchaseProducts').get()
-  ]);
-  const products = prodSnap.docs.map(d => ({id: d.id, ...d.data()}));
-  const productById = {};
-  products.forEach(p => { productById[p.id] = p; });
-
-  // Only products actually linked to a Purchase Product that was auto-created
-  // from a seller order (i.e. it carries a sellerUid) belong on this page —
-  // this is what excludes regular raw-material products the account also
-  // stocks purely for its own Billing/Selling side. Filtered client-side
-  // (rather than a Firestore != query) to avoid an extra required index.
-  const buyerProductIds = new Set(
-    purchaseProductsSnap.docs.map(d => d.data()).filter(pp => pp.sellerUid).map(pp => pp.linkedProductId).filter(Boolean)
-  );
-  const buyerProducts = products.filter(p => buyerProductIds.has(p.id));
-
-  document.getElementById('stockTable').innerHTML = buyerProducts.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.unit||'PCS')}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td></tr>
-  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No products purchased from a seller yet.</td></tr>';
-
-  // "From Seller Purchases" is identified by the note this app writes when
-  // an accepted order is turned into a stock-in — see ensureBuyerPurchaseForOrder
-  // in my-orders.html, the only place that writes this exact note prefix.
-  const sellerMovements = moveSnap.docs.map(d => ({id: d.id, ...d.data()}))
-    .filter(m => m.type === 'purchase-in' && (m.note || '').startsWith('Purchase from '))
-    .slice(0, 30);
-
-  document.getElementById('movementsTable').innerHTML = sellerMovements.map(m => `
-    <tr><td>${esc(m.date)}</td><td>${esc((productById[m.productId]||{}).name || 'Unknown product')}</td><td>${m.qty}</td><td>${esc(m.note)}</td></tr>
-  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No stock-ins from seller purchases yet — these appear once a linked seller accepts an order of yours.</td></tr>';
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

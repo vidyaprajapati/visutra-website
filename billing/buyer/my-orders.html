@@ -25,7 +25,7 @@
 
   <div class="card">
     <h2>My Orders</h2>
-    <p class="sub">Updates live — no need to refresh when a seller accepts or rejects. Once a seller accepts, a matching entry is created automatically in your own <a href="../app.html?view=purchases">Purchase Entry</a> (a Supplier record for that seller and a Purchase Product per item are created the first time, if they don't already exist).</p>
+    <p class="sub">Updates live — no need to refresh when a seller accepts or rejects. Once a seller accepts, a matching entry is created automatically in your own <a href="../app.html?view=purchases">Purchase Entry</a> (a Supplier record for that seller and a Purchase Product per item are created the first time, if they don't already exist). If an item has an ACTIVE mapping in <a href="buyer-sku-master.html">Buyer SKU Master</a> for that seller, its stock there updates too — items with no mapping yet aren't touched, see <a href="stock.html">Stock</a>.</p>
     <div class="field" style="max-width:240px"><label>Filter</label><select id="fStatus" onchange="renderOrders()">
       <option value="">All</option><option value="PENDING">Pending</option><option value="PENDING_BUYER_CONFIRMATION">Awaiting My Confirmation</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option>
     </select></div>
@@ -45,7 +45,11 @@
 <script>
 let currentUser = null;
 let ordersCache = [];
-let myProductsCache = []; // this buyer's OWN sellable Products (users/{uid}/products) — used to auto-link stock, same name-matching rule as the Purchase Products page in Billing
+// Buyer's own Buyer SKU Master mappings — each ACTIVE one IS a buyer-side
+// product with its own stock. Used to auto-link stock on order acceptance;
+// this NEVER reads users/{uid}/products (the separate seller/Billing
+// inventory) — see BUYER-STOCK-REDESIGN.md for why the two are kept apart.
+let skuMappingsCache = [];
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -61,8 +65,8 @@ auth.onAuthStateChanged(async user => {
   mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
   renderBuyerSidebar('my-orders', '../');
 
-  const prodSnap = await db.collection('users').doc(currentUser.uid).collection('products').get();
-  myProductsCache = prodSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  const mapSnap = await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').where('status', '==', 'ACTIVE').get();
+  skuMappingsCache = mapSnap.docs.map(d => ({id: d.id, ...d.data()}));
 
   // Real-time: as soon as a linked seller accepts/rejects, this page updates
   // itself and (for an acceptance) creates the matching Buyer Purchase record
@@ -135,25 +139,32 @@ function renderOrders(){
    they're needed (matched by sellerUid / sellerProductId so repeats reuse the
    same records), then one purchase entry is written using the EXACT invoice
    values the seller's acceptance produced — never re-derived or estimated.
-   Since this writes the purchase doc directly (there's no form to click
-   "Save Purchase" on), it also has to do the two things that button's handler
-   does for a manual entry: auto-link each Purchase Product to a matching
-   sellable Product by name, and post the stock-in movement — otherwise an
-   order accepted from a seller would silently never move Stock Management,
-   unlike a purchase entered by hand. */
+
+   Stock is NOT part of that shared Purchase Product/Products world — see
+   BUYER-STOCK-REDESIGN.md. Buyer-side stock lives entirely on Buyer SKU
+   Master mappings (users/{uid}/buyerSkuMappings), which are a separate,
+   buyer-only concept from the seller/Billing side's own sellable Products.
+   So for each item: find an ACTIVE mapping for this exact seller + their
+   product (sellerId + productId — not name matching), and if one exists,
+   bump ITS stock field and log a buyerStockMovements entry. Items with no
+   mapping yet are left alone (flagged via unmappedNames) — the purchase
+   itself is still recorded either way. */
 async function ensureBuyerPurchaseForOrder(order){
   const supplierId = await ensureSupplierForSeller(order.sellerUid, order.sellerName);
   const items = [];
-  const stockIns = []; // {linkedProductId, qty} — applied after the purchase doc is saved
+  const stockIns = []; // {mappingId, productName, qty} — applied to buyerSkuMappings after the purchase doc is saved
+  const unmappedNames = [];
   for(const item of order.items){
-    const { purchaseProductId, linkedProductId } = await ensurePurchaseProductForSellerItem(order.sellerUid, item);
+    const purchaseProductId = await ensurePurchaseProduct(order.sellerUid, item);
+    const mapping = findSkuMapping(order.sellerUid, item.productId);
     items.push({
       productId: purchaseProductId, name: item.productName, unit: item.unit || 'PCS', hsn: item.hsn || '',
       qty: item.qty, rate: item.rate || 0, gstRate: item.gstRate || 0,
       taxable: item.taxable || 0, gstAmt: item.gstAmt || 0, total: item.total || 0,
-      priceMode: 'excl', linkedProductId: linkedProductId || null
+      priceMode: 'excl', linkedSkuMappingId: mapping ? mapping.id : null
     });
-    if(linkedProductId) stockIns.push({ linkedProductId, qty: item.qty });
+    if(mapping) stockIns.push({ mappingId: mapping.id, productName: mapping.productName || item.productName, qty: item.qty });
+    else unmappedNames.push(item.productName);
   }
   const summary = order.invoiceSummary || {};
   const purchaseData = {
@@ -170,15 +181,17 @@ async function ensureBuyerPurchaseForOrder(order){
   const purRef = await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
 
   for(const s of stockIns){
-    await db.collection('users').doc(currentUser.uid).collection('products').doc(s.linkedProductId).update({
-      stock: firebase.firestore.FieldValue.increment(s.qty)
+    await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(s.mappingId).update({
+      stock: firebase.firestore.FieldValue.increment(s.qty),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
-      type: 'purchase-in', productId: s.linkedProductId, qty: s.qty, date: purchaseData.date,
+    await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
+      type: 'purchase-in', mappingId: s.mappingId, productName: s.productName, qty: s.qty, date: purchaseData.date,
       note: `Purchase from ${order.sellerName} (order ${order.orderNumber || ''})`,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
   }
+  if(unmappedNames.length) console.warn(`Stock not tracked for order ${order.orderNumber || order.id} — no Buyer SKU Master mapping yet for: ${unmappedNames.join(', ')}`);
 
   // Narrow, rule-guarded update: a buyer may only set buyerPurchaseId once,
   // on an already-ACCEPTED order, and only that one field (+ timestamp) — see
@@ -199,28 +212,24 @@ async function ensureSupplierForSeller(sellerUid, sellerName){
   });
   return ref.id;
 }
-/* Auto-links by exact name match against this buyer's own sellable Products
-   (case/whitespace-insensitive) — the same rule savePurchaseProduct() in the
-   Billing app uses, kept in sync here since this codepath writes the
-   Purchase Product record directly instead of going through that form. */
-function findMyProductByName(name){
-  const norm = (name || '').trim().toLowerCase();
-  if(!norm) return null;
-  return myProductsCache.find(p => (p.name || '').trim().toLowerCase() === norm) || null;
+// Finds this buyer's ACTIVE Buyer SKU Master mapping for an exact seller +
+// their product — the sole source of truth for which items track stock now,
+// replacing the old "match by product name against my own Products" rule.
+function findSkuMapping(sellerUid, sellerProductId){
+  return skuMappingsCache.find(m => m.sellerId === sellerUid && m.productId === sellerProductId) || null;
 }
-async function ensurePurchaseProductForSellerItem(sellerUid, item){
+// Purchase Product record for GSTR/accounting purposes only — carries no
+// link into users/{uid}/products anymore; stock is resolved separately
+// above via findSkuMapping().
+async function ensurePurchaseProduct(sellerUid, item){
   const snap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts')
     .where('sellerUid', '==', sellerUid).where('sellerProductId', '==', item.productId).limit(1).get();
-  if(!snap.empty){
-    const doc = snap.docs[0];
-    return { purchaseProductId: doc.id, linkedProductId: doc.data().linkedProductId || null };
-  }
-  const match = findMyProductByName(item.productName);
+  if(!snap.empty) return snap.docs[0].id;
   const ref = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').add({
-    name: item.productName, hsn: item.hsn || '', unit: item.unit || 'PCS', linkedProductId: match ? match.id : null,
+    name: item.productName, hsn: item.hsn || '', unit: item.unit || 'PCS',
     sellerUid, sellerProductId: item.productId, autoCreatedFromOrder: true
   });
-  return { purchaseProductId: ref.id, linkedProductId: match ? match.id : null };
+  return ref.id;
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

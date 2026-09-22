@@ -342,12 +342,28 @@ async function deletePurchase(id){
   try{
     if(purchase){
       for(const li of (purchase.items || [])){
+        // Legacy field — only present on purchases created before the
+        // stock-tracking redesign, which pointed at the shared seller
+        // Products collection. Left as-is purely so old data still
+        // reverses correctly; nothing new ever sets this field anymore.
         if(li.linkedProductId){
           await db.collection('users').doc(currentUser.uid).collection('products').doc(li.linkedProductId).update({
             stock: firebase.firestore.FieldValue.increment(-li.qty)
           }).catch(err => console.error(`Stock reversal failed for ${li.linkedProductId}:`, err));
           await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
             type: 'purchase-in', productId: li.linkedProductId, qty: -li.qty, date: new Date().toISOString().slice(0,10),
+            note: `Reversed: deleted purchase dated ${purchase.date}`,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+        // Current field — reverses the buyer-only Buyer SKU Master stock.
+        if(li.linkedSkuMappingId){
+          await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(li.linkedSkuMappingId).update({
+            stock: firebase.firestore.FieldValue.increment(-li.qty),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          }).catch(err => console.error(`Stock reversal failed for mapping ${li.linkedSkuMappingId}:`, err));
+          await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
+            type: 'purchase-in', mappingId: li.linkedSkuMappingId, productName: li.name, qty: -li.qty, date: new Date().toISOString().slice(0,10),
             note: `Reversed: deleted purchase dated ${purchase.date}`,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
           });

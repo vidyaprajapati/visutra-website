@@ -135,17 +135,17 @@ async function respondToOrderConfirm(orderId, approve){
         status: 'ACCEPTED', acceptedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       order.acceptedAt = { toDate: () => new Date() }; // local stand-in so the purchase date below is "now", matching what re-reading the doc after commit would give
-      const { unlinkedNames } = await ensureBuyerPurchaseForOrder(order);
+      const { unmappedNames } = await ensureBuyerPurchaseForOrder(order);
       await loadOrdersToConfirm();
       await loadDashboard();
-      if(unlinkedNames.length){
+      if(unmappedNames.length){
         // The purchase itself is recorded either way — this is specifically
-        // about why stock DIDN'T move for some items: each one needs a
-        // product in your own Products list with the exact same name (or an
-        // explicit mapping in Buyer SKU Master) before stock can attach to
-        // it. Without this, the "stock didn't update" would otherwise look
-        // like a silent bug rather than a one-time setup step.
-        alert(`Approved. Stock didn't update for: ${unlinkedNames.join(', ')} — add a matching product with that exact name (or map it in Buyer SKU Master) so stock updates next time.`);
+        // about why stock DIDN'T move for some items: each one needs an
+        // ACTIVE mapping in Buyer SKU Master for this seller's product
+        // before stock can attach to it. Without this, "stock didn't
+        // update" would otherwise look like a silent bug rather than a
+        // one-time setup step.
+        alert(`Approved. Stock didn't track for: ${unmappedNames.join(', ')} — add a mapping for these in Buyer SKU Master so stock tracks next time.`);
       }
     }catch(err){
       alert(`Could not approve: ${err.message}`);
@@ -168,22 +168,29 @@ async function respondToOrderConfirm(orderId, approve){
    Same logic as the sweep that runs there for any ACCEPTED order missing a
    buyerPurchaseId — duplicated here (not shared, since this is a separate
    standalone page) so approving completes fully in one step instead of
-   telling the person to go open another page first. */
+   telling the person to go open another page first.
+
+   Stock is NOT part of Purchase Product/Products anymore — see
+   BUYER-STOCK-REDESIGN.md. It lives entirely on this buyer's Buyer SKU
+   Master mappings (users/{uid}/buyerSkuMappings), matched by exact
+   seller + their product id, never by product name and never touching
+   users/{uid}/products (the separate seller/Billing inventory). */
 async function ensureBuyerPurchaseForOrder(order){
   const supplierId = await ensureSupplierForSeller(order.sellerUid, order.sellerName);
   const items = [];
-  const stockIns = [];
-  const unlinkedNames = []; // items with no matching product on your side — stock can't attach to anything for these
+  const stockIns = []; // {mappingId, productName, qty} — applied to buyerSkuMappings
+  const unmappedNames = []; // items with no ACTIVE Buyer SKU Master mapping yet — stock can't attach for these
   for(const item of order.items){
-    const { purchaseProductId, linkedProductId } = await ensurePurchaseProductForSellerItem(order.sellerUid, item);
+    const purchaseProductId = await ensurePurchaseProduct(order.sellerUid, item);
+    const mapping = await findSkuMapping(order.sellerUid, item.productId);
     items.push({
       productId: purchaseProductId, name: item.productName, unit: item.unit || 'PCS', hsn: item.hsn || '',
       qty: item.qty, rate: item.rate || 0, gstRate: item.gstRate || 0,
       taxable: item.taxable || 0, gstAmt: item.gstAmt || 0, total: item.total || 0,
-      priceMode: 'excl', linkedProductId: linkedProductId || null
+      priceMode: 'excl', linkedSkuMappingId: mapping ? mapping.id : null
     });
-    if(linkedProductId) stockIns.push({ linkedProductId, qty: item.qty });
-    else unlinkedNames.push(item.productName);
+    if(mapping) stockIns.push({ mappingId: mapping.id, productName: mapping.productName || item.productName, qty: item.qty });
+    else unmappedNames.push(item.productName);
   }
   const summary = order.invoiceSummary || {};
   const purchaseData = {
@@ -199,11 +206,12 @@ async function ensureBuyerPurchaseForOrder(order){
   };
   const purRef = await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
   for(const s of stockIns){
-    await db.collection('users').doc(currentUser.uid).collection('products').doc(s.linkedProductId).update({
-      stock: firebase.firestore.FieldValue.increment(s.qty)
+    await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(s.mappingId).update({
+      stock: firebase.firestore.FieldValue.increment(s.qty),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
-      type: 'purchase-in', productId: s.linkedProductId, qty: s.qty, date: purchaseData.date,
+    await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
+      type: 'purchase-in', mappingId: s.mappingId, productName: s.productName, qty: s.qty, date: purchaseData.date,
       note: `Purchase from ${order.sellerName} (order ${order.orderNumber || ''})`,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
@@ -212,7 +220,7 @@ async function ensureBuyerPurchaseForOrder(order){
     buyerPurchaseId: purRef.id,
     buyerPurchaseCreatedAt: firebase.firestore.FieldValue.serverTimestamp()
   });
-  return { unlinkedNames };
+  return { unmappedNames };
 }
 async function ensureSupplierForSeller(sellerUid, sellerName){
   const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers')
@@ -224,29 +232,25 @@ async function ensureSupplierForSeller(sellerUid, sellerName){
   });
   return ref.id;
 }
-let myProductsCache = null; // lazy-loaded once, only if an approval actually needs it
-async function findMyProductByName(name){
-  if(!myProductsCache){
-    const snap = await db.collection('users').doc(currentUser.uid).collection('products').get();
-    myProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+let skuMappingsCache = null; // lazy-loaded once, only if an approval actually needs it
+async function findSkuMapping(sellerUid, sellerProductId){
+  if(!skuMappingsCache){
+    const snap = await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').where('status', '==', 'ACTIVE').get();
+    skuMappingsCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
   }
-  const norm = (name || '').trim().toLowerCase();
-  if(!norm) return null;
-  return myProductsCache.find(p => (p.name || '').trim().toLowerCase() === norm) || null;
+  return skuMappingsCache.find(m => m.sellerId === sellerUid && m.productId === sellerProductId) || null;
 }
-async function ensurePurchaseProductForSellerItem(sellerUid, item){
+// Purchase Product record for GSTR/accounting purposes only — no link into
+// users/{uid}/products; stock is resolved separately above via findSkuMapping().
+async function ensurePurchaseProduct(sellerUid, item){
   const snap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts')
     .where('sellerUid', '==', sellerUid).where('sellerProductId', '==', item.productId).limit(1).get();
-  if(!snap.empty){
-    const doc = snap.docs[0];
-    return { purchaseProductId: doc.id, linkedProductId: doc.data().linkedProductId || null };
-  }
-  const match = await findMyProductByName(item.productName);
+  if(!snap.empty) return snap.docs[0].id;
   const ref = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').add({
-    name: item.productName, hsn: item.hsn || '', unit: item.unit || 'PCS', linkedProductId: match ? match.id : null,
+    name: item.productName, hsn: item.hsn || '', unit: item.unit || 'PCS',
     sellerUid, sellerProductId: item.productId, autoCreatedFromOrder: true
   });
-  return { purchaseProductId: ref.id, linkedProductId: match ? match.id : null };
+  return ref.id;
 }
 
 /* ---------------- Invoice Deletion Requests ----------------
@@ -296,12 +300,28 @@ async function respondToDeleteRequest(requestId, accept){
             return;
           }
           for(const li of (purchase.items || [])){
+            // Legacy field — only present on purchases created before the
+            // stock-tracking redesign, which pointed at the shared seller
+            // Products collection. Left as-is purely so old data still
+            // reverses correctly; nothing new ever sets this field anymore.
             if(li.linkedProductId){
               await db.collection('users').doc(currentUser.uid).collection('products').doc(li.linkedProductId).update({
                 stock: firebase.firestore.FieldValue.increment(-li.qty)
               }).catch(err => console.error(`Stock reversal failed for ${li.linkedProductId}:`, err));
               await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
                 type: 'purchase-in', productId: li.linkedProductId, qty: -li.qty, date: new Date().toISOString().slice(0,10),
+                note: `Reversed: seller deleted invoice ${req.invoiceNo||''} (order ${req.orderNumber||''})`,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+            }
+            // Current field — reverses the buyer-only Buyer SKU Master stock.
+            if(li.linkedSkuMappingId){
+              await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(li.linkedSkuMappingId).update({
+                stock: firebase.firestore.FieldValue.increment(-li.qty),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+              }).catch(err => console.error(`Stock reversal failed for mapping ${li.linkedSkuMappingId}:`, err));
+              await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
+                type: 'purchase-in', mappingId: li.linkedSkuMappingId, productName: li.name, qty: -li.qty, date: new Date().toISOString().slice(0,10),
                 note: `Reversed: seller deleted invoice ${req.invoiceNo||''} (order ${req.orderNumber||''})`,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
               });
