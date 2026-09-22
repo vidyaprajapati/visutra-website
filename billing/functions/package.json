@@ -1,1 +1,13 @@
-
+{
+  "name": "visutra-functions",
+  "description": "VISUTRA Cloud Functions — server-side buyer stock update on order acceptance",
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^12.1.0",
+    "firebase-functions": "^5.0.0"
+  },
+  "private": true
+}
