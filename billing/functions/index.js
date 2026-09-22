@@ -5,22 +5,30 @@
  * creates a Purchase Entry from an accepted order and posts the stock-in)
  * previously only ran client-side, and only when the buyer happened to open
  * My Orders (or, for the off-platform confirm flow, the Dashboard). If the
- * buyer never opened that page, stock never moved — Dashboard/Stock just
- * display whatever's in Firestore, they don't trigger the update.
+ * buyer never opened that page, stock never moved.
  *
- * This function watches marketplaceOrders for the PENDING -> ACCEPTED
- * transition (a seller accepting a normal Place Order) and does the exact
- * same work — Supplier, Purchase Product, Purchase, stock increment,
- * stockMovement, buyerPurchaseId — the moment it happens, with the Admin SDK
- * (which bypasses Firestore security rules), so it no longer depends on any
- * client page being open at all.
+ * IMPORTANT — stock model (see BUYER-STOCK-REDESIGN.md): buyer-side stock is
+ * its OWN number, tracked on each ACTIVE Buyer SKU Master mapping
+ * (users/{buyerUid}/buyerSkuMappings/{id}.stock) — never on the seller/
+ * Billing side's own sellable Products (users/{uid}/products). This function
+ * never reads or writes that collection. A mapping is matched by the exact
+ * seller + their product id (order.sellerUid + item.productId) — never by
+ * product name. Items with no ACTIVE mapping for that seller are recorded in
+ * the Purchase Entry (for GSTR/accounting) but their stock is left untouched;
+ * add the mapping in Buyer SKU Master and it will track from the next order.
+ *
+ * This function watches marketplaceOrders for the transition to ACCEPTED (a
+ * seller accepting a normal Place Order) and does the Supplier / Purchase
+ * Product / Purchase / mapping-stock-increment / buyerStockMovement /
+ * buyerPurchaseId work the moment it happens, with the Admin SDK (which
+ * bypasses Firestore security rules), so it no longer depends on any client
+ * page being open at all.
  *
  * NOTE: the PENDING_BUYER_CONFIRMATION -> ACCEPTED path (buyer approving an
  * off-platform sale from the Dashboard) is deliberately left as-is — that
  * transition is written by the buyer's own client in dashboard.html and
  * already calls ensureBuyerPurchaseForOrder() synchronously in the same
- * click, so it isn't affected by this bug. This function's guard
- * (`before.status !== 'ACCEPTED' && after.status === 'ACCEPTED'`) will still
+ * click, so it isn't affected by this bug. This function's guard will still
  * fire for that path too since Cloud Functions can't tell who triggered a
  * write — see the buyerPurchaseId check below for why that's harmless
  * (whichever side gets there first — Dashboard's client write or this
@@ -62,20 +70,26 @@ async function ensureBuyerPurchaseForOrder(order) {
 
   const supplierId = await ensureSupplierForSeller(usersRef, order.sellerUid, order.sellerName);
 
+  // Fetched once per order, not per item — cheap, and mappings rarely change
+  // mid-order.
+  const mapSnap = await usersRef.collection('buyerSkuMappings').where('status', '==', 'ACTIVE').get();
+  const skuMappings = mapSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
   const items = [];
-  const stockIns = [];
-  const unlinkedNames = [];
+  const stockIns = []; // {mappingId, productName, qty} — applied to buyerSkuMappings, never to products
+  const unmappedNames = [];
 
   for (const item of order.items) {
-    const linked = await ensurePurchaseProductForSellerItem(usersRef, order.sellerUid, item);
+    const purchaseProductId = await ensurePurchaseProduct(usersRef, order.sellerUid, item);
+    const mapping = findSkuMapping(skuMappings, order.sellerUid, item.productId);
     items.push({
-      productId: linked.purchaseProductId, name: item.productName, unit: item.unit || 'PCS', hsn: item.hsn || '',
+      productId: purchaseProductId, name: item.productName, unit: item.unit || 'PCS', hsn: item.hsn || '',
       qty: item.qty, rate: item.rate || 0, gstRate: item.gstRate || 0,
       taxable: item.taxable || 0, gstAmt: item.gstAmt || 0, total: item.total || 0,
-      priceMode: 'excl', linkedProductId: linked.linkedProductId || null
+      priceMode: 'excl', linkedSkuMappingId: mapping ? mapping.id : null
     });
-    if (linked.linkedProductId) stockIns.push({ linkedProductId: linked.linkedProductId, qty: item.qty });
-    else unlinkedNames.push(item.productName);
+    if (mapping) stockIns.push({ mappingId: mapping.id, productName: mapping.productName || item.productName, qty: item.qty });
+    else unmappedNames.push(item.productName);
   }
 
   const summary = order.invoiceSummary || {};
@@ -95,11 +109,12 @@ async function ensureBuyerPurchaseForOrder(order) {
   const purRef = await usersRef.collection('purchases').add(purchaseData);
 
   for (const s of stockIns) {
-    await usersRef.collection('products').doc(s.linkedProductId).update({
-      stock: FieldValue.increment(s.qty)
+    await usersRef.collection('buyerSkuMappings').doc(s.mappingId).update({
+      stock: FieldValue.increment(s.qty),
+      updatedAt: FieldValue.serverTimestamp()
     });
-    await usersRef.collection('stockMovements').add({
-      type: 'purchase-in', productId: s.linkedProductId, qty: s.qty, date: purchaseData.date,
+    await usersRef.collection('buyerStockMovements').add({
+      type: 'purchase-in', mappingId: s.mappingId, productName: s.productName, qty: s.qty, date: purchaseData.date,
       note: `Purchase from ${order.sellerName} (order ${order.orderNumber || ''})`,
       createdAt: FieldValue.serverTimestamp()
     });
@@ -113,7 +128,7 @@ async function ensureBuyerPurchaseForOrder(order) {
     buyerPurchaseId: purRef.id,
     buyerPurchaseCreatedAt: FieldValue.serverTimestamp()
   };
-  if (unlinkedNames.length) updatePayload.unlinkedStockItems = unlinkedNames; // buyer UI can read this to show the "didn't match a product" warning
+  if (unmappedNames.length) updatePayload.unmappedStockItems = unmappedNames; // buyer UI can read this to show the "not tracked yet" warning
   await db.collection('marketplaceOrders').doc(order.id).update(updatePayload);
 }
 
@@ -127,27 +142,22 @@ async function ensureSupplierForSeller(usersRef, sellerUid, sellerName) {
   return ref.id;
 }
 
-function findMyProductByName(myProducts, name) {
-  const norm = (name || '').trim().toLowerCase();
-  if (!norm) return null;
-  return myProducts.find((p) => (p.name || '').trim().toLowerCase() === norm) || null;
+// Finds this buyer's ACTIVE Buyer SKU Master mapping for an exact seller +
+// their product — the sole source of truth for which items track stock.
+function findSkuMapping(skuMappings, sellerUid, sellerProductId) {
+  return skuMappings.find((m) => m.sellerId === sellerUid && m.productId === sellerProductId) || null;
 }
 
-async function ensurePurchaseProductForSellerItem(usersRef, sellerUid, item) {
+// Purchase Product record for GSTR/accounting purposes only — carries no
+// link into users/{uid}/products; stock is resolved separately via
+// findSkuMapping() above.
+async function ensurePurchaseProduct(usersRef, sellerUid, item) {
   const existing = await usersRef.collection('purchaseProducts')
     .where('sellerUid', '==', sellerUid).where('sellerProductId', '==', item.productId).limit(1).get();
-  if (!existing.empty) {
-    const doc = existing.docs[0];
-    return { purchaseProductId: doc.id, linkedProductId: doc.data().linkedProductId || null };
-  }
-  // Only fetched here, lazily, rather than once per order — keeps this cheap
-  // for orders whose items were already linked on a previous purchase.
-  const prodSnap = await usersRef.collection('products').get();
-  const myProducts = prodSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  const match = findMyProductByName(myProducts, item.productName);
+  if (!existing.empty) return existing.docs[0].id;
   const ref = await usersRef.collection('purchaseProducts').add({
-    name: item.productName, hsn: item.hsn || '', unit: item.unit || 'PCS', linkedProductId: match ? match.id : null,
+    name: item.productName, hsn: item.hsn || '', unit: item.unit || 'PCS',
     sellerUid, sellerProductId: item.productId, autoCreatedFromOrder: true
   });
-  return { purchaseProductId: ref.id, linkedProductId: match ? match.id : null };
+  return ref.id;
 }
