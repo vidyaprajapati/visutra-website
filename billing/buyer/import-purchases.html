@@ -31,29 +31,45 @@
 
   <div class="card">
     <h2>Import Historical Purchase Data</h2>
-    <p class="sub">Bring your old day-wise purchase records in from Excel/CSV — supplier dues, <a href="purchases-gstr.html">GSTR-1 Filing</a>, and <a href="purchase-entry.html">Purchase Entry</a>'s history will all reflect them, exactly as if you'd typed each one in by hand. A supplier name that doesn't already exist in your <a href="my-sellers.html">My Sellers</a> off-platform list is created automatically.</p>
+    <p class="sub">Bring your old day-wise purchase records in from Excel/CSV — supplier dues, <a href="purchases-gstr.html">GSTR-1 Filing</a>, and <a href="purchase-entry.html">Purchase Entry</a>'s history will all reflect them, exactly as if you'd typed each one in by hand.</p>
     <p class="sub"><b>This does not change your current Stock numbers.</b> These are old purchases you've already used or resold since — adding their quantities to today's stock would double-count. If you also want the stock side of this period recorded, use <a href="stock.html">Stock</a>'s own Monthly Inventory Reconciliation upload for the same months separately, or adjust the current stock number there by hand once you know what's actually on the shelf.</p>
-    <input type="file" id="importFile" accept=".csv,.xlsx,.xls">
-    <button class="btn primary" style="margin-left:8px" onclick="parseImportFile()">Read File</button>
+
+    <div class="field" style="max-width:340px"><label>Supplier — applies to every row in this file</label>
+      <select id="importSupplier"><option value="">Select supplier…</option></select>
+    </div>
+    <div id="newSupplierCard" style="display:none;margin-top:10px" class="box">
+      <div class="grid2">
+        <div class="field"><label>Name</label><input id="nsName"></div>
+        <div class="field"><label>GSTIN (optional)</label><input id="nsGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"></div>
+      </div>
+      <button class="btn small primary" onclick="addNewSupplier()">Add Supplier</button>
+      <button class="btn small" onclick="cancelNewSupplier()">Cancel</button>
+    </div>
+    <button class="btn small" id="addSupplierBtn" style="margin-top:8px" onclick="showNewSupplierForm()">+ Add a new supplier</button>
+
+    <div style="margin-top:16px">
+      <input type="file" id="importFile" accept=".csv,.xlsx,.xls">
+      <button class="btn primary" style="margin-left:8px" onclick="parseImportFile()">Read File</button>
+    </div>
     <p class="msg" id="importUploadMsg"></p>
   </div>
 
   <div class="card hidden" id="columnMapCard">
     <h2>Step 1 — Match Your Columns</h2>
-    <p class="sub">Date and Supplier are required. Everything else is optional — leave as "Not in my sheet" for anything you don't have, and a sensible default is used instead.</p>
+    <p class="sub">Date and Rate/Amount are required. Everything else is optional — leave as "Not in my sheet" for anything you don't have, and a sensible default is used instead.</p>
     <div id="columnMapList"></div>
 
     <div class="grid2" style="margin-top:14px">
       <div class="field"><label>The Rate/Amount column is</label>
         <select id="importValueMode">
+          <option value="rate" selected>A per-unit rate (multiplied by Qty)</option>
           <option value="total">A total amount for that row (qty ignored)</option>
-          <option value="rate">A per-unit rate (multiplied by Qty)</option>
         </select>
       </div>
       <div class="field"><label>Those amounts are</label>
         <select id="importPriceMode">
+          <option value="incl" selected>Incl. GST</option>
           <option value="excl">Excl. GST</option>
-          <option value="incl">Incl. GST</option>
         </select>
       </div>
     </div>
@@ -85,25 +101,23 @@ let currentUser = null;
 let suppliersCache = [];
 let importHeaders = [];
 let importRows = [];
-let importGroups = []; // built in buildImportPreview(): one per (date, supplier)
+let importGroups = []; // built in buildImportPreview(): one per date (supplier is fixed for the whole file — see importSupplier)
 
 const IMPORT_FIELD_GUESSES = {
-  date: ['date', 'purchase date', 'bill date', 'invoice date'],
-  supplier: ['supplier', 'supplier name', 'party', 'party name', 'vendor', 'seller'],
-  item: ['item', 'item name', 'product', 'product name', 'description'],
+  date: ['date of purchase', 'date', 'purchase date', 'bill date', 'invoice date'],
+  item: ['product name', 'item', 'item name', 'product', 'description'],
   qty: ['qty', 'quantity'],
-  value: ['amount', 'total', 'rate', 'value', 'purchase amount'],
-  gst: ['gst', 'gst%', 'gst rate', 'tax%', 'tax rate'],
-  paid: ['paid', 'amount paid', 'paid amount']
+  value: ['purchase price including gst', 'purchase price', 'amount', 'total', 'rate', 'value'],
+  gst: ['gst %', 'gst', 'gst%', 'gst rate', 'tax%', 'tax rate'],
+  paid: ['payment', 'paid', 'amount paid', 'paid amount']
 };
 const IMPORT_FIELDS = [
-  { key: 'date', label: 'Date', required: true },
-  { key: 'supplier', label: 'Supplier Name', required: true },
-  { key: 'item', label: 'Item Name (optional)', required: false },
+  { key: 'date', label: 'Date of Purchase', required: true },
+  { key: 'item', label: 'Product Name (optional)', required: false },
   { key: 'qty', label: 'Qty (optional)', required: false },
-  { key: 'value', label: 'Rate / Amount', required: true },
+  { key: 'value', label: 'Purchase Price', required: true },
   { key: 'gst', label: 'GST % column (optional)', required: false },
-  { key: 'paid', label: 'Amount Paid (optional)', required: false }
+  { key: 'paid', label: 'Payment (optional)', required: false }
 ];
 
 auth.onAuthStateChanged(async user => {
@@ -123,9 +137,38 @@ auth.onAuthStateChanged(async user => {
   const data = snap.data() || {};
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
 
-  const supSnap = await db.collection('users').doc(currentUser.uid).collection('suppliers').get();
-  suppliersCache = supSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  await loadSuppliers();
 });
+
+// Same supplier list Purchase Entry uses (linked VISUTRA sellers and your
+// own off-platform ones) — this file's rows all get attributed to whichever
+// one is picked here, so pick it before reading the file.
+async function loadSuppliers(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  suppliersCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const sel = document.getElementById('importSupplier');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">Select supplier…</option>' +
+    suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}${s.sellerUid ? ' (VISUTRA seller)' : ''}</option>`).join('');
+  if(prev && suppliersCache.some(s => s.id === prev)) sel.value = prev;
+}
+function showNewSupplierForm(){ document.getElementById('newSupplierCard').style.display = 'block'; }
+function cancelNewSupplier(){
+  document.getElementById('newSupplierCard').style.display = 'none';
+  document.getElementById('nsName').value = '';
+  document.getElementById('nsGstin').value = '';
+}
+async function addNewSupplier(){
+  const name = document.getElementById('nsName').value.trim();
+  if(!name){ showMsg('importUploadMsg', 'Enter a supplier name.', false); return; }
+  const ref = await db.collection('users').doc(currentUser.uid).collection('suppliers').add({
+    name, gstin: document.getElementById('nsGstin').value.trim(), phone: '', email: '', address: '', stateCode: '', state: ''
+  });
+  await loadSuppliers();
+  document.getElementById('importSupplier').value = ref.id;
+  cancelNewSupplier();
+  showMsg('importUploadMsg', `Added ${name} — now select your file.`, true);
+}
 
 function guessImportColumn(headers, candidates){
   const lower = headers.map(h => String(h).toLowerCase().trim());
@@ -135,6 +178,7 @@ function guessImportColumn(headers, candidates){
 }
 
 async function parseImportFile(){
+  if(!document.getElementById('importSupplier').value){ showMsg('importUploadMsg', 'Select the supplier this file is for first.', false); return; }
   const input = document.getElementById('importFile');
   const file = input.files && input.files[0];
   if(!file){ showMsg('importUploadMsg', 'Choose a file first.', false); return; }
@@ -193,23 +237,26 @@ function parseImportDate(raw){
 }
 
 function buildImportPreview(){
+  const supplierId = document.getElementById('importSupplier').value;
+  const supplier = suppliersCache.find(s => s.id === supplierId);
+  if(!supplier){ showMsg('importUploadMsg', 'Select the supplier this file is for first.', false); return; }
+
   const col = {};
   IMPORT_FIELDS.forEach(f => { col[f.key] = parseInt(document.getElementById('importCol_'+f.key).value, 10); });
-  if(col.date === -1 || col.supplier === -1 || col.value === -1){
-    showMsg('importUploadMsg', 'Date, Supplier Name, and Rate/Amount are required — map all three before continuing.', false);
+  if(col.date === -1 || col.value === -1){
+    showMsg('importUploadMsg', 'Date and Purchase Price are required — map both before continuing.', false);
     return;
   }
   const valueMode = document.getElementById('importValueMode').value;
   const priceMode = document.getElementById('importPriceMode').value;
   const defaultGst = parseFloat(document.getElementById('importDefaultGst').value) || 0;
 
-  const groups = new Map(); // "date::supplierLower" -> group
+  const groups = new Map(); // date -> group — every row in this file is this one supplier, so grouping is by date alone
   let skipped = 0;
 
   importRows.forEach(row => {
     const date = parseImportDate(colVal(row, col.date));
-    const supplierName = String(colVal(row, col.supplier)).trim();
-    if(!date || !supplierName){ skipped++; return; }
+    if(!date){ skipped++; return; }
 
     const qty = col.qty !== -1 ? (parseFloat(colVal(row, col.qty)) || 1) : 1;
     const rawValue = parseFloat(colVal(row, col.value)) || 0;
@@ -221,32 +268,25 @@ function buildImportPreview(){
     const taxable = priceMode === 'incl' ? gross / (1 + gstRate/100) : gross;
     const gstAmt = taxable * gstRate / 100;
 
-    const key = `${date}::${supplierName.toLowerCase()}`;
-    if(!groups.has(key)) groups.set(key, { date, supplierName, items: [], paid: 0 });
-    const g = groups.get(key);
+    if(!groups.has(date)) groups.set(date, { date, items: [], paid: 0 });
+    const g = groups.get(date);
     g.items.push({ name: itemName, qty, rate: valueMode === 'rate' ? rawValue : (qty ? gross/qty : gross), gstRate, priceMode, taxable, gstAmt, total: taxable + gstAmt });
     g.paid += paid;
   });
 
   importGroups = Array.from(groups.values()).sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
   if(!importGroups.length){
-    showMsg('importUploadMsg', `No usable rows — ${skipped} skipped for a missing Date or Supplier.`, false);
+    showMsg('importUploadMsg', `No usable rows — ${skipped} skipped for a missing Date.`, false);
     return;
   }
 
-  const newSupplierNames = new Set();
-  importGroups.forEach(g => {
-    const exists = suppliersCache.some(s => s.name.trim().toLowerCase() === g.supplierName.toLowerCase());
-    if(!exists) newSupplierNames.add(g.supplierName.toLowerCase());
-  });
-
   document.getElementById('previewSummary').textContent =
-    `${importGroups.length} purchase(s) across ${new Set(importGroups.map(g=>g.supplierName.toLowerCase())).size} supplier(s) (${newSupplierNames.size} new) will be created.` +
-    (skipped ? ` ${skipped} row(s) skipped (missing Date or Supplier).` : '');
+    `${importGroups.length} purchase(s) will be created for ${supplier.name}.` +
+    (skipped ? ` ${skipped} row(s) skipped (missing Date).` : '');
   document.getElementById('previewTable').innerHTML = importGroups.map(g => {
     const subtotal = g.items.reduce((s,i)=>s+i.taxable,0);
     const gstTotal = g.items.reduce((s,i)=>s+i.gstAmt,0);
-    return `<tr><td>${esc(g.date)}</td><td>${esc(g.supplierName)}</td><td>${g.items.map(i=>esc(i.name)+' × '+i.qty).join(', ')}</td>
+    return `<tr><td>${esc(g.date)}</td><td>${esc(supplier.name)}</td><td>${g.items.map(i=>esc(i.name)+' × '+i.qty).join(', ')}</td>
       <td>₹${fmtMoney(subtotal)}</td><td>₹${fmtMoney(gstTotal)}</td><td>₹${fmtMoney(subtotal+gstTotal)}</td><td>${g.paid ? '₹'+fmtMoney(g.paid) : '—'}</td></tr>`;
   }).join('');
 
@@ -260,23 +300,15 @@ function cancelImportPreview(){
   document.getElementById('columnMapCard').classList.remove('hidden');
 }
 
-async function findOrCreateSupplier(name){
-  const existing = suppliersCache.find(s => s.name.trim().toLowerCase() === name.toLowerCase());
-  if(existing) return existing.id;
-  const ref = await db.collection('users').doc(currentUser.uid).collection('suppliers').add({
-    name, gstin: '', phone: '', email: '', address: '', stateCode: '', state: ''
-  });
-  const created = { id: ref.id, name };
-  suppliersCache.push(created); // so a repeated name later in this same import reuses it instead of creating a duplicate
-  return ref.id;
-}
-
 async function runImport(){
+  const supplierId = document.getElementById('importSupplier').value;
+  const supplier = suppliersCache.find(s => s.id === supplierId);
+  if(!supplier){ showMsg('importApplyMsg', 'Select the supplier this file is for first.', false); return; }
+
   showMsg('importApplyMsg', `Importing ${importGroups.length} purchase(s)…`, true);
   let created = 0;
   try{
     for(const g of importGroups){
-      const supplierId = await findOrCreateSupplier(g.supplierName);
       const subtotal = g.items.reduce((s,i)=>s+i.taxable,0);
       const gstTotal = g.items.reduce((s,i)=>s+i.gstAmt,0);
 
@@ -286,7 +318,7 @@ async function runImport(){
       // deleting one of these as reason to decrement CURRENT stock, which
       // would be wrong for a purchase that's already long since been used.
       await db.collection('users').doc(currentUser.uid).collection('purchases').add({
-        supplierId, supplierName: g.supplierName, date: g.date,
+        supplierId, supplierName: supplier.name, date: g.date,
         items: g.items.map(i => ({ name: i.name, qty: i.qty, rate: i.rate, gstRate: i.gstRate, priceMode: i.priceMode, taxable: i.taxable, gstAmt: i.gstAmt, total: i.total })),
         subtotal, gstTotal, grandTotal: subtotal + gstTotal,
         recordedByBuyer: true, importedHistorical: true,
@@ -294,14 +326,14 @@ async function runImport(){
       });
       if(g.paid > 0){
         await db.collection('users').doc(currentUser.uid).collection('payments').add({
-          supplierId, supplierName: g.supplierName, date: g.date, amount: g.paid, mode: '', note: 'Imported historical payment',
+          supplierId, supplierName: supplier.name, date: g.date, amount: g.paid, mode: '', note: 'Imported historical payment',
           importedHistorical: true,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
       }
       created++;
     }
-    showMsg('importApplyMsg', `Imported ${created} purchase(s). Check Purchase Entry's history and My Sellers' Off-Platform Sellers list — supplier dues update automatically from here.`, true);
+    showMsg('importApplyMsg', `Imported ${created} purchase(s) for ${supplier.name}. Check Purchase Entry's history and My Sellers — supplier dues update automatically from here.`, true);
     document.getElementById('previewCard').classList.add('hidden');
     document.getElementById('importFile').value = '';
     importRows = []; importGroups = [];
