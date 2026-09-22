@@ -31,8 +31,7 @@
 
   <div class="card">
     <h2>Import Historical Purchase Data</h2>
-    <p class="sub">Bring your old day-wise purchase records in from Excel/CSV — supplier dues, <a href="purchases-gstr.html">GSTR-1 Filing</a>, and <a href="purchase-entry.html">Purchase Entry</a>'s history will all reflect them, exactly as if you'd typed each one in by hand.</p>
-    <p class="sub"><b>This does not change your current Stock numbers.</b> These are old purchases you've already used or resold since — adding their quantities to today's stock would double-count. If you also want the stock side of this period recorded, use <a href="stock.html">Stock</a>'s own Monthly Inventory Reconciliation upload for the same months separately, or adjust the current stock number there by hand once you know what's actually on the shelf.</p>
+    <p class="sub">Bring your old day-wise purchase records in from Excel/CSV — supplier dues, <a href="purchases-gstr.html">GSTR-1 Filing</a>, and <a href="purchase-entry.html">Purchase Entry</a>'s history will all reflect them, exactly as if you'd typed each one in by hand. A Product Name that matches one of your <a href="buyer-sku-master.html">Buyer SKU Master</a> products (by name) also adds that quantity to its <a href="stock.html">Stock</a> — same as any other purchase. A name with no match still imports fine, just without a stock effect; the preview below marks which rows that applies to.</p>
 
     <div class="box" style="margin-bottom:16px">
       <p class="sub" style="margin:0 0 8px">New to this? Download the blank template, fill it in, then upload it below — its headers are already exactly what this page expects, so every column maps itself automatically.</p>
@@ -104,6 +103,12 @@
 <script>
 let currentUser = null;
 let suppliersCache = [];
+// This buyer's own ACTIVE Buyer SKU Master products — imported rows are
+// matched to these by product name (case/whitespace-insensitive) so their
+// quantities can be added to stock. A name with no match is imported as a
+// purchase record either way, just without a stock effect — see
+// buildImportPreview()/runImport().
+let mySkuMappingsCache = [];
 let importHeaders = [];
 let importRows = [];
 let importGroups = []; // built in buildImportPreview(): one per date (supplier is fixed for the whole file — see importSupplier)
@@ -143,7 +148,14 @@ auth.onAuthStateChanged(async user => {
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
 
   await loadSuppliers();
+  const mapSnap = await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').where('status', '==', 'ACTIVE').get();
+  mySkuMappingsCache = mapSnap.docs.map(d => ({id: d.id, ...d.data()}));
 });
+function findMySkuMapping(productName){
+  const norm = (productName || '').trim().toLowerCase();
+  if(!norm) return null;
+  return mySkuMappingsCache.find(m => (m.productName || '').trim().toLowerCase() === norm) || null;
+}
 
 // Same supplier list Purchase Entry uses (linked VISUTRA sellers and your
 // own off-platform ones) — this file's rows all get attributed to whichever
@@ -285,9 +297,13 @@ function buildImportPreview(){
     const taxable = priceMode === 'incl' ? gross / (1 + gstRate/100) : gross;
     const gstAmt = taxable * gstRate / 100;
 
+    const mapping = findMySkuMapping(itemName);
     if(!groups.has(date)) groups.set(date, { date, items: [], paid: 0 });
     const g = groups.get(date);
-    g.items.push({ name: itemName, qty, rate: valueMode === 'rate' ? rawValue : (qty ? gross/qty : gross), gstRate, priceMode, taxable, gstAmt, total: taxable + gstAmt });
+    g.items.push({
+      name: itemName, qty, rate: valueMode === 'rate' ? rawValue : (qty ? gross/qty : gross), gstRate, priceMode, taxable, gstAmt, total: taxable + gstAmt,
+      linkedSkuMappingId: mapping ? mapping.id : null
+    });
     g.paid += paid;
   });
 
@@ -297,13 +313,18 @@ function buildImportPreview(){
     return;
   }
 
+  const allItems = importGroups.flatMap(g => g.items);
+  const unmatchedCount = allItems.filter(i => !i.linkedSkuMappingId).length;
   document.getElementById('previewSummary').textContent =
-    `${importGroups.length} purchase(s) will be created for ${supplier.name}.` +
+    `${importGroups.length} purchase(s) will be created for ${supplier.name}. ` +
+    `${allItems.length - unmatchedCount} of ${allItems.length} item(s) matched a Buyer SKU Master product and will add to Stock` +
+    (unmatchedCount ? `; ${unmatchedCount} unmatched item(s) (highlighted) import fine but won't affect stock.` : '.') +
     (skipped ? ` ${skipped} row(s) skipped (missing Date).` : '');
   document.getElementById('previewTable').innerHTML = importGroups.map(g => {
     const subtotal = g.items.reduce((s,i)=>s+i.taxable,0);
     const gstTotal = g.items.reduce((s,i)=>s+i.gstAmt,0);
-    return `<tr><td>${esc(g.date)}</td><td>${esc(supplier.name)}</td><td>${g.items.map(i=>esc(i.name)+' × '+i.qty).join(', ')}</td>
+    const itemsHtml = g.items.map(i => esc(i.name) + ' × ' + i.qty + (i.linkedSkuMappingId ? '' : ' <span class="badge" title="No Buyer SKU Master match — imports fine, no stock effect">unmatched</span>')).join(', ');
+    return `<tr><td>${esc(g.date)}</td><td>${esc(supplier.name)}</td><td>${itemsHtml}</td>
       <td>₹${fmtMoney(subtotal)}</td><td>₹${fmtMoney(gstTotal)}</td><td>₹${fmtMoney(subtotal+gstTotal)}</td><td>${g.paid ? '₹'+fmtMoney(g.paid) : '—'}</td></tr>`;
   }).join('');
 
@@ -336,7 +357,7 @@ async function runImport(){
       // would be wrong for a purchase that's already long since been used.
       await db.collection('users').doc(currentUser.uid).collection('purchases').add({
         supplierId, supplierName: supplier.name, date: g.date,
-        items: g.items.map(i => ({ name: i.name, qty: i.qty, rate: i.rate, gstRate: i.gstRate, priceMode: i.priceMode, taxable: i.taxable, gstAmt: i.gstAmt, total: i.total })),
+        items: g.items.map(i => ({ name: i.name, qty: i.qty, rate: i.rate, gstRate: i.gstRate, priceMode: i.priceMode, taxable: i.taxable, gstAmt: i.gstAmt, total: i.total, linkedSkuMappingId: i.linkedSkuMappingId || null })),
         subtotal, gstTotal, grandTotal: subtotal + gstTotal,
         recordedByBuyer: true, importedHistorical: true,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -348,9 +369,27 @@ async function runImport(){
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
       }
+      // Matched items add to stock exactly like any other purchase does —
+      // same buyerSkuMappings.stock increment + buyerStockMovements entry
+      // used everywhere else (order acceptance, manual Purchase Entry).
+      // Deleting this purchase later already reverses it correctly too,
+      // via the same linkedSkuMappingId the Delete Purchase/Invoice
+      // Deletion Request reversal logic checks for.
+      for(const item of g.items){
+        if(!item.linkedSkuMappingId) continue;
+        await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(item.linkedSkuMappingId).update({
+          stock: firebase.firestore.FieldValue.increment(item.qty),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
+          type: 'purchase-in', mappingId: item.linkedSkuMappingId, productName: item.name, qty: item.qty, date: g.date,
+          note: `Imported purchase from ${supplier.name}`,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
       created++;
     }
-    showMsg('importApplyMsg', `Imported ${created} purchase(s) for ${supplier.name}. Check Purchase Entry's history and My Sellers — supplier dues update automatically from here.`, true);
+    showMsg('importApplyMsg', `Imported ${created} purchase(s) for ${supplier.name} — matched items already added to Stock. Check Purchase Entry's history and My Sellers for the rest.`, true);
     document.getElementById('previewCard').classList.add('hidden');
     document.getElementById('importFile').value = '';
     importRows = []; importGroups = [];
