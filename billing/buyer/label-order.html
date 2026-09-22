@@ -31,7 +31,7 @@
 
   <div class="card">
     <h2>Upload Shipping Labels</h2>
-    <p class="sub">Upload one or more Amazon, Meesho, or Flipkart shipping-label PDFs (the kind you download to print and stick on the parcel — the label and/or tax invoice in the same file). Each page is scanned for a marketplace SKU. Nothing is uploaded anywhere — parsing happens entirely in your browser, same as the free Label Cropper tool.</p>
+    <p class="sub">Upload one or more Amazon, Meesho, or Flipkart shipping-label PDFs (the kind you download to print and stick on the parcel — the label and/or tax invoice in the same file). Each page is scanned for a marketplace SKU. Nothing is uploaded anywhere — parsing happens entirely in your browser, same as the free Label Cropper tool. Every unit found here is deducted from that product's <a href="stock.html">Stock</a> right away (it's being dispatched), and the order below only asks the seller for whatever's short after your own stock covers as much of it as possible — a zero-inventory target, not a top-up.</p>
     <input type="file" id="labelFiles" accept="application/pdf" multiple>
     <button class="btn primary" style="margin-left:8px" onclick="processFiles()">Process Labels</button>
     <p class="msg" id="uploadMsg"></p>
@@ -46,7 +46,7 @@
 
   <div class="card" id="summaryCard" style="display:none">
     <h2>Today's Order Summary</h2>
-    <p class="sub">Accumulates across every batch of labels you process today — upload a few now, a few more later, it all adds up into one summary per seller. Click Send Order whenever you're ready; it clears after sending, ready for tomorrow.</p>
+    <p class="sub">Accumulates across every batch of labels you process today — upload a few now, a few more later, it all adds up into one summary per seller. "Balance to Order" is what's actually sent — your own stock (after today's dispatches are deducted) covers the rest. If stock covers everything, sending just marks the labels processed with no order created. Clears after sending, ready for tomorrow.</p>
     <div id="summaryBySeller"></div>
   </div>
 
@@ -185,7 +185,12 @@ async function processHits(hits, fileCount){
         continue;
       }
       const wasNew = await mergeItemIntoDraft(mapping, hit);
-      if(wasNew) mergedCount++; else skippedCount++; // already sitting in today's unsent draft
+      if(wasNew){
+        mergedCount++;
+        await deductStockForLabel(mapping, hit); // dispatching this unit — comes straight off your own stock, zero-inventory target
+      } else {
+        skippedCount++; // already sitting in today's unsent draft
+      }
     } else {
       const key = `${hit.marketplace}_${hit.sku}`;
       if(!unmappedFound[key]) unmappedFound[key] = { marketplace: hit.marketplace, sku: hit.sku, qty: 0 };
@@ -227,7 +232,7 @@ async function mergeItemIntoDraft(mapping, hit){
     if((data.pageHashes || []).includes(hit.pageHash)) return; // already merged in today, before it was sent
     added = true;
     const p = data.itemsByProduct[mapping.productId] || {
-      productName: mapping.productName, sellerSku: mapping.sellerSku,
+      productName: mapping.productName, sellerSku: mapping.sellerSku, mappingId: mapping.id,
       qty: 0, breakdown: { amazon: 0, meesho: 0, flipkart: 0 }
     };
     p.qty += hit.qty;
@@ -238,6 +243,45 @@ async function mergeItemIntoDraft(mapping, hit){
     tx.set(ref, data);
   });
   return added;
+}
+
+/* A label being printed/dispatched IS a sale-out of your own stock — this
+   product doesn't get a separate "label" stock count, it's the same number
+   Stock and Buyer SKU Master show. Deducted once per unique label page
+   (the caller only calls this when mergeItemIntoDraft() says the page is
+   genuinely new), so re-processing the same PDF never double-deducts.
+   Kept in sync locally on mappingsCache too, so the "Balance to Order"
+   figure below reflects it immediately without a re-fetch. */
+async function deductStockForLabel(mapping, hit){
+  await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(mapping.id).update({
+    stock: firebase.firestore.FieldValue.increment(-hit.qty),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
+    type: 'sale-out', mappingId: mapping.id, productName: mapping.productName, qty: -hit.qty,
+    date: todayKey, note: `Label printed — ${hit.marketplace} ${hit.sku}`,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  mapping.stock = (mapping.stock || 0) - hit.qty; // mapping is the actual object sitting in mappingsCache — mutate in place
+}
+
+// A demand entry may predate this feature (drafts saved before mappingId
+// was recorded on each item) — fall back to the same (sellerId, productId)
+// lookup the rest of the app uses in that case.
+function resolveMappingForItem(sellerId, productIdKey, item){
+  if(item.mappingId){
+    const m = mappingsCache.find(x => x.id === item.mappingId);
+    if(m) return m;
+  }
+  return mappingsCache.find(m => m.sellerId === sellerId && m.productId === productIdKey) || null;
+}
+// Zero-inventory balance: your own stock covers as much of today's demand
+// as it can first, and only the shortfall — stock gone negative — is worth
+// asking the seller for. Positive/zero stock after dispatching means
+// nothing to order for this product right now.
+function balanceToOrder(mapping){
+  if(!mapping) return null; // unresolvable — caller falls back to full demand
+  return Math.max(0, -(mapping.stock || 0));
 }
 
 async function loadTodayDrafts(){
@@ -282,17 +326,24 @@ function renderSummary(){
   document.getElementById('summaryCard').style.display = sellerIds.length ? 'block' : 'none';
   document.getElementById('summaryBySeller').innerHTML = sellerIds.map(sid => {
     const g = todayDraftsCache[sid];
-    const products = Object.values(g.itemsByProduct);
-    const rows = products.map(p => `
-      <tr><td>${esc(p.productName)}</td><td>${esc(p.sellerSku||'—')}</td>
+    const products = Object.entries(g.itemsByProduct).map(([productIdKey, p]) => ({
+      ...p, mapping: resolveMappingForItem(sid, productIdKey, p)
+    }));
+    const rows = products.map(p => {
+      const bal = balanceToOrder(p.mapping);
+      const stockNow = p.mapping ? (p.mapping.stock || 0) : null;
+      return `<tr><td>${esc(p.productName)}</td><td>${esc(p.sellerSku||'—')}</td>
       <td>${p.breakdown.amazon ? 'Amazon: '+p.breakdown.amazon+'<br>' : ''}${p.breakdown.meesho ? 'Meesho: '+p.breakdown.meesho+'<br>' : ''}${p.breakdown.flipkart ? 'Flipkart: '+p.breakdown.flipkart : ''}</td>
-      <td><b>${p.qty}</b></td></tr>
-    `).join('');
+      <td>${p.qty}</td>
+      <td>${stockNow===null ? '—' : stockNow}</td>
+      <td><b>${bal===null ? p.qty : bal}</b>${bal===0 ? ' <span class="badge">Covered by stock</span>' : ''}</td></tr>`;
+    }).join('');
+    const anyToOrder = products.some(p => (balanceToOrder(p.mapping) ?? p.qty) > 0);
     return `<div style="margin-bottom:22px;padding-bottom:18px;border-bottom:1px solid var(--line)">
       <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">${esc(g.sellerName)}</h3>
-      <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Total Qty</th></tr></thead>
+      <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Dispatched Today</th><th>Stock Now</th><th>Balance to Order</th></tr></thead>
       <tbody>${rows}</tbody></table>
-      <button class="btn primary" style="margin-top:10px" onclick="placeAutoOrder('${sid}')">Send Order to ${esc(g.sellerName)}</button>
+      <button class="btn primary" style="margin-top:10px" onclick="placeAutoOrder('${sid}')">${anyToOrder ? `Send Order to ${esc(g.sellerName)}` : 'Mark Labels Processed (no order needed)'}</button>
       <p class="msg" id="autoOrderMsg-${sid}"></p>
     </div>`;
   }).join('') || '<p class="sub">No fully-mapped items to order yet.</p>';
@@ -305,40 +356,63 @@ async function placeAutoOrder(sellerId){
   }
   const g = todayDraftsCache[sellerId];
   if(!g) return;
-  showMsg(`autoOrderMsg-${sellerId}`, 'Sending order…', true);
+  showMsg(`autoOrderMsg-${sellerId}`, 'Checking stock…', true);
   try{
-    const items = Object.entries(g.itemsByProduct).map(([productId, p]) => ({
-      productId, productName: p.productName, sellerSku: p.sellerSku, qty: p.qty,
-      marketplaceBreakdown: { ...p.breakdown }
-    }));
-    const orderRef = db.collection('marketplaceOrders').doc();
-    const orderNumber = `VIS-ORD-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${orderRef.id.slice(-6).toUpperCase()}`;
-    await orderRef.set({
-      orderNumber, orderType: 'LABEL_AUTO',
-      buyerUid: currentUser.uid, buyerEmail: currentUser.email || '',
-      buyerBusiness: {
-        businessName: buyerData.businessName || '', gstin: buyerData.gstin || '',
-        address: buyerData.address || '', state: buyerData.state || '', stateCode: buyerData.stateCode || '',
-        email: currentUser.email || ''
-      },
-      sellerUid: sellerId, sellerName: g.sellerName,
-      items, note: '', status: 'PENDING',
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    // Re-resolve against the freshest stock we have (updated in place by
+    // every deductStockForLabel() call this session) right before building
+    // the order — a zero-inventory order is only as good as the balance
+    // figure it's built from. Items fully covered by stock (balance 0) are
+    // left out of the order entirely; the seller has nothing to fulfil for
+    // those right now.
+    const items = [];
+    for(const [productId, p] of Object.entries(g.itemsByProduct)){
+      const mapping = resolveMappingForItem(sellerId, productId, p);
+      const bal = balanceToOrder(mapping);
+      const qty = bal === null ? p.qty : bal; // unresolvable mapping (shouldn't normally happen) — fall back to full demand rather than silently order nothing
+      if(qty <= 0) continue;
+      items.push({ productId, productName: p.productName, sellerSku: p.sellerSku, qty, marketplaceBreakdown: { ...p.breakdown } });
+    }
 
-    // Mark every label page that contributed to THIS submitted order as
-    // processed, so re-uploading the same PDF later won't double-count it.
+    let orderNumber = null, orderRef = null;
+    if(items.length){
+      showMsg(`autoOrderMsg-${sellerId}`, 'Sending order…', true);
+      orderRef = db.collection('marketplaceOrders').doc();
+      orderNumber = `VIS-ORD-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${orderRef.id.slice(-6).toUpperCase()}`;
+      await orderRef.set({
+        orderNumber, orderType: 'LABEL_AUTO',
+        buyerUid: currentUser.uid, buyerEmail: currentUser.email || '',
+        buyerBusiness: {
+          businessName: buyerData.businessName || '', gstin: buyerData.gstin || '',
+          address: buyerData.address || '', state: buyerData.state || '', stateCode: buyerData.stateCode || '',
+          email: currentUser.email || ''
+        },
+        sellerUid: sellerId, sellerName: g.sellerName,
+        items, note: '', status: 'PENDING',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+
+    // Mark every label page that contributed to today's draft as processed,
+    // so re-uploading the same PDF later won't double-count it — this
+    // happens whether or not an order was actually needed, since the
+    // DEMAND (and its stock deduction) already happened either way.
     await Promise.all((g.pageHashes || []).map(hash =>
       db.collection('users').doc(currentUser.uid).collection('processedLabels').doc(hash)
-        .set({ orderId: orderRef.id, processedAt: firebase.firestore.FieldValue.serverTimestamp() })
+        .set({ orderId: orderRef ? orderRef.id : null, processedAt: firebase.firestore.FieldValue.serverTimestamp() })
     ));
 
-    // Today's draft for this seller has now been sent — clear it so tomorrow
-    // (or the next batch today) starts fresh rather than double-counting.
+    // Today's draft for this seller has now been handled — clear it so
+    // tomorrow (or the next batch today) starts fresh rather than
+    // double-counting.
     await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').doc(g.id).delete();
     delete todayDraftsCache[sellerId];
     renderSummary();
+
+    if(!items.length){
+      showMsg(`autoOrderMsg-${sellerId}`, `No order needed — your existing stock covers all of today's demand for ${g.sellerName}. Labels marked as processed.`, true);
+      return;
+    }
 
     showMsg(`autoOrderMsg-${sellerId}`, `Order ${orderNumber} sent to ${g.sellerName}. Notifying seller…`, true);
     const emailResult = await sendOrderNotification(
