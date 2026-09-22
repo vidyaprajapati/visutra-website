@@ -37,7 +37,8 @@
 
   <div class="card" id="catalogCard" style="display:none">
     <h2>Catalog</h2>
-    <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Price (incl. GST)</th><th>Stock</th><th>Qty</th><th></th></tr></thead>
+    <p class="sub" style="margin-top:-6px">"My Stock" is your own on-hand quantity for that product from <a href="buyer-sku-master.html">Buyer SKU Master</a> — use it alongside the seller's Stock to judge how much to order. Shows "—" for anything not mapped there yet.</p>
+    <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Price (incl. GST)</th><th>Seller Stock</th><th>My Stock</th><th>Qty</th><th></th></tr></thead>
     <tbody id="catalogTable"></tbody></table>
   </div>
 
@@ -65,6 +66,11 @@ let buyerData = {};
 let sellersCache = [];
 let catalogCache = [];
 let cart = {}; // productId -> qty
+// This buyer's own ACTIVE Buyer SKU Master mappings — used only to show
+// "My Stock" alongside the seller's catalog stock below; loaded once since
+// it doesn't depend on which seller is selected. Buyer-only data, has
+// nothing to do with the seller's own products/stock.
+let mySkuMappingsCache = [];
 const preselectSellerId = new URLSearchParams(window.location.search).get('sellerId');
 
 auth.onAuthStateChanged(async user => {
@@ -86,6 +92,9 @@ auth.onAuthStateChanged(async user => {
     showMsg('orderMsg', 'Complete your Business Profile (name, address, state) in Billing before placing orders — it\'s needed for the GST invoice the seller will raise. ', false);
   }
 
+  const mapSnap = await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').where('status', '==', 'ACTIVE').get();
+  mySkuMappingsCache = mapSnap.docs.map(d => ({id: d.id, ...d.data()}));
+
   await loadLinkedSellers();
   document.getElementById('noSellersCard').style.display = sellersCache.length ? 'none' : 'block';
   document.getElementById('orderFormCard').style.display = sellersCache.length ? 'block' : 'none';
@@ -106,7 +115,7 @@ async function onSellerChange(){
   renderCart();
   if(!sellerUid){ document.getElementById('catalogCard').style.display = 'none'; return; }
   document.getElementById('catalogCard').style.display = 'block';
-  document.getElementById('catalogTable').innerHTML = '<tr><td colspan="5" style="color:var(--muted)">Loading…</td></tr>';
+  document.getElementById('catalogTable').innerHTML = '<tr><td colspan="7" style="color:var(--muted)">Loading…</td></tr>';
   const snap = await db.collection('users').doc(sellerUid).collection('products')
     .where('active', '==', true).where('buyerVisibility', '==', true).get();
   // Must filter on active too, matching the Firestore rule exactly — see
@@ -115,11 +124,14 @@ async function onSellerChange(){
   renderCatalog();
 }
 function renderCatalog(){
-  document.getElementById('catalogTable').innerHTML = catalogCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.sku||'—')}</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td>
+  const sellerUid = document.getElementById('oSeller').value;
+  document.getElementById('catalogTable').innerHTML = catalogCache.map(p => {
+    const mapping = mySkuMappingsCache.find(m => m.sellerId === sellerUid && m.productId === p.id);
+    const myStock = mapping ? `${mapping.stock||0}` : '<span style="color:var(--muted)" title="Not mapped in Buyer SKU Master yet">—</span>';
+    return `<tr><td>${esc(p.name)}</td><td>${esc(p.sku||'—')}</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td><td>${myStock}</td>
     <td><input type="number" min="0" step="1" style="width:70px" id="qty-${p.id}" value="${cart[p.id]||''}" placeholder="0"></td>
-    <td><button class="btn small" onclick="addToCart('${p.id}')">Add</button></td></tr>
-  `).join('') || '<tr><td colspan="6" style="color:var(--muted)">No products are visible to you from this seller yet.</td></tr>';
+    <td><button class="btn small" onclick="addToCart('${p.id}')">Add</button></td></tr>`;
+  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No products are visible to you from this seller yet.</td></tr>';
 }
 function addToCart(productId){
   const qty = parseFloat(document.getElementById(`qty-${productId}`).value);

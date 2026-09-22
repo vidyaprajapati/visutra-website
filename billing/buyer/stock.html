@@ -37,6 +37,21 @@
   </div>
 
   <div class="card">
+    <h2>Monthly Stock Report — Opening &amp; Closing</h2>
+    <p class="sub">Opening and closing stock for each product for the month you pick, reconstructed from every stock movement on record (manual edits, order acceptances, reconciliation uploads) — not just what's on the page above.</p>
+    <div class="field" style="max-width:220px"><label>Month</label><input id="stockReportMonth" type="month" onchange="renderMonthlyStockReport()"></div>
+    <table style="margin-top:12px"><thead><tr><th>Product</th><th>Opening Stock</th><th>Stock In</th><th>Stock Out</th><th>Closing Stock</th></tr></thead>
+    <tbody id="monthlyStockReportTable"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Daily Stock Movement — Selected Month</h2>
+    <p class="sub">Every movement within the month picked above, in date order.</p>
+    <table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Note</th></tr></thead>
+    <tbody id="dailyStockMovementTable"></tbody></table>
+  </div>
+
+  <div class="card">
     <h2>Recent Stock Movements</h2>
     <p class="sub">Every change to the stock numbers above — manual edits you make here, automatic stock-ins from accepted seller orders, and reconciliation uploads below. This is a buyer-only log, separate from the Seller/Billing side's own Stock Management movements.</p>
     <table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Note</th></tr></thead>
@@ -89,6 +104,11 @@ let mySkuMappingsCache = [];
 let reconciliationMapCache = [];
 let stockUploadSheets = [];
 let stockAggregation = [];
+// Full, uncapped movement history — separate from the last-50 list the
+// "Recent Stock Movements" card above shows, since the monthly report needs
+// every movement on record (possibly older than the last 50) to reconstruct
+// opening/closing correctly. Lazily fetched once, reused after that.
+let allMovementsCache = null;
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -109,6 +129,9 @@ auth.onAuthStateChanged(async user => {
 
   await loadStock();
   await loadReconciliationMap();
+
+  document.getElementById('stockReportMonth').value = new Date().toISOString().slice(0,7);
+  await renderMonthlyStockReport();
 });
 
 /* ---------------- Buyer Stock table (from Buyer SKU Master) ---------------- */
@@ -217,7 +240,58 @@ async function saveStock(mappingId){
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
   }
+  allMovementsCache = null; // stale after this write — refetched next time the report renders
   await loadStock();
+  await renderMonthlyStockReport();
+}
+
+/* ---------------- Monthly Stock Report (Opening / Closing + daily movement) ----------------
+   Reconstructed from the full buyerStockMovements history rather than
+   stored per-day, since every stock change (manual, order-acceptance,
+   reconciliation) already writes a movement here — so working backwards
+   from the current live stock gives an exact opening/closing balance for
+   any month, without needing to snapshot anything separately. */
+async function ensureAllMovementsLoaded(){
+  if(allMovementsCache) return allMovementsCache;
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').orderBy('date').get();
+  allMovementsCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  return allMovementsCache;
+}
+function monthBounds(monthStr){
+  const [y, m] = monthStr.split('-').map(Number);
+  const start = `${monthStr}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end = `${monthStr}-${String(lastDay).padStart(2,'0')}`;
+  return { start, end };
+}
+async function renderMonthlyStockReport(){
+  const monthInput = document.getElementById('stockReportMonth');
+  const month = monthInput.value || new Date().toISOString().slice(0,7);
+  monthInput.value = month;
+  const { start, end } = monthBounds(month);
+  const movements = await ensureAllMovementsLoaded();
+
+  const rows = mySkuMappingsCache.map(m => {
+    const mm = movements.filter(x => x.mappingId === m.id);
+    // Roll the live stock back past everything that happened AFTER this
+    // month to get the balance as it stood at month-end.
+    const afterEnd = mm.filter(x => x.date > end).reduce((s,x) => s + (x.qty||0), 0);
+    const closing = (m.stock || 0) - afterEnd;
+    const inMonth = mm.filter(x => x.date >= start && x.date <= end);
+    const netInMonth = inMonth.reduce((s,x) => s + (x.qty||0), 0);
+    const opening = closing - netInMonth;
+    const stockIn = inMonth.filter(x => x.qty > 0).reduce((s,x) => s + x.qty, 0);
+    const stockOut = inMonth.filter(x => x.qty < 0).reduce((s,x) => s + x.qty, 0);
+    return { product: m, opening, stockIn, stockOut, closing };
+  });
+  document.getElementById('monthlyStockReportTable').innerHTML = rows.map(r => `
+    <tr><td>${esc(r.product.productName)}</td><td>${r.opening}</td><td style="color:#0E7C6B">${r.stockIn?'+':''}${r.stockIn}</td><td style="color:var(--paprika-dark)">${r.stockOut}</td><td><b>${r.closing}</b></td></tr>
+  `).join('') || '<tr><td colspan="5" style="color:var(--muted)">No products in Buyer SKU Master yet.</td></tr>';
+
+  const dayMovs = movements.filter(x => x.date >= start && x.date <= end).sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
+  document.getElementById('dailyStockMovementTable').innerHTML = dayMovs.map(x => `
+    <tr><td>${esc(x.date)}</td><td>${esc(x.productName||'Unknown product')}</td><td>${x.qty>0?'+':''}${x.qty}</td><td>${esc(x.note||'')}</td></tr>
+  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No movements in this month.</td></tr>';
 }
 
 /* ---------------- Monthly Inventory Reconciliation (Meesho/Flipkart-aware) ----------------
@@ -421,8 +495,10 @@ async function applyStockUpload(){
     applied++;
   }
 
+  allMovementsCache = null; // stale after these writes — refetched next time the report renders
   await loadStock();
   await loadReconciliationMap();
+  await renderMonthlyStockReport();
 
   document.getElementById('stockColumnMapWrap').classList.add('hidden');
   document.getElementById('stockAggWrap').classList.add('hidden');
