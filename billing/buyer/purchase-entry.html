@@ -114,6 +114,13 @@ auth.onAuthStateChanged(async user => {
   await loadPurchases();
   await loadPayments();
   addLineItem();
+
+  const preselectSupplierId = new URLSearchParams(window.location.search).get('supplierId');
+  if(preselectSupplierId && suppliersCache.some(s => s.id === preselectSupplierId)){
+    document.getElementById('pSupplier').value = preselectSupplierId;
+    recalcTotals();
+    document.getElementById('pSupplier').scrollIntoView({behavior: 'smooth', block: 'center'});
+  }
 });
 
 async function loadSuppliers(){

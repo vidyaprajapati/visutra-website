@@ -30,10 +30,34 @@
 
   <div class="card">
     <h2>My Sellers</h2>
-    <p class="sub">Sellers who've linked your account. Once linked, you can view the products they've marked visible to you.</p>
+    <p class="sub">Sellers who've linked your account on VISUTRA. Once linked, you can view the products they've marked visible to you and place orders through the app.</p>
     <table><thead><tr><th>Seller</th><th>Status</th><th></th></tr></thead>
     <tbody id="sellersTable"></tbody></table>
     <p class="sub" style="margin-top:10px">Once you've spotted products you want to track, set up <a href="buyer-sku-master.html">Buyer SKU Master</a> to map each one to your Amazon/Meesho/Flipkart SKUs.</p>
+  </div>
+
+  <div class="card" id="offPlatformFormCard">
+    <h2 id="offPlatformFormTitle">Add an Off-Platform Seller</h2>
+    <p class="sub">For anyone you buy from who isn't on VISUTRA — a local shop, a one-off supplier, anyone off-platform. There's no live catalog or Place Order for these — you record what you bought from them by hand in <a href="purchase-entry.html">Purchase Entry</a> instead. This is the same Suppliers list Purchase Entry already uses, just manageable from here too.</p>
+    <div class="grid2">
+      <div class="field"><label>Name</label><input id="opName" placeholder="e.g. Sharma General Store"></div>
+      <div class="field"><label>GSTIN (optional)</label><input id="opGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label>Phone (optional)</label><input id="opPhone"></div>
+      <div class="field"><label>Email (optional)</label><input id="opEmail"></div>
+    </div>
+    <input type="hidden" id="opEditId">
+    <button class="btn primary" onclick="saveOffPlatformSeller()">Save</button>
+    <button class="btn small" id="opCancelBtn" style="display:none" onclick="resetOffPlatformForm()">Cancel Edit</button>
+    <p class="msg" id="offPlatformMsg"></p>
+  </div>
+
+  <div class="card">
+    <h2>Off-Platform Sellers</h2>
+    <p class="sub">Suppliers you've added by hand above (or from Purchase Entry's "+ Add a new supplier"). "Record Purchase" jumps to Purchase Entry with them preselected.</p>
+    <table><thead><tr><th>Name</th><th>GSTIN</th><th>Phone</th><th></th></tr></thead>
+    <tbody id="offPlatformTable"></tbody></table>
   </div>
 
   </div>
@@ -46,6 +70,7 @@
 <script src="../assets/user-menu.js"></script>
 <script>
 let currentUser = null;
+let offPlatformCache = []; // suppliers with no sellerUid — added by hand here or from Purchase Entry
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -65,6 +90,7 @@ auth.onAuthStateChanged(async user => {
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
 
   await loadSellers();
+  await loadOffPlatformSellers();
 });
 
 async function loadSellers(){
@@ -97,6 +123,94 @@ async function unlinkSeller(linkId, sellerLabel){
   }catch(err){
     alert(`Could not remove: ${err.message}`);
   }
+}
+
+/* ---------------- Off-Platform Sellers ----------------
+   Same `suppliers` collection Purchase Entry already reads/writes — a
+   supplier created from an accepted VISUTRA order carries a `sellerUid`
+   (see ensureSupplierForSeller in my-orders.html/dashboard.html); one added
+   here or from Purchase Entry's own "+ Add a new supplier" never does. That
+   field alone is what separates "real linked seller" from "off-platform
+   seller" — no separate collection needed. */
+async function loadOffPlatformSellers(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  offPlatformCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(s => !s.sellerUid);
+  renderOffPlatformTable();
+}
+function renderOffPlatformTable(){
+  document.getElementById('offPlatformTable').innerHTML = offPlatformCache.map(s => `
+    <tr><td>${esc(s.name)}</td><td>${esc(s.gstin||'—')}</td><td>${esc(s.phone||'—')}</td>
+    <td class="row-actions">
+      <a class="btn small primary" href="purchase-entry.html?supplierId=${encodeURIComponent(s.id)}">Record Purchase</a>
+      <button class="btn small" onclick="editOffPlatformSeller('${s.id}')">Edit</button>
+      <button class="btn small danger" onclick="deleteOffPlatformSeller('${s.id}')">Remove</button>
+    </td></tr>
+  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No off-platform sellers added yet.</td></tr>';
+}
+async function saveOffPlatformSeller(){
+  const name = document.getElementById('opName').value.trim();
+  if(!name){ showMsg('offPlatformMsg', 'Enter a name.', false); return; }
+  const data = {
+    name,
+    gstin: document.getElementById('opGstin').value.trim(),
+    phone: document.getElementById('opPhone').value.trim(),
+    email: document.getElementById('opEmail').value.trim()
+  };
+  const editId = document.getElementById('opEditId').value;
+  const col = db.collection('users').doc(currentUser.uid).collection('suppliers');
+  try{
+    if(editId){
+      await col.doc(editId).set(data, {merge: true});
+      showMsg('offPlatformMsg', `Updated ${name}.`, true);
+    } else {
+      // No sellerUid on this write is what makes it "off-platform" — same
+      // shape Purchase Entry's addNewSupplier() writes.
+      await col.add({ ...data, address: '', stateCode: '', state: '' });
+      showMsg('offPlatformMsg', `Added ${name}.`, true);
+    }
+    resetOffPlatformForm();
+    await loadOffPlatformSellers();
+  }catch(err){
+    showMsg('offPlatformMsg', `Could not save: ${err.message}`, false);
+  }
+}
+function editOffPlatformSeller(id){
+  const s = offPlatformCache.find(x => x.id === id);
+  if(!s) return;
+  document.getElementById('opEditId').value = id;
+  document.getElementById('opName').value = s.name || '';
+  document.getElementById('opGstin').value = s.gstin || '';
+  document.getElementById('opPhone').value = s.phone || '';
+  document.getElementById('opEmail').value = s.email || '';
+  document.getElementById('offPlatformFormTitle').textContent = 'Edit Off-Platform Seller';
+  document.getElementById('opCancelBtn').style.display = 'inline-block';
+  document.getElementById('offPlatformFormCard').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function resetOffPlatformForm(){
+  document.getElementById('opEditId').value = '';
+  ['opName','opGstin','opPhone','opEmail'].forEach(f => document.getElementById(f).value = '');
+  document.getElementById('offPlatformFormTitle').textContent = 'Add an Off-Platform Seller';
+  document.getElementById('opCancelBtn').style.display = 'none';
+}
+async function deleteOffPlatformSeller(id){
+  // Purchases reference a supplier by supplierId but don't cascade-delete,
+  // so removing one that still has purchases would leave them pointing at
+  // nothing — check first and point the person at Purchase Entry instead of
+  // silently leaving orphaned records.
+  const purchaseSnap = await db.collection('users').doc(currentUser.uid).collection('purchases')
+    .where('supplierId', '==', id).limit(1).get();
+  if(!purchaseSnap.empty){
+    alert('This supplier has purchase records in Purchase Entry — remove those first, or just leave this supplier as-is.');
+    return;
+  }
+  if(!confirm('Remove this off-platform seller?')) return;
+  await db.collection('users').doc(currentUser.uid).collection('suppliers').doc(id).delete();
+  await loadOffPlatformSellers();
+}
+function showMsg(elId, text, ok){
+  const el = document.getElementById(elId);
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
