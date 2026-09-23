@@ -74,6 +74,7 @@ auth.onAuthStateChanged(async user => {
     await loadPaymentConfirmations();
     await loadSkuMappings();
     await loadStockMovements();
+    await loadLabelSkuQueue();
     addLineItem();
     addPurchaseLineItem();
     loadInvoices();
@@ -984,6 +985,131 @@ async function applySellerLabelMappings(){
   document.getElementById('sellerLabelUnmappedCard').classList.add('hidden');
   document.getElementById('sellerLabelFiles').value = '';
   showMsg('sellerLabelMsg', `Mapped and deducted stock for ${mapped} item(s).`, true);
+}
+
+/* ---------------- Unmapped Label SKUs (queued by Label Cropper, Seller mode) ----------------
+   tools/label-cropper.html writes one doc per unmapped SKU to
+   users/{uid}/sellerUnmappedLabelSkus, listing every label printed for it
+   under `pending` with the same two per-label dedup keys a normal print uses:
+     sellerHash -> processedSellerLabels  (product stock, once per label)
+     packHash   -> packagingConsumedLabels (packing, first print only)
+   plus labelDone (sticker already taken from printer-size label stock).
+   Settling here therefore behaves exactly like the label had been mapped when
+   printed, and can't double-count against Label Cropper or Sell via Label. */
+let labelSkuQueueCache = [];
+async function loadLabelSkuQueue(){
+  try{
+    const snap = await db.collection('users').doc(currentUser.uid).collection('sellerUnmappedLabelSkus')
+      .where('status', '==', 'UNMAPPED').get();
+    labelSkuQueueCache = snap.docs.map(d => ({id: d.id, ...d.data()}))
+      .sort((a,b) => String(b.lastSeen||'').localeCompare(String(a.lastSeen||'')));
+  }catch(err){
+    console.error('Loading unmapped label SKUs failed:', err);
+    labelSkuQueueCache = [];
+  }
+  renderLabelSkuQueue();
+}
+function renderLabelSkuQueue(){
+  const card = document.getElementById('labelSkuQueueCard');
+  if(!card) return;
+  card.classList.toggle('hidden', !labelSkuQueueCache.length);
+  document.getElementById('labelSkuQueueCount').textContent = labelSkuQueueCache.length || '';
+  document.getElementById('labelSkuQueueTable').innerHTML = labelSkuQueueCache.map(q => {
+    const known = skuMappingsCache.find(m => String(m.rawKey||'').trim().toLowerCase() === String(q.sku||'').trim().toLowerCase());
+    const options = productsCache.map(p => `<option value="${p.id}"${known && known.productId === p.id ? ' selected' : ''}>${esc(p.name)} (stock ${p.stock||0})</option>`).join('');
+    return `<tr>
+      <td>${esc((q.marketplaces || [q.marketplace]).join(', '))}</td>
+      <td><code>${esc(q.sku)}</code></td>
+      <td>${q.labelCount || 0}</td><td>${q.unitCount || 0}</td>
+      <td style="white-space:nowrap">${esc(q.firstSeen||'')}${q.lastSeen && q.lastSeen !== q.firstSeen ? ' → ' + esc(q.lastSeen) : ''}</td>
+      <td><select id="lsq-${q.id}"><option value="">Select product…</option>${options}</select></td>
+      <td class="row-actions">
+        <button class="btn small primary" id="lsqBtn-${q.id}" onclick="mapQueuedLabelSku('${q.id}')">Map &amp; Deduct</button>
+        <button class="btn small" onclick="dismissQueuedLabelSku('${q.id}')">Not a stock item</button>
+      </td></tr>`;
+  }).join('');
+}
+async function mapQueuedLabelSku(docId){
+  const q = labelSkuQueueCache.find(x => x.id === docId);
+  const productId = document.getElementById('lsq-' + docId).value;
+  if(!q) return;
+  if(!productId){ showMsg('labelSkuQueueMsg', `Pick a product for ${q.sku} first.`, false); return; }
+  const product = productsCache.find(p => p.id === productId);
+  if(!product) return;
+  const btn = document.getElementById('lsqBtn-' + docId);
+  if(btn) btn.disabled = true;
+  showMsg('labelSkuQueueMsg', 'Saving mapping & deducting…', true);
+  const uid = currentUser.uid;
+  const userRef = db.collection('users').doc(uid);
+  try{
+    // 1) Save/replace the mapping (same skuMappings table as everything else).
+    const key = String(q.sku).trim().toLowerCase();
+    const existing = skuMappingsCache.find(m => String(m.rawKey||'').trim().toLowerCase() === key);
+    if(existing){
+      if(existing.productId !== productId) await userRef.collection('skuMappings').doc(existing.id).set({ rawKey: q.sku, productId, productName: product.name }, { merge: true });
+    } else {
+      await userRef.collection('skuMappings').add({ rawKey: q.sku, productId, productName: product.name, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
+
+    // 2) Re-read the queue doc (Label Cropper may have added labels since this page loaded).
+    const qRef = userRef.collection('sellerUnmappedLabelSkus').doc(docId);
+    const qSnap = await qRef.get();
+    const pending = qSnap.exists ? Object.values(qSnap.data().pending || {}) : [];
+
+    // Packing/label size assigned to this product in Buyer SKU Master (seller = "Myself").
+    const pkgSnap = await userRef.collection('buyerProductPackaging').get();
+    const pkgDoc = pkgSnap.docs.map(d => d.data()).find(d => d.sellerUid === uid && d.productId === productId) || null;
+
+    const today = new Date().toISOString().slice(0,10);
+    let units = 0, labels = 0, skipped = 0, packing = 0, labelStickers = 0;
+    for(const it of pending){
+      // Product stock — once per label.
+      const markerRef = userRef.collection('processedSellerLabels').doc(it.sellerHash);
+      if((await markerRef.get()).exists){ skipped++; }
+      else {
+        await addStockMovement('sale-out', productId, -it.qty, today, `Label printed — ${it.marketplace} ${it.sku}`);
+        await markerRef.set({ marketplace: it.marketplace, sku: it.sku, qty: it.qty, productId, source: 'label-queue', processedAt: firebase.firestore.FieldValue.serverTimestamp() });
+        units += it.qty; labels++;
+      }
+      // Packing — first print only (same marker Label Cropper uses).
+      if(pkgDoc && pkgDoc.packagingSizeId && it.packHash){
+        const packRef = userRef.collection('packagingConsumedLabels').doc(it.packHash);
+        if(!(await packRef.get()).exists){
+          await packRef.set({ marketplace: it.marketplace, sku: it.sku, qty: it.qty, packagingSizeId: pkgDoc.packagingSizeId, consumedAt: firebase.firestore.FieldValue.serverTimestamp() });
+          packing += it.qty;
+        }
+      }
+      // Label — only if no sticker was taken from a printer-size stock at print time.
+      if(pkgDoc && pkgDoc.labelSizeId && !it.labelDone) labelStickers++;
+    }
+    if(packing) await userRef.collection('buyerPackagingSizes').doc(pkgDoc.packagingSizeId).update({ stock: firebase.firestore.FieldValue.increment(-packing) }).catch(e => console.error('Packing stock update failed:', e));
+    if(labelStickers) await userRef.collection('buyerLabelSizes').doc(pkgDoc.labelSizeId).update({ stock: firebase.firestore.FieldValue.increment(-labelStickers) }).catch(e => console.error('Label stock update failed:', e));
+
+    // 3) Clear it from the queue.
+    await qRef.delete();
+
+    await loadProducts();
+    await loadSkuMappings();
+    await loadStockMovements();
+    await loadLabelSkuQueue();
+    const bits = [`${units} unit(s) deducted from ${product.name} for ${labels} label(s)`];
+    if(packing) bits.push(`${packing} packing`);
+    if(labelStickers) bits.push(`${labelStickers} label sticker(s)`);
+    if(skipped) bits.push(`${skipped} label(s) were already deducted`);
+    if(!pkgDoc) bits.push('no packing/label size assigned to this product in Buyer SKU Master, so none taken');
+    showMsg('labelSkuQueueMsg', `Mapped ${q.sku} → ${product.name}. ${bits.join('; ')}.`, true);
+  }catch(err){
+    console.error('Map & deduct failed:', err);
+    showMsg('labelSkuQueueMsg', 'Could not complete: ' + (err.code || err.message), false);
+    if(btn) btn.disabled = false;
+  }
+}
+async function dismissQueuedLabelSku(docId){
+  const q = labelSkuQueueCache.find(x => x.id === docId);
+  if(!q || !confirm(`Remove ${q.sku} from this list without deducting any stock?`)) return;
+  await db.collection('users').doc(currentUser.uid).collection('sellerUnmappedLabelSkus').doc(docId).delete();
+  await loadLabelSkuQueue();
+  showMsg('labelSkuQueueMsg', `${q.sku} removed.`, true);
 }
 
 /* ---------------- Customers ---------------- */
