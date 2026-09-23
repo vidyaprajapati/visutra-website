@@ -106,7 +106,7 @@ async function ensureBuyerPurchaseForOrder(order) {
     createdAt: FieldValue.serverTimestamp()
   };
 
-  const purRef = await usersRef.collection('purchases').add(purchaseData);
+  const purRef = await usersRef.collection('buyerPurchases').add(purchaseData);
 
   for (const s of stockIns) {
     await usersRef.collection('buyerSkuMappings').doc(s.mappingId).update({
@@ -133,9 +133,9 @@ async function ensureBuyerPurchaseForOrder(order) {
 }
 
 async function ensureSupplierForSeller(usersRef, sellerUid, sellerName) {
-  const snap = await usersRef.collection('suppliers').where('sellerUid', '==', sellerUid).limit(1).get();
+  const snap = await usersRef.collection('buyerSuppliers').where('sellerUid', '==', sellerUid).limit(1).get();
   if (!snap.empty) return snap.docs[0].id;
-  const ref = await usersRef.collection('suppliers').add({
+  const ref = await usersRef.collection('buyerSuppliers').add({
     name: sellerName, sellerUid, gstin: '', address: '', stateCode: '', state: '', email: '', phone: '',
     autoCreatedFromOrder: true
   });
