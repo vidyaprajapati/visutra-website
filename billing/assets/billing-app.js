@@ -20,6 +20,15 @@ let skuMappingsCache = [];
 let stockUploadSheets = []; // {fileName, sheetName, headers, rows} — rows is an array of arrays, header row excluded
 let stockAggregation = []; // {rawKey, displayKey, totalQty} built from stockUploadSheets after column mapping
 
+// Same pdf.js build the buyer side's label-order.html uses, and the same
+// shared extractAllMarketplaceItems()/hashText() from label-sku-extract.js
+// (loaded in app.html) — this is a direct sale YOU fulfilled, so it just
+// deducts stock immediately; no order, no supplier, no buyer involved.
+if(typeof pdfjsLib !== 'undefined'){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js".replace('pdf.min.js', 'pdf.worker.min.js');
+}
+let sellerLabelPendingHits = []; // hits from the most recent upload that don't yet match a skuMappings entry, waiting on the person to pick a product
+
 /* Parse a date-only string ("YYYY-MM-DD", e.g. from <input type=date>) as a LOCAL
    date. new Date("YYYY-MM-DD") parses as UTC per spec, which for India (UTC+5:30)
    silently shifts the date back to the previous day when read back with local
@@ -776,6 +785,140 @@ async function applyStockUpload(){
   stockUploadSheets = [];
   stockAggregation = [];
   showMsg('stockUploadMsg', `Stock updated for ${applied} product(s).`, true);
+}
+
+/* ---------------- Sell via Label (direct e-commerce sale → stock deduction) ----------------
+   For a seller who ALSO sells directly on Amazon/Meesho/Flipkart (not just
+   through buyers placing orders in this app): printing that sale's shipping
+   label is the moment the unit leaves stock. This reuses the exact same PDF
+   parsing the buyer side's label-order.html uses (label-sku-extract.js) and
+   the exact same rawKey -> product mapping the CSV reconciliation above
+   already builds (skuMappingsCache/`skuMappings`) — a SKU mapped once here
+   is remembered for both this and the monthly reconciliation upload.
+   Deliberately NOT an order: there's no buyer, no supplier, nothing to
+   send — just an immediate stock-out through addStockMovement(), the same
+   function every other stock change in this app already goes through. */
+async function processSellerLabelFiles(){
+  const input = document.getElementById('sellerLabelFiles');
+  const files = input.files;
+  if(!files || !files.length){ showMsg('sellerLabelMsg', 'Choose at least one label PDF.', false); return; }
+  showMsg('sellerLabelMsg', 'Reading labels…', true);
+
+  const hits = [];
+  for(const file of files){
+    try{
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      for(let i = 1; i <= pdf.numPages; i++){
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const text = content.items.map(it => it.str).join(' ');
+        const pageHits = extractAllMarketplaceItems(text);
+        for(const hit of pageHits){
+          const pageHash = hashText(`${hit.marketplace}|${hit.sku}|${text.slice(0, 200)}`);
+          hits.push({ ...hit, pageHash });
+        }
+      }
+    }catch(err){
+      showMsg('sellerLabelMsg', `Could not read ${file.name}: ${err.message}`, false);
+      return;
+    }
+  }
+  if(!hits.length){
+    showMsg('sellerLabelMsg', 'No marketplace SKU could be detected in the uploaded file(s).', false);
+    return;
+  }
+  await handleSellerLabelHits(hits, files.length);
+}
+
+async function handleSellerLabelHits(hits, fileCount){
+  let deducted = 0, skipped = 0;
+  sellerLabelPendingHits = [];
+  const results = [];
+  const today = new Date().toISOString().slice(0,10);
+
+  for(const hit of hits){
+    const already = await db.collection('users').doc(currentUser.uid).collection('processedSellerLabels').doc(hit.pageHash).get();
+    if(already.exists){ skipped++; continue; }
+
+    const mapping = skuMappingsCache.find(m => m.rawKey === hit.sku);
+    if(mapping){
+      const product = productsCache.find(p => p.id === mapping.productId);
+      if(product){
+        await addStockMovement('sale-out', mapping.productId, -hit.qty, today, `Label sold — ${hit.marketplace} ${hit.sku}`);
+        await db.collection('users').doc(currentUser.uid).collection('processedSellerLabels').doc(hit.pageHash)
+          .set({ marketplace: hit.marketplace, sku: hit.sku, qty: hit.qty, productId: mapping.productId, processedAt: firebase.firestore.FieldValue.serverTimestamp() });
+        deducted++;
+        results.push({ ...hit, productName: product.name, status: 'Deducted' });
+        continue;
+      }
+    }
+    sellerLabelPendingHits.push(hit);
+    results.push({ ...hit, productName: null, status: 'Unmapped' });
+  }
+
+  document.getElementById('sellerLabelResultsTable').innerHTML = results.map(r => `
+    <tr><td>${esc(r.marketplace)}</td><td>${esc(r.sku)}</td><td>${r.productName ? esc(r.productName) : '<span class="badge">Unmapped</span>'}</td><td>${r.qty}</td>
+    <td>${r.status === 'Deducted' ? '<span style="color:#0E7C6B">Deducted</span>' : '<span style="color:var(--paprika-dark)">Needs mapping</span>'}</td></tr>
+  `).join('');
+
+  renderSellerLabelUnmapped();
+  const parts = [];
+  if(deducted) parts.push(`${deducted} item(s) deducted from stock`);
+  if(sellerLabelPendingHits.length) parts.push(`${sellerLabelPendingHits.length} need a product mapping below`);
+  if(skipped) parts.push(`${skipped} already processed before`);
+  showMsg('sellerLabelMsg', `Read ${fileCount} file(s) — ${parts.join(', ') || 'nothing new found'}.`, true);
+}
+
+function renderSellerLabelUnmapped(){
+  const card = document.getElementById('sellerLabelUnmappedCard');
+  if(!sellerLabelPendingHits.length){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  document.getElementById('sellerLabelUnmappedList').innerHTML = sellerLabelPendingHits.map((h, i) => `
+    <div class="box" style="margin-bottom:10px">
+      <p style="margin:0 0 8px;font-size:13px"><b>${esc(h.marketplace)}</b> — SKU <code>${esc(h.sku)}</code> — Qty ${h.qty}</p>
+      <select id="sellerLabelMap${i}">
+        <option value="">Skip — not a stock item</option>
+        ${productsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+      </select>
+    </div>`).join('');
+}
+
+async function applySellerLabelMappings(){
+  let mapped = 0;
+  const today = new Date().toISOString().slice(0,10);
+  for(let i = 0; i < sellerLabelPendingHits.length; i++){
+    const hit = sellerLabelPendingHits[i];
+    const sel = document.getElementById('sellerLabelMap'+i);
+    const productId = sel ? sel.value : '';
+    if(!productId) continue;
+    const product = productsCache.find(p => p.id === productId);
+    if(!product) continue;
+
+    // Remembered here exactly like the CSV reconciliation above — the same
+    // skuMappings collection, so mapping a SKU once covers both features.
+    const existingMap = skuMappingsCache.find(m => m.rawKey === hit.sku);
+    if(existingMap){
+      if(existingMap.productId !== productId){
+        await db.collection('users').doc(currentUser.uid).collection('skuMappings').doc(existingMap.id)
+          .set({ rawKey: hit.sku, productId, productName: product.name });
+      }
+    } else {
+      await db.collection('users').doc(currentUser.uid).collection('skuMappings').add({
+        rawKey: hit.sku, productId, productName: product.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+
+    await addStockMovement('sale-out', productId, -hit.qty, today, `Label sold — ${hit.marketplace} ${hit.sku}`);
+    await db.collection('users').doc(currentUser.uid).collection('processedSellerLabels').doc(hit.pageHash)
+      .set({ marketplace: hit.marketplace, sku: hit.sku, qty: hit.qty, productId, processedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    mapped++;
+  }
+  await loadSkuMappings();
+  sellerLabelPendingHits = [];
+  document.getElementById('sellerLabelUnmappedCard').classList.add('hidden');
+  document.getElementById('sellerLabelFiles').value = '';
+  showMsg('sellerLabelMsg', `Mapped and deducted stock for ${mapped} item(s).`, true);
 }
 
 /* ---------------- Customers ---------------- */
