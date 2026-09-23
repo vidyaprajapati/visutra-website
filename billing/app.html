@@ -176,6 +176,22 @@
       </div>
 
       <div class="card">
+        <h2 id="skuMapFormTitle">Add a SKU Mapping</h2>
+        <p class="sub">Links a marketplace SKU (from Amazon/Meesho/Flipkart) to one of your Products, so <b>Sell via Label</b> below and the <b>Monthly Inventory Reconciliation</b> upload above can match it automatically. You can add mappings ahead of time here, or just leave it — an unrecognized SKU prompts for one the first time it shows up in either tool.</p>
+        <div class="grid2">
+          <div class="field"><label>Marketplace SKU</label><input id="skuMapRawKey" placeholder="e.g. VST-WA-FA30-6_7.5"></div>
+          <div class="field"><label>Product</label><select id="skuMapProduct"><option value="">Select product…</option></select></div>
+        </div>
+        <input type="hidden" id="skuMapEditId">
+        <button class="btn primary" onclick="saveSkuMapping()">Save Mapping</button>
+        <button class="btn small" id="skuMapCancelBtn" style="display:none" onclick="resetSkuMappingForm()">Cancel Edit</button>
+        <p class="msg" id="skuMappingMsg"></p>
+
+        <table style="margin-top:14px"><thead><tr><th>Marketplace SKU</th><th>Product</th><th></th></tr></thead>
+        <tbody id="skuMappingsTable"></tbody></table>
+      </div>
+
+      <div class="card">
         <h2>Sell via Label — Deduct Stock</h2>
         <p class="sub">If you also sell directly on Amazon/Meesho/Flipkart (not just through buyers placing orders in this app), upload those shipping-label PDFs here — each one found deducts that product's stock right away. This is a direct sale, not a procurement request, so <b>no order is created</b> for it. A SKU mapped here is remembered for the Monthly Inventory Reconciliation upload above too, and vice versa.</p>
         <input type="file" id="sellerLabelFiles" multiple accept="application/pdf">
