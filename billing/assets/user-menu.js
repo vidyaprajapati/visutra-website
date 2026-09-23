@@ -207,7 +207,7 @@ async function vtEnsureBuyerPurchaseForOrder(uid, order, skuMappings) {
     autoCreatedFromOrder: true,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  const purRef = await db.collection('users').doc(uid).collection('purchases').add(purchaseData);
+  const purRef = await db.collection('users').doc(uid).collection('buyerPurchases').add(purchaseData);
 
   for (const s of stockIns) {
     await db.collection('users').doc(uid).collection('buyerSkuMappings').doc(s.mappingId).update({
@@ -234,10 +234,10 @@ async function vtEnsureBuyerPurchaseForOrder(uid, order, skuMappings) {
 }
 
 async function vtEnsureSupplierForSeller(uid, sellerUid, sellerName) {
-  const snap = await db.collection('users').doc(uid).collection('suppliers')
+  const snap = await db.collection('users').doc(uid).collection('buyerSuppliers')
     .where('sellerUid', '==', sellerUid).limit(1).get();
   if (!snap.empty) return snap.docs[0].id;
-  const ref = await db.collection('users').doc(uid).collection('suppliers').add({
+  const ref = await db.collection('users').doc(uid).collection('buyerSuppliers').add({
     name: sellerName, sellerUid, gstin: '', address: '', stateCode: '', state: '', email: '', phone: '',
     autoCreatedFromOrder: true
   });
