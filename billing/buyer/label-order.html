@@ -232,7 +232,7 @@ async function mergeItemIntoDraft(mapping, hit){
     if((data.pageHashes || []).includes(hit.pageHash)) return; // already merged in today, before it was sent
     added = true;
     const p = data.itemsByProduct[mapping.productId] || {
-      productName: mapping.productName, sellerSku: mapping.sellerSku, mappingId: mapping.id,
+      productName: mapping.sellerProductName || mapping.productName, sellerSku: mapping.sellerSku, mappingId: mapping.id,
       qty: 0, breakdown: { amazon: 0, meesho: 0, flipkart: 0 }
     };
     p.qty += hit.qty;
