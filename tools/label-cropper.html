@@ -482,12 +482,13 @@ let todayDraftsCache = {};   // sellerId -> labelOrderDrafts/{todayKey}_{sellerI
 let sellerProductsCache = [];
 let sellerSkuMappingsCache = [];
 let sellerDataLoaded = false;
-// Labels that were cropped & downloaded in Seller mode while their SKU was
-// still unmapped — nothing could be deducted for them at print time. The
-// moment that SKU gets mapped below, these are deducted (product + packaging
-// + label) so the stock doesn't depend on reprinting a label you've already
-// stuck on a parcel. Session-only; cleared on a new file.
-let sellerPendingPrinted = [];
+// Labels cropped & downloaded in Seller mode while their SKU was still
+// unmapped are saved to users/{uid}/sellerUnmappedLabelSkus (one doc per
+// SKU, each printed label listed once under `pending`). That list shows in
+// Billing → Stock Management → "Unmapped Label SKUs" and survives closing
+// this tab; mapping the SKU there OR here deducts product + packing + label
+// for every label already printed, then clears it from the list.
+const SELLER_QUEUE_COL = 'sellerUnmappedLabelSkus';
 
 firebase.auth().onAuthStateChanged(async user => {
   if(!user) return; // assets/auth-guard.js already redirects to login when signed out — nothing to do here
@@ -1595,7 +1596,6 @@ async function handleFile(file){
   pageCouriers = []; pageSkus = []; pageQtys = []; pageGroups = []; groupOrder = [];
   amazonSkuByLabelIndex = {};
   pageTexts = []; amazonInvoiceTextByLabelIndex = {}; genericItemsByPage = null; pageSkusPlatform = null;
-  sellerPendingPrinted = [];
   document.getElementById('vlcSellerStockPanel').style.display = 'none';
   document.getElementById('vlcSellerStockMsg').textContent = '';
   document.getElementById('vlcCourierPanel').style.display = 'none';
@@ -1812,7 +1812,7 @@ function renderSellerStockPanel(rows){
   note.innerHTML = !sellerProductsCache.length
     ? 'You have no products in the seller section yet — add them in <a href="../billing/app.html?view=products" target="_blank" rel="noopener">Billing → Products</a>, then come back and map these SKUs.'
     : unmappedCount
-      ? `<b style="color:#9E3608">${unmappedCount} SKU${unmappedCount===1?'':'s'} not mapped yet</b> — pick the product each one is and click Map. One mapping covers every future label with that SKU. Unmapped SKUs are printed normally but nothing is deducted for them until mapped.`
+      ? `<b style="color:#9E3608">${unmappedCount} SKU${unmappedCount===1?'':'s'} not mapped yet</b> — pick the product each one is and click Map. One mapping covers every future label with that SKU. Unmapped SKUs still print; once printed they're listed in <a href="../billing/app.html?view=stock" target="_blank" rel="noopener">Billing → Stock Management</a> and deducted as soon as they're mapped (here or there).`
       : 'All SKUs in this file are mapped — stock will be deducted when you crop &amp; download.';
 
   const productOptions = sellerProductsCache.map(p =>
@@ -1879,17 +1879,14 @@ async function saveSellerMapping(i){
       const ref = await col.add({ rawKey: r.sku, productId, productName: product.name, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
       sellerSkuMappingsCache.push({ id: ref.id, rawKey: r.sku, productId, productName: product.name });
     }
-    // Labels with this SKU that were already printed while it was unmapped:
-    // deduct them now so nothing has to be reprinted just to count stock.
-    const pending = sellerPendingPrinted.filter(it => it.sku.trim().toLowerCase() === key);
+    // Labels with this SKU already printed while it was unmapped (from any
+    // earlier session too): deduct them now, then clear them from the list.
     let lateMsg = '';
-    if(pending.length){
-      sellerPendingPrinted = sellerPendingPrinted.filter(it => it.sku.trim().toLowerCase() !== key);
-      const res = await deductSellerProductStock(pending);
-      await deductPackagingLabelForItems(pending, 'seller');
+    const done = await settleQueuedSku(r.sku);
+    if(done && done.labels){
       await Promise.all([loadPackagingSizes(), loadLabelSizes()]);
-      renderStockOverviewChart();
-      if(res.deductedUnits) lateMsg = ` Also deducted ${res.deductedUnits} unit(s) for labels you'd already printed.`;
+      refreshSizeViews();
+      lateMsg = ` Also deducted ${done.units} unit(s) for ${done.labels} label(s) you'd already printed.`;
     }
     await reloadSellerProducts();
     renderSellerStockPanel(lastDetectedRows);
@@ -2102,6 +2099,7 @@ async function applySizeDeductions(qtyById, colName){
   }).catch(err => console.error(`${colName} stock update failed for ${id}:`, err))));
 }
 function packingLabelHash(it){
+  if(it.packHash) return it.packHash;
   return 'pack_' + hashText(`${it.marketplace}|${it.sku}|${(it.text || '').slice(0, 200)}`);
 }
 /* Packing, first print only. Returns { units, sizes:{sizeId:qty}, alreadyDone }. */
@@ -2200,6 +2198,7 @@ async function consumeStockForExport(pageIndexOrder, courierFilter, opts){
    atomic batch: product stock, a 'sale-out' stockMovements entry (so it shows
    in Billing's movement history + Monthly Stock Report), and the marker. */
 function sellerLabelHash(it){
+  if(it.sellerHash) return it.sellerHash;
   return hashText(`${it.marketplace}|${it.sku}|${(it.text || '').slice(0, 200)}`);
 }
 async function deductSellerProductStock(items){
@@ -2245,16 +2244,67 @@ async function consumeSellerStockForExport(pageIndexOrder){
   const items = collectExportItems(pageIndexOrder);
   if(!items.length) return null;
   const res = await deductSellerProductStock(items);
-  // Remember unmapped labels that were just printed, so mapping them later
-  // deducts them without a reprint. Keyed by the same per-label hash.
-  const pendingKeys = new Set(sellerPendingPrinted.map(sellerLabelHash));
-  res.unmapped.forEach(it => {
-    const k = sellerLabelHash(it);
-    if(!pendingKeys.has(k)){ pendingKeys.add(k); sellerPendingPrinted.push(it); }
-  });
+  // Unmapped labels are queued by processPdf() AFTER label stock is taken,
+  // since whether their sticker was already counted depends on that step.
   await reloadSellerProducts();
   renderSellerStockPanel(lastDetectedRows);
   return res;
+}
+
+/* ---------------- Unmapped-SKU queue (Seller mode) ----------------
+   Doc id is derived from the lower-cased SKU, matching how mappings are
+   matched (case-insensitive rawKey). Each printed label is stored once under
+   pending.<sellerHash> with both per-label dedup keys, so settling it later —
+   here or in Billing — uses the exact same markers as a normal print and can
+   never double-count: product (processedSellerLabels), packing
+   (packagingConsumedLabels). labelDone = its sticker already came off a
+   printer-size label stock at print time. */
+function queueDocIdForSku(sku){ return 'sku_' + hashText(String(sku).trim().toLowerCase()); }
+async function queueSellerUnmapped(items, labelDone){
+  if(!cropperUser || !items.length) return;
+  const today = new Date().toISOString().slice(0,10);
+  const bySku = {};
+  items.forEach(it => { const k = it.sku.trim().toLowerCase(); (bySku[k] = bySku[k] || []).push(it); });
+  for(const k of Object.keys(bySku)){
+    const first = bySku[k][0];
+    const ref = db.collection('users').doc(cropperUser.uid).collection(SELLER_QUEUE_COL).doc(queueDocIdForSku(first.sku));
+    try{
+      await db.runTransaction(async tx => {
+        const snap = await tx.get(ref);
+        const data = snap.exists ? snap.data() : { sku: first.sku, marketplace: first.marketplace, firstSeen: today, pending: {} };
+        data.pending = data.pending || {};
+        bySku[k].forEach(it => {
+          const h = sellerLabelHash(it);
+          const cur = data.pending[h];
+          if(cur){ if(labelDone) cur.labelDone = true; }
+          else data.pending[h] = { sellerHash: h, packHash: packingLabelHash(it), marketplace: it.marketplace, sku: it.sku, qty: it.qty, labelDone: !!labelDone, printedAt: today };
+        });
+        const list = Object.values(data.pending);
+        data.labelCount = list.length;
+        data.unitCount = list.reduce((a, x) => a + (x.qty || 0), 0);
+        data.marketplaces = [...new Set(list.map(x => x.marketplace))];
+        data.lastSeen = today;
+        data.status = 'UNMAPPED';
+        data.source = 'label-cropper';
+        data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+        tx.set(ref, data);
+      });
+    }catch(err){ console.error('Could not queue unmapped SKU ' + first.sku + ':', err); }
+  }
+}
+/* Deducts everything queued for a SKU that now resolves to a product, then
+   removes it from the queue. Returns { labels, units } or null. */
+async function settleQueuedSku(sku){
+  const ref = db.collection('users').doc(cropperUser.uid).collection(SELLER_QUEUE_COL).doc(queueDocIdForSku(sku));
+  const snap = await ref.get();
+  if(!snap.exists) return null;
+  const pending = Object.values(snap.data().pending || {});
+  if(!pending.length){ await ref.delete(); return null; }
+  if(!resolveSellerProduct(pending[0].marketplace, pending[0].sku)) return null;
+  const res = await deductSellerProductStock(pending);
+  await deductPackagingLabelForItems(pending, 'seller');
+  await ref.delete();
+  return { labels: pending.length, units: res.deductedUnits };
 }
 
 async function processPdf(courierFilter){
@@ -2427,12 +2477,6 @@ async function processPdf(courierFilter){
     }
     catch(err){ console.error('Packaging/label stock update failed (download itself still succeeded):', err); }
     if(stockRes){
-      // Unmapped Seller-mode labels just printed: if their sticker already
-      // came off the paper-size stock, the later catch-up mustn't take another.
-      if(stockRes.labelFromPaper){
-        const printed = new Set(pageIndexOrder);
-        sellerPendingPrinted.forEach(it => { if(printed.has(it.pageIndex)) it.labelDone = true; });
-      }
       const sp = [];
       if(stockRes.labelFromPaper) sp.push(`${stockRes.labelCount} × ${stockRes.labelSize.name} label`);
       else if(stockRes.labelFallback) sp.push(`${stockRes.labelFallback} label(s) from product-assigned sizes`);
@@ -2441,13 +2485,20 @@ async function processPdf(courierFilter){
       if(stockRes.packingSkipped) sp.push(`packing skipped for ${stockRes.packingSkipped} reprinted label(s)`);
       status.textContent += ' Used: ' + sp.join(', ') + '.';
     }
+    // Seller mode: save unmapped labels just printed to the queue (Billing →
+    // Stock Management shows it). If their sticker already came off the
+    // printer-size label stock, settling them later won't take another.
+    if(sellerRes && sellerRes.unmapped.length){
+      try{ await queueSellerUnmapped(sellerRes.unmapped, !!(stockRes && stockRes.labelFromPaper)); }
+      catch(err){ console.error('Queueing unmapped SKUs failed:', err); }
+    }
     if(sellerRes){
       const parts = [];
       if(sellerRes.deductedUnits) parts.push(`${sellerRes.deductedUnits} unit(s) deducted from product stock`);
       if(sellerRes.alreadyDone) parts.push(`${sellerRes.alreadyDone} label(s) already deducted before (reprint — not deducted again)`);
       if(sellerRes.unmapped.length){
         const u = [...new Set(sellerRes.unmapped.map(it => it.sku))];
-        parts.push(`${u.length} SKU(s) not mapped — map below and they'll be deducted then`);
+        parts.push(`${u.length} SKU(s) not mapped — saved to Billing → Stock Management → Unmapped Label SKUs; map there or below and they'll be deducted then`);
       }
       if(parts.length) status.textContent += ' Stock: ' + parts.join('; ') + '.';
     }
