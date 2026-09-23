@@ -175,6 +175,14 @@
         <tbody id="dailyStockMovementTable"></tbody></table>
       </div>
 
+      <div class="card hidden" id="labelSkuQueueCard" style="border:1.5px solid #E8A32C;background:#FFF7ED">
+        <h2>Unmapped Label SKUs <span id="labelSkuQueueCount" class="badge"></span></h2>
+        <p class="sub">Labels you printed in <a href="../tools/label-cropper.html" target="_blank" rel="noopener">Label Cropper</a> (as Seller) whose SKU isn't linked to a Product yet — nothing was deducted for them. Pick the product and click <b>Map &amp; Deduct</b>: the mapping is saved, and product stock, packing and label stock are deducted for every label listed (each label only ever once). <b>Not a stock item</b> removes it without deducting anything.</p>
+        <table><thead><tr><th>Marketplace</th><th>SKU</th><th>Labels</th><th>Units</th><th>First / last printed</th><th>Product</th><th></th></tr></thead>
+        <tbody id="labelSkuQueueTable"></tbody></table>
+        <p class="msg" id="labelSkuQueueMsg"></p>
+      </div>
+
       <div class="card">
         <h2 id="skuMapFormTitle">Add a SKU Mapping</h2>
         <p class="sub">Links a marketplace SKU (from Amazon/Meesho/Flipkart) to one of your Products, so <b>Sell via Label</b> below and the <b>Monthly Inventory Reconciliation</b> upload above can match it automatically. You can add mappings ahead of time here, or just leave it — an unrecognized SKU prompts for one the first time it shows up in either tool.</p>
