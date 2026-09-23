@@ -68,13 +68,13 @@
     <button class="btn primary" onclick="savePackagingSize()">Save Packaging Size</button>
     <button class="btn small" onclick="resetPackagingSizeForm()">Clear</button>
     <p class="msg" id="packagingSizeMsg"></p>
-    <table style="margin-top:14px"><thead><tr><th>Size</th><th>Stock</th><th>Reorder Below</th><th></th></tr></thead>
+    <table style="margin-top:14px"><thead><tr><th>Size</th><th>Active</th><th>Stock</th><th>Reorder Below</th><th></th></tr></thead>
     <tbody id="packagingSizesTable"></tbody></table>
   </div>
 
   <div class="card" id="labelSizesCard">
     <h2 id="labelSizeFormTitle">Label Sizes</h2>
-    <p class="sub">Same idea as packaging sizes above, for pre-printed label stock — one shared pool per size, used across every product assigned to it.</p>
+    <p class="sub">Same idea as packaging sizes above, for label stock — one shared pool per size. Standard printer sizes (4×6, 4×4 …) are switched on and stocked in <a href="../../tools/label-cropper.html" target="_blank" rel="noopener">Label Cropper → Label &amp; Packing Settings</a>; when you print at one of those sizes, that size's stock is used directly.</p>
     <div class="grid3">
       <div class="field"><label>Size name</label><input id="lszName" placeholder="e.g. 4x6 inch thermal"></div>
       <div class="field"><label>Stock on hand</label><input id="lszStock" type="number" min="0" value="0"></div>
@@ -84,13 +84,13 @@
     <button class="btn primary" onclick="saveLabelSize()">Save Label Size</button>
     <button class="btn small" onclick="resetLabelSizeForm()">Clear</button>
     <p class="msg" id="labelSizeMsg"></p>
-    <table style="margin-top:14px"><thead><tr><th>Size</th><th>Stock</th><th>Reorder Below</th><th></th></tr></thead>
+    <table style="margin-top:14px"><thead><tr><th>Size</th><th>Printer size</th><th>Active</th><th>Stock</th><th>Reorder Below</th><th></th></tr></thead>
     <tbody id="labelSizesTable"></tbody></table>
   </div>
 
   <div class="card" id="packagingFormCard">
     <h2 id="packagingFormTitle">Assign Sizes to a Product</h2>
-    <p class="sub">Pick "Myself" (your own products) or a linked seller + their product, then just pick which packaging size and label size it uses from the lists above — no stock to enter here, since stock lives on the size itself and several products can share one size.</p>
+    <p class="sub">Pick "Myself" (your own products) or a linked seller + their product, then just pick which packaging size and label size it uses — only <b>Active</b> sizes are listed (switch sizes on/off above or in Label Cropper → Label &amp; Packing Settings). No stock to enter here, since stock lives on the size itself and several products can share one size.</p>
     <div class="grid2">
       <div class="field"><label>Source</label><select id="pkgSeller" onchange="onPackagingSellerChange()"><option value="">Select…</option></select></div>
       <div class="field"><label>Product</label><select id="pkgProduct" onchange="onPackagingProductChange()"><option value="">Select source first…</option></select></div>
@@ -264,13 +264,16 @@ async function loadPackagingSizes(){
 function renderPackagingSizes(){
   document.getElementById('packagingSizesTable').innerHTML = packagingSizesCache.map(s => {
     const low = (s.stock||0) <= (s.minQty||0);
-    return `<tr${low ? ' style="background:#FBE4DE;color:#7A2A12"' : ''}>
-      <td>${esc(s.name)}</td><td>${s.stock||0}${low ? ' ⚠' : ''}</td><td>${s.minQty||0}</td>
+    const active = s.active !== false;
+    return `<tr${low && active ? ' style="background:#FBE4DE;color:#7A2A12"' : (active ? '' : ' style="color:var(--muted)"')}>
+      <td>${esc(s.name)}</td>
+      <td><input type="checkbox" ${active ? 'checked' : ''} onchange="toggleSizeActive('buyerPackagingSizes','${s.id}',this.checked)" style="width:auto"></td>
+      <td>${s.stock||0}${low ? ' ⚠' : ''}</td><td>${s.minQty||0}</td>
       <td class="row-actions">
         <button class="btn small" onclick="editPackagingSize('${s.id}')">Edit</button>
         <button class="btn small danger" onclick="deletePackagingSize('${s.id}')">Delete</button>
       </td></tr>`;
-  }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No packaging sizes defined yet.</td></tr>';
+  }).join('') || '<tr><td colspan="5" style="color:var(--muted)">No packaging sizes defined yet.</td></tr>';
 }
 async function savePackagingSize(){
   const name = document.getElementById('pszName').value.trim();
@@ -320,13 +323,16 @@ async function loadLabelSizes(){
 function renderLabelSizes(){
   document.getElementById('labelSizesTable').innerHTML = labelSizesCache.map(s => {
     const low = (s.stock||0) <= (s.minQty||0);
-    return `<tr${low ? ' style="background:#FBE4DE;color:#7A2A12"' : ''}>
-      <td>${esc(s.name)}</td><td>${s.stock||0}${low ? ' ⚠' : ''}</td><td>${s.minQty||0}</td>
+    const active = s.active !== false;
+    return `<tr${low && active ? ' style="background:#FBE4DE;color:#7A2A12"' : (active ? '' : ' style="color:var(--muted)"')}>
+      <td>${esc(s.name)}</td><td>${s.paperKey ? esc(s.paperKey) : '—'}</td>
+      <td><input type="checkbox" ${active ? 'checked' : ''} onchange="toggleSizeActive('buyerLabelSizes','${s.id}',this.checked)" style="width:auto"></td>
+      <td>${s.stock||0}${low ? ' ⚠' : ''}</td><td>${s.minQty||0}</td>
       <td class="row-actions">
         <button class="btn small" onclick="editLabelSize('${s.id}')">Edit</button>
         <button class="btn small danger" onclick="deleteLabelSize('${s.id}')">Delete</button>
       </td></tr>`;
-  }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No label sizes defined yet.</td></tr>';
+  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No label sizes defined yet — activate a printer size in Label Cropper → Label &amp; Packing Settings, or add a custom one here.</td></tr>';
 }
 async function saveLabelSize(){
   const name = document.getElementById('lszName').value.trim();
@@ -366,11 +372,27 @@ async function deleteLabelSize(id){
   await loadLabelSizes();
   renderPackaging();
 }
-function fillSizeDropdown(selectId, sizesCache){
+/* Only ACTIVE sizes are offered. The one exception is the size a product
+   is already assigned to: if that's since been deactivated it's still
+   listed (marked inactive) so opening/editing that product doesn't silently
+   wipe its assignment — pick another size to move it off. */
+function fillSizeDropdown(selectId, sizesCache, keepId){
   const sel = document.getElementById(selectId);
-  const current = sel.value;
-  sel.innerHTML = '<option value="">None</option>' + sizesCache.map(s => `<option value="${s.id}">${esc(s.name)} (${s.stock||0} in stock)</option>`).join('');
-  if(current && sizesCache.some(s => s.id === current)) sel.value = current;
+  const current = keepId !== undefined ? keepId : sel.value;
+  const list = sizesCache.filter(s => s.active !== false || s.id === current);
+  sel.innerHTML = '<option value="">None</option>' + list.map(s =>
+    `<option value="${s.id}">${esc(s.name)} (${s.stock||0} in stock)${s.active === false ? ' — inactive' : ''}</option>`).join('');
+  sel.value = (current && list.some(s => s.id === current)) ? current : '';
+}
+function setSizeSelects(packagingSizeId, labelSizeId){
+  fillSizeDropdown('pkgPackagingSizeId', packagingSizesCache, packagingSizeId || '');
+  fillSizeDropdown('pkgLabelSizeId', labelSizesCache, labelSizeId || '');
+}
+async function toggleSizeActive(col, id, active){
+  await db.collection('users').doc(currentUser.uid).collection(col).doc(id)
+    .set({ active, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  if(col === 'buyerLabelSizes') await loadLabelSizes(); else await loadPackagingSizes();
+  renderPackaging();
 }
 
 /* ---------------- Assign packaging/label size to a product ----------------
@@ -401,8 +423,7 @@ function onPackagingProductChange(){
   const productId = document.getElementById('pkgProduct').value;
   const existing = packagingCache.find(p => p.sellerUid === sellerUid && p.productId === productId);
   document.getElementById('pkgEditId').value = existing ? existing.id : '';
-  document.getElementById('pkgPackagingSizeId').value = existing ? (existing.packagingSizeId || '') : '';
-  document.getElementById('pkgLabelSizeId').value = existing ? (existing.labelSizeId || '') : '';
+  setSizeSelects(existing ? existing.packagingSizeId : '', existing ? existing.labelSizeId : '');
 }
 async function loadPackaging(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('buyerProductPackaging').get();
@@ -418,8 +439,8 @@ function renderPackaging(){
     const low = pkgLow || lblLow;
     return `<tr${low ? ' style="background:#FBE4DE;color:#7A2A12"' : ''}>
       <td>${esc(p.sellerName)}</td><td>${esc(p.productName)}</td>
-      <td>${pszSize ? esc(pszSize.name) : '—'}</td><td>${pszSize ? (pszSize.stock||0) : '—'}${pkgLow ? ' ⚠' : ''}</td>
-      <td>${lszSize ? esc(lszSize.name) : '—'}</td><td>${lszSize ? (lszSize.stock||0) : '—'}${lblLow ? ' ⚠' : ''}</td>
+      <td>${pszSize ? esc(pszSize.name) + (pszSize.active === false ? ' <span class="badge">inactive</span>' : '') : '—'}</td><td>${pszSize ? (pszSize.stock||0) : '—'}${pkgLow ? ' ⚠' : ''}</td>
+      <td>${lszSize ? esc(lszSize.name) + (lszSize.active === false ? ' <span class="badge">inactive</span>' : '') : '—'}</td><td>${lszSize ? (lszSize.stock||0) : '—'}${lblLow ? ' ⚠' : ''}</td>
       <td class="row-actions">
         <button class="btn small" onclick="editPackaging('${p.id}')">Edit</button>
         <button class="btn small danger" onclick="deletePackaging('${p.id}')">Delete</button>
@@ -456,8 +477,7 @@ function editPackaging(id){
   onPackagingSellerChange().then(() => {
     document.getElementById('pkgProduct').value = p.productId;
     document.getElementById('pkgEditId').value = p.id;
-    document.getElementById('pkgPackagingSizeId').value = p.packagingSizeId || '';
-    document.getElementById('pkgLabelSizeId').value = p.labelSizeId || '';
+    setSizeSelects(p.packagingSizeId, p.labelSizeId);
   });
   document.getElementById('packagingFormCard').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
@@ -465,8 +485,7 @@ function resetPackagingForm(){
   document.getElementById('pkgSeller').value = '';
   document.getElementById('pkgProduct').innerHTML = '<option value="">Select seller first…</option>';
   document.getElementById('pkgEditId').value = '';
-  document.getElementById('pkgPackagingSizeId').value = '';
-  document.getElementById('pkgLabelSizeId').value = '';
+  setSizeSelects('', '');
 }
 async function deletePackaging(id){
   if(!confirm('Delete this size assignment for the product?')) return;
