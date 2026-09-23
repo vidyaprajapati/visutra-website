@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Migrate Buyer Data | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Migrate Buyer Data</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="dashboard.html">Buyer Dashboard</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main">
+
+  <div class="card">
+    <h2>One-Time: Move Your Buyer Data to Its Own Storage</h2>
+    <p class="sub">Buyer and Seller used to share the same Suppliers/Purchases/Payments records under one account — which is why Seller-side purchase data was showing up in the Buyer Dashboard, Purchase Entry, and Payment Entry. That's now fixed going forward: the Buyer side has its own separate collections. This one-time tool moves whatever you already entered through the Buyer side into that new, separate storage, so it doesn't disappear from view.</p>
+    <p class="sub"><b>Safe to run more than once</b> — anything already moved is skipped automatically. Run it once now, then you shouldn't need it again.</p>
+    <button class="btn primary" onclick="scanForMigration()">Scan My Data</button>
+    <p class="msg" id="scanMsg"></p>
+  </div>
+
+  <div class="card hidden" id="ambiguousCard">
+    <h2>Check Any That Are Actually Buyer Suppliers</h2>
+    <p class="sub">These suppliers have no way to auto-detect which side they belong to (only ones linked to an actual VISUTRA seller account can be told apart automatically). If a name below is someone you buy from as a <b>Buyer</b> (a local shop, a one-off supplier), check it. Leave unchecked anything that's really a material/supply source for your own Seller business — those stay exactly where they are.</p>
+    <div id="ambiguousList"></div>
+  </div>
+
+  <div class="card hidden" id="previewCard">
+    <h2>Ready to Move</h2>
+    <p class="sub" id="previewSummary"></p>
+    <button class="btn primary" onclick="runMigration()">Move This Data</button>
+    <p class="msg" id="migrateMsg"></p>
+  </div>
+
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script>
+let currentUser = null;
+let allSuppliers = [], allPurchases = [], allPayments = [];
+let unambiguousSupplierIds = new Set();
+let ambiguousSuppliers = [];
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/migrate-buyer-data.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/migrate-buyer-data.html');
+    return;
+  }
+
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('migrate-buyer-data', '../');
+});
+
+async function scanForMigration(){
+  showMsg('scanMsg', 'Scanning…', true);
+  const [supSnap, purSnap, paySnap] = await Promise.all([
+    db.collection('users').doc(currentUser.uid).collection('suppliers').get(),
+    db.collection('users').doc(currentUser.uid).collection('purchases').get(),
+    db.collection('users').doc(currentUser.uid).collection('payments').get()
+  ]);
+  allSuppliers = supSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  allPurchases = purSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  allPayments = paySnap.docs.map(d => ({id: d.id, ...d.data()}));
+
+  // Unambiguous: a supplier record tied to a real linked VISUTRA seller
+  // (sellerUid) is a Buyer-only concept — a Seller's own material supplier
+  // never has this field. Everything else is a plain name/GSTIN entry that
+  // could have come from either side, so it needs a human decision below.
+  unambiguousSupplierIds = new Set(allSuppliers.filter(s => s.sellerUid).map(s => s.id));
+  ambiguousSuppliers = allSuppliers.filter(s => !s.sellerUid);
+
+  if(!allSuppliers.length && !allPurchases.length && !allPayments.length){
+    showMsg('scanMsg', 'Nothing found — your account has no Suppliers, Purchases, or Payments at all yet.', true);
+    return;
+  }
+
+  document.getElementById('ambiguousCard').classList.toggle('hidden', ambiguousSuppliers.length === 0);
+  document.getElementById('ambiguousList').innerHTML = ambiguousSuppliers.map(s => `
+    <label style="display:block;margin-bottom:8px">
+      <input type="checkbox" class="ambigCheck" data-id="${s.id}"> ${esc(s.name)}${s.gstin ? ' — ' + esc(s.gstin) : ''}
+    </label>`).join('');
+  document.querySelectorAll('.ambigCheck').forEach(cb => cb.addEventListener('change', updatePreview));
+
+  document.getElementById('previewCard').classList.remove('hidden');
+  updatePreview();
+  showMsg('scanMsg', `Found ${allSuppliers.length} supplier(s), ${allPurchases.length} purchase(s), ${allPayments.length} payment(s) in the old shared storage.`, true);
+}
+
+function checkedAmbiguousIds(){
+  return new Set(Array.from(document.querySelectorAll('.ambigCheck:checked')).map(cb => cb.dataset.id));
+}
+function buyerSupplierIds(){
+  return new Set([...unambiguousSupplierIds, ...checkedAmbiguousIds()]);
+}
+function buyerPurchasesToMove(){
+  const supIds = buyerSupplierIds();
+  // A purchase is Buyer-origin if it's explicitly flagged (recordedByBuyer,
+  // autoCreatedFromOrder, importedHistorical — all set by the Buyer pages)
+  // OR if it references a supplier now confirmed as Buyer-side above (older
+  // manual entries made before those flags existed).
+  return allPurchases.filter(p => p.recordedByBuyer || p.autoCreatedFromOrder || p.importedHistorical || supIds.has(p.supplierId));
+}
+function buyerPaymentsToMove(){
+  const supIds = buyerSupplierIds();
+  return allPayments.filter(p => p.importedHistorical || supIds.has(p.supplierId));
+}
+function updatePreview(){
+  const supIds = buyerSupplierIds();
+  const purchases = buyerPurchasesToMove();
+  const payments = buyerPaymentsToMove();
+  document.getElementById('previewSummary').textContent =
+    `${supIds.size} supplier(s), ${purchases.length} purchase(s), and ${payments.length} payment(s) will move to your separate Buyer storage. ` +
+    `Everything else stays exactly where it is.`;
+}
+
+async function runMigration(){
+  const supIds = buyerSupplierIds();
+  const purchases = buyerPurchasesToMove();
+  const payments = buyerPaymentsToMove();
+  showMsg('migrateMsg', 'Moving…', true);
+  let moved = 0;
+  try{
+    for(const s of allSuppliers){
+      if(!supIds.has(s.id)) continue;
+      const { id, ...data } = s;
+      await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers').doc(id).set(data, {merge: true});
+      await db.collection('users').doc(currentUser.uid).collection('suppliers').doc(id).delete();
+      moved++;
+    }
+    for(const p of purchases){
+      const { id, ...data } = p;
+      await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').doc(id).set(data, {merge: true});
+      await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).delete();
+      moved++;
+    }
+    for(const p of payments){
+      const { id, ...data } = p;
+      await db.collection('users').doc(currentUser.uid).collection('buyerPayments').doc(id).set(data, {merge: true});
+      await db.collection('users').doc(currentUser.uid).collection('payments').doc(id).delete();
+      moved++;
+    }
+    showMsg('migrateMsg', `Done — moved ${moved} record(s). Your Buyer Dashboard, Purchase Entry, and Payment Entry now show only this. Re-scan any time to confirm nothing's left.`, true);
+    document.getElementById('previewCard').classList.add('hidden');
+    document.getElementById('ambiguousCard').classList.add('hidden');
+  }catch(err){
+    showMsg('migrateMsg', `Stopped after moving ${moved} — ${err.message}. Already-moved records are safe; just run the scan again to pick up where this left off.`, false);
+  }
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function showMsg(id, text, ok){
+  const el = document.getElementById(id);
+  if(!el) return;
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+</body>
+</html>

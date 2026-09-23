@@ -178,7 +178,7 @@ async function ensureBuyerPurchaseForOrder(order){
     autoCreatedFromOrder: true,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  const purRef = await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
+  const purRef = await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').add(purchaseData);
 
   for(const s of stockIns){
     await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(s.mappingId).update({
@@ -203,10 +203,10 @@ async function ensureBuyerPurchaseForOrder(order){
   });
 }
 async function ensureSupplierForSeller(sellerUid, sellerName){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers')
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers')
     .where('sellerUid', '==', sellerUid).limit(1).get();
   if(!snap.empty) return snap.docs[0].id;
-  const ref = await db.collection('users').doc(currentUser.uid).collection('suppliers').add({
+  const ref = await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers').add({
     name: sellerName, sellerUid, gstin: '', address: '', stateCode: '', state: '', email: '', phone: '',
     autoCreatedFromOrder: true
   });

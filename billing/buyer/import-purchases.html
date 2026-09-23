@@ -161,7 +161,7 @@ function findMySkuMapping(productName){
 // own off-platform ones) — this file's rows all get attributed to whichever
 // one is picked here, so pick it before reading the file.
 async function loadSuppliers(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers').orderBy('name').get();
   suppliersCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
   const sel = document.getElementById('importSupplier');
   const prev = sel.value;
@@ -178,7 +178,7 @@ function cancelNewSupplier(){
 async function addNewSupplier(){
   const name = document.getElementById('nsName').value.trim();
   if(!name){ showMsg('importUploadMsg', 'Enter a supplier name.', false); return; }
-  const ref = await db.collection('users').doc(currentUser.uid).collection('suppliers').add({
+  const ref = await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers').add({
     name, gstin: document.getElementById('nsGstin').value.trim(), phone: '', email: '', address: '', stateCode: '', state: ''
   });
   await loadSuppliers();
@@ -355,7 +355,7 @@ async function runImport(){
       // (Delete Purchase, Invoice Deletion Requests) would otherwise treat
       // deleting one of these as reason to decrement CURRENT stock, which
       // would be wrong for a purchase that's already long since been used.
-      await db.collection('users').doc(currentUser.uid).collection('purchases').add({
+      await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').add({
         supplierId, supplierName: supplier.name, date: g.date,
         items: g.items.map(i => ({ name: i.name, qty: i.qty, rate: i.rate, gstRate: i.gstRate, priceMode: i.priceMode, taxable: i.taxable, gstAmt: i.gstAmt, total: i.total, linkedSkuMappingId: i.linkedSkuMappingId || null })),
         subtotal, gstTotal, grandTotal: subtotal + gstTotal,
@@ -363,7 +363,7 @@ async function runImport(){
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       if(g.paid > 0){
-        await db.collection('users').doc(currentUser.uid).collection('payments').add({
+        await db.collection('users').doc(currentUser.uid).collection('buyerPayments').add({
           supplierId, supplierName: supplier.name, date: g.date, amount: g.paid, mode: '', note: 'Imported historical payment',
           importedHistorical: true,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()

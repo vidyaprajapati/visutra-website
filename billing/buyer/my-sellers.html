@@ -133,7 +133,7 @@ async function unlinkSeller(linkId, sellerLabel){
    field alone is what separates "real linked seller" from "off-platform
    seller" — no separate collection needed. */
 async function loadOffPlatformSellers(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers').orderBy('name').get();
   offPlatformCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(s => !s.sellerUid);
   renderOffPlatformTable();
 }
@@ -157,7 +157,7 @@ async function saveOffPlatformSeller(){
     email: document.getElementById('opEmail').value.trim()
   };
   const editId = document.getElementById('opEditId').value;
-  const col = db.collection('users').doc(currentUser.uid).collection('suppliers');
+  const col = db.collection('users').doc(currentUser.uid).collection('buyerSuppliers');
   try{
     if(editId){
       await col.doc(editId).set(data, {merge: true});
@@ -197,14 +197,14 @@ async function deleteOffPlatformSeller(id){
   // so removing one that still has purchases would leave them pointing at
   // nothing — check first and point the person at Purchase Entry instead of
   // silently leaving orphaned records.
-  const purchaseSnap = await db.collection('users').doc(currentUser.uid).collection('purchases')
+  const purchaseSnap = await db.collection('users').doc(currentUser.uid).collection('buyerPurchases')
     .where('supplierId', '==', id).limit(1).get();
   if(!purchaseSnap.empty){
     alert('This supplier has purchase records in Purchase Entry — remove those first, or just leave this supplier as-is.');
     return;
   }
   if(!confirm('Remove this off-platform seller?')) return;
-  await db.collection('users').doc(currentUser.uid).collection('suppliers').doc(id).delete();
+  await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers').doc(id).delete();
   await loadOffPlatformSellers();
 }
 function showMsg(elId, text, ok){

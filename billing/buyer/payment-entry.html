@@ -100,7 +100,7 @@ async function finalizeRespondedConfirmations(){
     .where('buyerUid', '==', currentUser.uid).where('status', 'in', ['APPROVED', 'REJECTED']).get();
   const settled = snap.docs.map(d => d.data()).filter(c => c.buyerPaymentId);
   for(const c of settled){
-    const payRef = db.collection('users').doc(currentUser.uid).collection('payments').doc(c.buyerPaymentId);
+    const payRef = db.collection('users').doc(currentUser.uid).collection('buyerPayments').doc(c.buyerPaymentId);
     const paySnap = await payRef.get();
     if(!paySnap.exists || paySnap.data().status !== 'PENDING_SELLER_CONFIRMATION') continue; // already finalized
     if(c.status === 'APPROVED'){
@@ -116,13 +116,13 @@ async function finalizeRespondedConfirmations(){
 }
 
 async function loadSuppliers(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers').orderBy('name').get();
   suppliersCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
   document.getElementById('payEntrySupplier').innerHTML = '<option value="">Select supplier…</option>' +
     suppliersCache.map(s => `<option value="${s.id}">${esc(s.name)}${s.sellerUid ? ' (VISUTRA seller)' : ''}</option>`).join('');
 }
 async function loadPayments(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('payments').orderBy('date','desc').limit(100).get();
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerPayments').orderBy('date','desc').limit(100).get();
   paymentsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => !p.deleted);
   document.getElementById('paymentsTable').innerHTML = paymentsCache.map(p => {
     const status = p.status === 'PENDING_SELLER_CONFIRMATION'
@@ -147,7 +147,7 @@ async function savePaymentEntry(){
       // their confirmation that it actually arrived before it counts as a
       // real payment on either side — see finalizeRespondedConfirmations()
       // for how this resolves once they respond.
-      const payRef = await db.collection('users').doc(currentUser.uid).collection('payments').add({
+      const payRef = await db.collection('users').doc(currentUser.uid).collection('buyerPayments').add({
         supplierId, supplierName: supplier.name, date, amount, mode, note,
         status: 'PENDING_SELLER_CONFIRMATION',
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -160,7 +160,7 @@ async function savePaymentEntry(){
       });
       showMsg(`Payment of ₹${fmtMoney(amount)} to ${supplier.name} recorded — waiting for them to confirm it arrived.`, true);
     } else {
-      await db.collection('users').doc(currentUser.uid).collection('payments').add({
+      await db.collection('users').doc(currentUser.uid).collection('buyerPayments').add({
         supplierId, supplierName: supplier.name, date, amount, mode, note,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });

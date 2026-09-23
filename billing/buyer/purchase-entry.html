@@ -131,7 +131,7 @@ auth.onAuthStateChanged(async user => {
 });
 
 async function loadSuppliers(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('suppliers').orderBy('name').get();
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers').orderBy('name').get();
   suppliersCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
   const sel = document.getElementById('pSupplier');
   const prev = sel.value;
@@ -155,7 +155,7 @@ async function addNewSupplier(){
     email: document.getElementById('nsEmail').value.trim(),
     address: '', stateCode: '', state: ''
   };
-  const ref = await db.collection('users').doc(currentUser.uid).collection('suppliers').add(data);
+  const ref = await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers').add(data);
   cancelNewSupplier();
   await loadSuppliers();
   document.getElementById('pSupplier').value = ref.id;
@@ -298,7 +298,7 @@ async function savePurchase(){
   };
 
   try{
-    await db.collection('users').doc(currentUser.uid).collection('purchases').add(purchaseData);
+    await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').add(purchaseData);
 
     // Auto stock-in: any line matched to one of your own Buyer SKU Master
     // products bumps its stock exactly the way an order-acceptance would —
@@ -321,7 +321,7 @@ async function savePurchase(){
     }
 
     if(paidNow > 0){
-      await db.collection('users').doc(currentUser.uid).collection('payments').add({
+      await db.collection('users').doc(currentUser.uid).collection('buyerPayments').add({
         supplierId, supplierName: supplier.name, date, amount: paidNow, mode: '', note: 'Paid with purchase',
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
@@ -345,12 +345,12 @@ async function savePurchase(){
 }
 
 async function loadPurchases(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').limit(100).get();
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').orderBy('date','desc').limit(100).get();
   purchasesCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => !p.deleted);
   renderPurchasesTable();
 }
 async function loadPayments(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('payments').get();
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerPayments').get();
   // Excludes payments still awaiting the seller's confirmation — see
   // payment-entry.html — since those haven't actually been credited yet.
   paymentsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => !p.deleted && p.status !== 'PENDING_SELLER_CONFIRMATION');

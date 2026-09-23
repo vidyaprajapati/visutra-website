@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GST Billing | VISUTRA</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"></a>
+  <div class="topbar-title" id="topbarTitle">Business Profile</div>
+  <div class="topbar-right">
+    <div class="topbar-switch">
+      <button class="btn small" id="topbarBillingBtn" onclick="activateView('new-invoice')">GST Billing</button>
+      <button class="btn small" id="topbarPurchaseBtn" onclick="activateView('purchases')">Purchase Entry</button>
+      <a href="#stock" class="btn small nav-link" id="topbarStockBtn" data-view="stock">Stock</a>
+    </div>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="sidebar">
+    <a href="#profile" class="nav-link active" data-view="profile">Business Profile</a>
+    <a href="#trash" class="nav-link" data-view="trash">Recycle Bin</a>
+    <a href="seller/order-receive.html">Order Receive</a>
+    <div class="sidebar-divider"></div>
+
+    <div class="sidebar-section-label">GST Billing</div>
+    <a href="#customers" class="nav-link" data-view="customers" data-group="billing">Customers</a>
+    <a href="#new-invoice" class="nav-link" data-view="new-invoice" data-group="billing">New Invoice</a>
+    <a href="#invoices" class="nav-link" data-view="invoices" data-group="billing">Invoice History</a>
+    <a href="#receipt-entry" class="nav-link" data-view="receipt-entry" data-group="billing">Receipt Entry</a>
+    <a href="#customer-dashboard" class="nav-link" data-view="customer-dashboard" data-group="billing">Customer Dashboard</a>
+
+    <div class="sidebar-section-label">Purchase Entry</div>
+    <a href="#suppliers" class="nav-link" data-view="suppliers" data-group="purchase">Suppliers</a>
+    <a href="#purchases" class="nav-link" data-view="purchases" data-group="purchase">Purchases</a>
+    <a href="#payment-entry" class="nav-link" data-view="payment-entry" data-group="purchase">Payment Entry</a>
+    <a href="#supplier-dashboard" class="nav-link" data-view="supplier-dashboard" data-group="purchase">Supplier Dashboard</a>
+
+    <div class="sidebar-section-label">Stock</div>
+    <a href="#stock" class="nav-link" data-view="stock">Stock Management</a>
+    <a href="#products" class="nav-link" data-view="products">Products</a>
+    <a href="#purchase-products" class="nav-link" data-view="purchase-products">Purchase Products</a>
+
+    <div class="sidebar-section-label">GST Filing</div>
+    <a href="#gstr1" class="nav-link" data-view="gstr1">GSTR-1 Filing (Sales &amp; Purchases)</a>
+  </div>
+
+  <div class="main">
+
+    <!-- BUSINESS PROFILE -->
+    <div id="view-profile" class="view">
+      <div class="card">
+        <h2>GST Billing</h2>
+        <p class="sub">Create GST-compliant tax invoices for your customers — CGST/SGST or IGST calculated automatically, sequential invoice numbering, PDF download, and email delivery straight to the buyer. File your GSTR-1 directly from saved invoices.</p>
+        <button class="btn primary" onclick="activateView('new-invoice')">Go to GST Billing</button>
+      </div>
+
+      <div class="card">
+        <h2>Purchase Entry</h2>
+        <p class="sub">Record what you buy from suppliers — purchase price, GST, and payments made — and always know the balance you still owe. Track everything supplier-wise on the Supplier Dashboard.</p>
+        <button class="btn primary" onclick="activateView('purchases')">Go to Purchase Entry</button>
+      </div>
+
+      <div class="card">
+        <h2>Business Profile</h2>
+        <p class="sub">This information appears on every invoice you generate. Fill it in before creating your first invoice.</p>
+        <div class="grid2">
+          <div class="field"><label>Legal name (as registered with GST)</label><input id="bizLegalName" placeholder="e.g. Shri Ram Pistons & Rings Ltd."></div>
+          <div class="field"><label>Business / trade name</label><input id="bizName" placeholder="e.g. VISUTRA"></div>
+        </div>
+        <div class="field"><label>GSTIN</label><input id="bizGstin" placeholder="e.g. 09BVHPP4321G1ZJ" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('bizGstin','bizGstinMsg','bizState')"><p class="msg" id="bizGstinMsg"></p></div>
+        <div class="field"><label>Address</label><textarea id="bizAddress"></textarea></div>
+        <div class="grid2">
+          <div class="field"><label>State</label><select id="bizState"></select></div>
+          <div class="field"><label>Phone</label><input id="bizPhone"></div>
+        </div>
+        <button class="btn primary" onclick="saveProfile()">Save Profile</button>
+        <p class="msg" id="profileMsg"></p>
+      </div>
+
+      <div class="card">
+        <h2>Signature</h2>
+        <p class="sub">This is embedded on every invoice PDF as "Authorized Signatory" — draw it below, or upload a photo/scan of your signature (JPG or PNG).</p>
+
+        <div style="display:flex;gap:10px;margin-bottom:14px">
+          <button type="button" class="btn small primary" id="sigModeDrawBtn" onclick="setSignatureMode('draw')">Draw</button>
+          <button type="button" class="btn small" id="sigModeUploadBtn" onclick="setSignatureMode('upload')">Upload image</button>
+        </div>
+
+        <div id="sigDrawPanel">
+          <canvas id="sigPad" class="sig-pad" width="400" height="150"></canvas>
+          <div style="margin-top:12px"><button class="btn" onclick="clearSignature()">Clear</button></div>
+        </div>
+
+        <div id="sigUploadPanel" class="hidden">
+          <input type="file" id="sigFileInput" accept="image/png,image/jpeg" onchange="handleSignatureUpload(event)">
+          <p class="sub" style="margin-top:8px">JPG or PNG — it'll be scaled down to fit the same box as the drawing pad.</p>
+          <canvas id="sigUploadPreview" class="sig-pad" width="400" height="150" style="margin-top:10px"></canvas>
+        </div>
+
+        <div style="margin-top:14px"><button class="btn primary" onclick="saveSignature()">Save Signature</button></div>
+        <p class="msg" id="sigMsg"></p>
+        <div id="sigPreviewWrap" class="hidden" style="margin-top:14px">
+          <p class="sub" style="margin-bottom:6px">Currently saved:</p>
+          <img id="sigPreview" alt="Your saved signature" style="max-height:60px;border:1px solid var(--thread);border-radius:8px;background:#fff;padding:6px">
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Bank Details</h2>
+        <p class="sub">Shown in a "Payment Details" block on every invoice PDF, so customers know where to pay. All optional — leave blank to omit the block entirely.</p>
+        <div class="grid2">
+          <div class="field"><label>Account holder name</label><input id="bankHolderName" placeholder="e.g. VISUTRA (or your legal name)"></div>
+          <div class="field"><label>Bank name</label><input id="bankName" placeholder="e.g. HDFC Bank"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Account number</label><input id="bankAccountNumber"></div>
+          <div class="field"><label>IFSC code</label><input id="bankIfsc" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()"></div>
+        </div>
+        <div class="field"><label>UPI ID</label><input id="bankUpiId" placeholder="e.g. yourname@okhdfcbank"></div>
+
+        <div class="field">
+          <label>Payment QR code (optional — e.g. a screenshot of your UPI QR from Google Pay/PhonePe)</label>
+          <input type="file" id="bankQrFileInput" accept="image/png,image/jpeg" onchange="handleBankQrUpload(event)">
+        </div>
+        <canvas id="bankQrUploadPreview" class="sig-pad hidden" width="180" height="180" style="margin-top:10px"></canvas>
+
+        <div style="margin-top:14px"><button class="btn primary" onclick="saveBankDetails()">Save Bank Details</button></div>
+        <p class="msg" id="bankMsg"></p>
+        <div id="bankQrPreviewWrap" class="hidden" style="margin-top:14px">
+          <p class="sub" style="margin-bottom:6px">Currently saved QR:</p>
+          <img id="bankQrPreview" alt="Your saved payment QR code" style="max-height:120px;border:1px solid var(--thread);border-radius:8px;background:#fff;padding:6px">
+          <button class="btn small danger" style="margin-left:10px" onclick="removeBankQr()">Remove QR</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STOCK MANAGEMENT -->
+    <div id="view-stock" class="view hidden">
+      <div class="card" id="reorderCard">
+        <h2>Needs Reorder</h2>
+        <p class="sub">Products at or below the reorder level you set in the Product Master, so this shows nothing until you set a level on at least one product.</p>
+        <table><thead><tr><th>Product</th><th>Current Stock</th><th>Reorder Level</th><th>Short By</th></tr></thead>
+        <tbody id="reorderTable"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Current Stock</h2>
+        <p class="sub">Stock goes up automatically when you record a purchase of a linked purchase product, and down when you apply a monthly marketplace sales upload below. Use "Adjust Stock" for an opening balance or a correction.</p>
+        <table><thead><tr><th>Product</th><th>Unit</th><th>Current Stock</th><th>Reorder Level</th></tr></thead>
+        <tbody id="stockTable"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Monthly Stock Report — Opening &amp; Closing</h2>
+        <p class="sub">Opening and closing stock for each product for the month you pick, reconstructed from every stock movement on record (purchases, sales, adjustments, reconciliation uploads) — not just the last 200 shown in Stock Movement History below.</p>
+        <div class="field" style="max-width:220px"><label>Month</label><input id="stockReportMonth" type="month" onchange="renderMonthlyStockReport()"></div>
+        <table style="margin-top:12px"><thead><tr><th>Product</th><th>Opening Stock</th><th>Stock In</th><th>Stock Out</th><th>Closing Stock</th></tr></thead>
+        <tbody id="monthlyStockReportTable"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Daily Stock Movement — Selected Month</h2>
+        <p class="sub">Every movement within the month picked above, in date order.</p>
+        <table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Note</th></tr></thead>
+        <tbody id="dailyStockMovementTable"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Adjust Stock</h2>
+        <p class="sub">For an opening balance, a stock count correction, damage, or anything else outside the normal purchase/sale flow. Use a negative number to reduce stock.</p>
+        <div class="grid3">
+          <div class="field"><label>Product</label><select id="adjProduct"></select></div>
+          <div class="field"><label>Quantity change</label><input id="adjQty" type="number" step="1" placeholder="e.g. 50 or -5"></div>
+          <div class="field"><label>Note</label><input id="adjNote" placeholder="e.g. Opening balance"></div>
+        </div>
+        <button class="btn primary" onclick="adjustStock()">Apply Adjustment</button>
+        <p class="msg" id="adjMsg"></p>
+      </div>
+
+      <div class="card">
+        <h2>Monthly Inventory Reconciliation</h2>
+        <p class="sub">Upload the report(s) you download from Meesho, Flipkart and/or Amazon for the month. Everything is read in your browser only. Meesho and Flipkart reports are recognised automatically by their columns — delivered items reduce stock, and cancelled/RTO/returned items add stock back, since those physically come back to you. Other formats (like Amazon) fall back to treating every row as a sale, same as before. The first time you upload, you'll map each product/SKU to your Product Master once — after that, it's remembered automatically in future months.</p>
+        <p class="sub">This only updates stock — it doesn't file GSTR-1. For that, use the same report files in the <a href="../tools/gst-return-tool.html" target="_blank">GST Return Tool ↗</a> (opens in a new tab).</p>
+        <div class="grid2">
+          <div class="field"><label>Report files (.csv, .xlsx, .xls) — you can select more than one</label><input id="stockFiles" type="file" multiple accept=".csv,.xlsx,.xls"></div>
+          <div class="field"><label>Period / label (e.g. "March 2026")</label><input id="stockPeriod" placeholder="March 2026"></div>
+        </div>
+        <button class="btn" onclick="parseStockFiles()">Read Files</button>
+        <p class="msg" id="stockUploadMsg"></p>
+
+        <div id="stockColumnMapWrap" class="hidden" style="margin-top:18px">
+          <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 1 — Which column is the product, and which is the quantity?</h3>
+          <div id="stockColumnMapList"></div>
+          <button class="btn primary" style="margin-top:10px" onclick="aggregateStockUpload()">Next: Match Products</button>
+        </div>
+
+        <div id="stockAggWrap" class="hidden" style="margin-top:18px">
+          <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 2 — Match each product/SKU, then apply</h3>
+          <p class="sub">For Meesho/Flipkart sheets, Sold and Returned are read from the status column automatically — Net is what actually changes stock (down for a sale, up for a cancellation/RTO/return).</p>
+          <table><thead><tr><th>From report</th><th>Sold</th><th>Returned</th><th>Net Stock Change</th><th>Matches to</th></tr></thead>
+          <tbody id="stockAggTable"></tbody></table>
+          <button class="btn primary" style="margin-top:14px" onclick="applyStockUpload()">Apply &amp; Update Stock</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Stock Movement History</h2>
+        <div class="grid3" style="align-items:end">
+          <div class="field"><label>From date</label><input id="stockMoveFrom" type="date" onchange="renderStockMovementsTable()"></div>
+          <div class="field"><label>To date</label><input id="stockMoveTo" type="date" onchange="renderStockMovementsTable()"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn small" style="width:100%" onclick="exportStockMovements()">Export to Excel</button></div>
+        </div>
+        <table><thead><tr><th>Date</th><th>Type</th><th>Product</th><th>Qty Change</th><th>Note</th></tr></thead>
+        <tbody id="stockMovementsTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- RECYCLE BIN -->
+    <div id="view-trash" class="view hidden">
+      <div class="card">
+        <h2>Recycle Bin</h2>
+        <p class="sub">Deleted purchases, payments and invoices sit here for 30 days before being permanently removed, in case something was deleted by mistake. Restoring a purchase re-applies any stock it had added. Invoices already filed in a GST return never auto-purge, even past 30 days.</p>
+      </div>
+      <div class="card">
+        <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Deleted Purchases</h3>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Products</th><th>Total</th><th>Deleted On</th><th></th></tr></thead>
+        <tbody id="trashPurchasesTable"></tbody></table>
+      </div>
+      <div class="card">
+        <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Deleted Payments</h3>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Deleted On</th><th></th></tr></thead>
+        <tbody id="trashPaymentsTable"></tbody></table>
+      </div>
+      <div class="card">
+        <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Deleted Invoices</h3>
+        <table><thead><tr><th>Invoice #</th><th>Date</th><th>Customer</th><th>Total</th><th>Deleted On</th><th></th></tr></thead>
+        <tbody id="trashInvoicesTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- PRODUCTS -->
+    <div id="view-products" class="view hidden">
+      <div class="card">
+        <h2>Product Master</h2>
+        <p class="sub">Set up each product once with its HSN code and GST rate — you'll just pick from this list when billing. Enter the price <b>including GST</b> (your selling/MRP price) — the taxable value used on invoices is worked out for you automatically.</p>
+        <div class="grid3">
+          <div class="field"><label>Product name</label><input id="pName"></div>
+          <div class="field"><label>HSN / SAC code</label><input id="pHsn"></div>
+          <div class="field"><label>Unit</label><input id="pUnit" placeholder="e.g. PCS, NOS, KG"></div>
+        </div>
+        <div class="field" style="max-width:260px"><label>SKU (optional — used by linked buyers' SKU Master)</label><input id="pSku" placeholder="e.g. WMC-001"></div>
+        <div class="grid3">
+          <div class="field"><label>Price incl. GST (₹)</label><input id="pPriceIncl" type="number" step="0.01" oninput="updateProductExclusivePreview()"></div>
+          <div class="field"><label>GST rate</label>
+            <select id="pGst" onchange="updateProductExclusivePreview()">
+              <option value="0">0%</option><option value="5">5%</option>
+              <option value="12">12%</option><option value="18">18%</option>
+              <option value="28">28%</option>
+            </select>
+          </div>
+          <div class="field"><label>Price excl. GST — taxable value (₹)</label><input id="pPrice" type="text" readonly style="background:var(--ivory);color:var(--muted)"></div>
+        </div>
+        <div class="field" style="max-width:260px"><label>Reorder level (optional)</label><input id="pReorderLevel" type="number" min="0" step="1" placeholder="e.g. 20"></div>
+        <button class="btn primary" onclick="saveProduct()">Add Product</button>
+        <input type="hidden" id="pEditId">
+        <p class="msg" id="productMsg"></p>
+
+      </div>
+      <div class="card">
+        <table><thead><tr><th>Name</th><th>SKU</th><th>HSN</th><th>Unit</th><th>Price (excl. GST)</th><th>GST</th><th>Price (incl. GST)</th><th>Stock</th><th>Reorder Level</th><th>Active</th><th title="Whether linked buyer accounts can see this product">Buyer Visible</th><th></th></tr></thead>
+        <tbody id="productsTable"></tbody></table>
+        <p class="sub" style="margin-top:10px">Click <b>Active</b>/<b>Buyer Visible</b> on a row to toggle it. A product only shows up in a linked buyer's catalog when it's both Active and Buyer Visible. Link a buyer to your account from <a href="#customers" onclick="activateView('customers')">Customers</a>.</p>
+      </div>
+
+    </div>
+
+    <!-- CUSTOMERS -->
+    <div id="view-customers" class="view hidden">
+      <div class="card">
+        <h2>Customers</h2>
+        <div class="grid2">
+          <div class="field"><label>Legal name (as registered with GST)</label><input id="cLegalName"></div>
+          <div class="field"><label>Customer / trade name</label><input id="cName"></div>
+        </div>
+        <div class="field"><label>GSTIN (leave blank if unregistered)</label><input id="cGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('cGstin','cGstinMsg','cState')"><p class="msg" id="cGstinMsg"></p></div>
+        <div class="field"><label>Address</label><textarea id="cAddress"></textarea></div>
+        <div class="grid3">
+          <div class="field"><label>State</label><select id="cState"></select></div>
+          <div class="field"><label>Email</label><input id="cEmail" type="email"></div>
+          <div class="field"><label>Phone</label><input id="cPhone"></div>
+        </div>
+        <input type="hidden" id="cEditId">
+        <button class="btn primary" onclick="saveCustomer()">Add Customer</button>
+        <p class="msg" id="customerMsg"></p>
+      </div>
+
+      <div class="card">
+        <table><thead><tr><th>Legal Name</th><th>Name</th><th>GSTIN</th><th>State</th><th>Email</th><th>Buyer Link</th><th></th></tr></thead>
+        <tbody id="customersTable"></tbody></table>
+        <p class="sub" style="margin-top:10px">To let a customer browse the products you've marked "Buyer Visible" in Product Master, click <b>Link Buyer</b> on their row and enter the email they used to turn on Buyer Features (My Account page) — no need to open Edit first.</p>
+        <p class="msg" id="buyerLinkMsg"></p>
+      </div>
+    </div>
+
+    <!-- SUPPLIERS -->
+    <div id="view-suppliers" class="view hidden">
+      <div class="card">
+        <h2>Supplier Master</h2>
+        <p class="sub">Add each supplier once — you'll pick from this list when recording a purchase. Click "Ledger" on any row to see their full product-wise, date-wise purchase and payment history.</p>
+        <div class="grid2">
+          <div class="field"><label>Legal name (as registered with GST)</label><input id="sLegalName"></div>
+          <div class="field"><label>Supplier / trade name</label><input id="sName"></div>
+        </div>
+        <div class="field"><label>GSTIN (leave blank if unregistered)</label><input id="sGstin" style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" onblur="validateGstin('sGstin','sGstinMsg','sState')"><p class="msg" id="sGstinMsg"></p></div>
+        <div class="field"><label>Address</label><textarea id="sAddress"></textarea></div>
+        <div class="grid3">
+          <div class="field"><label>State</label><select id="sState"></select></div>
+          <div class="field"><label>Email</label><input id="sEmail" type="email"></div>
+          <div class="field"><label>Phone</label><input id="sPhone"></div>
+        </div>
+        <input type="hidden" id="sEditId">
+        <button class="btn primary" onclick="saveSupplier()">Add Supplier</button>
+        <p class="msg" id="supplierMsg"></p>
+      </div>
+      <div class="card">
+        <table><thead><tr><th>Legal Name</th><th>Name</th><th>GSTIN</th><th>State</th><th>Phone</th><th></th></tr></thead>
+        <tbody id="suppliersTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- PURCHASE PRODUCTS -->
+    <div id="view-purchase-products" class="view hidden">
+      <div class="card">
+        <h2>Purchase Product Master</h2>
+        <p class="sub">A separate product list just for purchases (name and unit only) — since the purchase (cost) price is different from the selling price in your GST billing Products list, and even varies supplier to supplier, you enter the price and GST rate manually for every purchase instead of a fixed default.</p>
+        <div class="grid3">
+          <div class="field"><label>Product name</label><input id="ppName"></div>
+          <div class="field"><label>HSN code</label><input id="ppHsn" placeholder="For GSTR-1 purchase register"></div>
+          <div class="field"><label>Unit</label><input id="ppUnit" placeholder="e.g. PCS, NOS, KG"></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>Restocks which billing product? (optional)</label><select id="ppLinkedProduct"><option value="">Not linked — doesn't affect stock</option></select></div>
+        </div>
+        <button class="btn primary" onclick="savePurchaseProduct()">Add Purchase Product</button>
+        <input type="hidden" id="ppEditId">
+        <p class="msg" id="purchaseProductMsg"></p>
+      </div>
+      <div class="card">
+        <table><thead><tr><th>Name</th><th>HSN</th><th>Unit</th><th>Restocks</th><th></th></tr></thead>
+        <tbody id="purchaseProductsTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- PURCHASES -->
+    <div id="view-purchases" class="view hidden">
+      <div class="card">
+        <h2 id="purFormTitle">New Purchase</h2>
+        <p class="sub">Pick a supplier, then a product, and enter the unit price and GST rate you were charged this time — choose whether the price is including or excluding GST from the dropdown next to it, since suppliers quote it differently. If you've bought this product from this supplier before, the last price (and price type) you used is filled in automatically — adjust it if this purchase is different.</p>
+        <div class="grid2">
+          <div class="field"><label>Supplier</label><select id="purSupplier" onchange="onPurchaseSupplierChange()"></select></div>
+          <div class="field"><label>Purchase date</label><input id="purDate" type="date"></div>
+        </div>
+
+        <table class="line-items">
+          <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Unit Price (₹)</th><th>Price Type</th><th>GST</th><th>Taxable</th><th>GST Amt</th><th>Total (incl. GST)</th><th></th></tr></thead>
+          <tbody id="purchaseLineItemsTable"></tbody>
+        </table>
+        <button class="btn small" style="margin-top:10px" onclick="addPurchaseLineItem()">+ Add line item</button>
+
+        <div class="totals-box" id="purchaseTotalsBox"></div>
+
+        <div class="grid2" style="margin-top:16px">
+          <div class="field"><label>Amount paid to supplier now (₹) — optional</label><input id="purPaidNow" type="number" min="0" step="0.01" value="0" oninput="recalcPurchaseTotals(); updateAmountWords('purPaidNow','purPaidNowWords')">
+            <p class="sub" id="purPaidNowWords" style="margin-top:4px"></p>
+          </div>
+          <div class="field"><label>Balance to this supplier after this purchase</label><input id="purBalancePreview" type="text" readonly style="background:var(--ivory);color:var(--muted)"></div>
+        </div>
+
+        <input type="hidden" id="purEditId">
+        <div style="margin-top:10px;display:flex;gap:10px;align-items:center">
+          <button class="btn primary" id="purSaveBtn" onclick="savePurchase()">Save Purchase</button>
+          <button class="btn small hidden" id="purCancelEditBtn" onclick="cancelEditPurchase()">Cancel Edit</button>
+        </div>
+        <p class="msg" id="purchaseMsg"></p>
+      </div>
+
+      <div class="card">
+        <h2>Purchase History</h2>
+        <p class="sub">Click a supplier's name to open their ledger — date-wise purchases, payments made, and balance due.</p>
+        <div class="grid3" style="align-items:end">
+          <div class="field"><label>From date</label><input id="purchaseHistFrom" type="date" onchange="renderPurchases()"></div>
+          <div class="field"><label>To date</label><input id="purchaseHistTo" type="date" onchange="renderPurchases()"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn small" style="width:100%" onclick="exportPurchaseHistory()">Export to Excel</button></div>
+        </div>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Product</th><th>Qty</th><th>Total (incl. GST)</th><th></th></tr></thead>
+        <tbody id="purchasesTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- PAYMENT ENTRY -->
+    <div id="view-payment-entry" class="view hidden">
+      <div class="card">
+        <h2>Payment Entry</h2>
+        <p class="sub">Record a payment made to a supplier — for a specific purchase, an advance, or just catching up on an old balance. This is separate from purchase entry, so you can log a payment any time without buying anything new.</p>
+        <div class="grid2">
+          <div class="field"><label>Supplier</label><select id="payEntrySupplier"></select></div>
+          <div class="field"><label>Payment date</label><input id="payEntryDate" type="date"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Amount (₹)</label><input id="payEntryAmount" type="number" min="0" step="0.01" oninput="updateAmountWords('payEntryAmount','payEntryAmountWords')">
+            <p class="sub" id="payEntryAmountWords" style="margin-top:4px"></p>
+          </div>
+          <div class="field"><label>Mode (Cash / UPI / Bank...)</label><input id="payEntryMode"></div>
+        </div>
+        <div class="field"><label>Note (optional)</label><input id="payEntryNote"></div>
+        <button class="btn primary" onclick="savePaymentEntry()">Save Payment</button>
+        <p class="msg" id="paymentEntryMsg"></p>
+      </div>
+      <div class="card">
+        <h2>Payment History</h2>
+        <p class="sub">Click a supplier's name to open their full dashboard.</p>
+        <div class="grid3" style="align-items:end">
+          <div class="field"><label>From date</label><input id="paymentHistFrom" type="date" onchange="renderPaymentsTable()"></div>
+          <div class="field"><label>To date</label><input id="paymentHistTo" type="date" onchange="renderPaymentsTable()"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn small" style="width:100%" onclick="exportPaymentHistory()">Export to Excel</button></div>
+        </div>
+        <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Mode</th><th>Note</th><th></th></tr></thead>
+        <tbody id="paymentsEntryTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- SUPPLIER DASHBOARD -->
+    <div id="view-supplier-dashboard" class="view hidden">
+      <div class="card">
+        <h2>All Suppliers — Amount Payable</h2>
+        <p class="sub">Every supplier ranked by balance due, highest first, so you can see who to pay next at a glance.</p>
+        <table><thead><tr><th>Supplier</th><th>Total Purchases</th><th>Total Paid</th><th>Balance to Pay</th><th></th></tr></thead>
+        <tbody id="payablesTable"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Supplier Dashboard</h2>
+        <p class="sub">Pick a supplier to review everything at a glance — purchase entries, items purchased, amount paid, and balance still to pay.</p>
+        <div class="field" style="max-width:320px"><label>Supplier</label><select id="dashSupplier" onchange="renderSupplierDashboard(this.value)"></select></div>
+
+        <div id="dashSummaryWrap" class="hidden">
+          <div class="grid3" style="margin-top:8px">
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Purchase Entries</h3><p style="font-size:20px;font-weight:700;margin:0" id="dashEntries">0</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Items Purchased</h3><p style="font-size:20px;font-weight:700;margin:0" id="dashItems">0</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Purchase Value</h3><p style="font-size:20px;font-weight:700;margin:0" id="dashTotalPurchase">₹0.00</p></div>
+          </div>
+          <div class="grid3" style="margin-top:12px">
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Paid</h3><p style="font-size:20px;font-weight:700;margin:0" id="dashTotalPaid">₹0.00</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Balance to Pay</h3><p style="font-size:20px;font-weight:700;margin:0;color:var(--paprika-dark)" id="dashBalance">₹0.00</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Last Purchase</h3><p style="font-size:14px;font-weight:600;margin:0" id="dashLastPurchase">—</p></div>
+          </div>
+          <div style="margin-top:18px;max-height:320px;overflow-y:auto">
+            <table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th>Qty</th><th>Purchase (Dr)</th><th>Paid (Cr)</th><th>Balance</th><th></th></tr></thead>
+            <tbody id="dashTable"></tbody></table>
+          </div>
+        </div>
+        <p class="sub hidden" id="dashEmptyMsg">No purchases or payments recorded for this supplier yet.</p>
+      </div>
+    </div>
+
+    <!-- NEW INVOICE -->
+    <div id="view-new-invoice" class="view hidden">
+      <div class="card">
+        <h2>New Invoice</h2>
+        <div class="grid2">
+          <div class="field"><label>Customer</label><select id="invCustomer" onchange="recalcTotals()"></select></div>
+          <div class="field"><label>Invoice date</label><input id="invDate" type="date"></div>
+        </div>
+        <div class="field" style="max-width:260px">
+          <label><input type="checkbox" id="invReverseCharge" style="width:auto;display:inline-block;margin-right:6px">Tax payable on reverse charge</label>
+        </div>
+
+        <table class="line-items">
+          <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Rate (excl. GST)</th><th>Disc %</th><th>Taxable</th><th>GST</th><th>GST Amt</th><th>Total (incl. GST)</th><th></th></tr></thead>
+          <tbody id="lineItemsTable"></tbody>
+        </table>
+        <button class="btn small" style="margin-top:10px" onclick="addLineItem()">+ Add line item</button>
+
+        <div class="totals-box" id="totalsBox"></div>
+
+        <div class="grid2" style="margin-top:16px">
+          <div class="field"><label>Amount received now (₹) — optional</label><input id="invReceivedNow" type="number" min="0" step="0.01" value="0" oninput="updateAmountWords('invReceivedNow','invReceivedNowWords')">
+            <p class="sub" id="invReceivedNowWords" style="margin-top:4px"></p>
+          </div>
+        </div>
+
+        <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn primary" onclick="saveAndGenerate(false)">Save &amp; Download PDF</button>
+          <button class="btn primary" onclick="saveAndGenerate(true)">Save, Download &amp; Email Buyer</button>
+        </div>
+        <p class="msg" id="invoiceMsg"></p>
+      </div>
+    </div>
+
+    <!-- INVOICE HISTORY -->
+    <div id="view-invoices" class="view hidden">
+      <div class="card">
+        <h2>Invoice History</h2>
+        <div class="grid3" style="align-items:end">
+          <div class="field"><label>From date</label><input id="invoiceHistFrom" type="date" onchange="loadInvoices()"></div>
+          <div class="field"><label>To date</label><input id="invoiceHistTo" type="date" onchange="loadInvoices()"></div>
+          <div class="field"><label>&nbsp;</label><button class="btn small" style="width:100%" onclick="exportInvoiceHistory()">Export to Excel</button></div>
+        </div>
+        <table><thead><tr><th>Invoice #</th><th>Date</th><th>Customer</th><th>Product</th><th>Qty</th><th>Total</th><th>Emailed</th><th></th></tr></thead>
+        <tbody id="invoicesTable"></tbody></table>
+        <p class="msg" id="invoiceHistMsg"></p>
+      </div>
+    </div>
+
+    <!-- RECEIPT ENTRY (money received from a customer — the receivables counterpart to Payment Entry) -->
+    <div id="view-receipt-entry" class="view hidden">
+      <div class="card">
+        <h2 id="receiptFormTitle">Receipt Entry</h2>
+        <p class="sub">Record money received from a customer — for a specific invoice, an advance, or catching up on an old balance. Separate from New Invoice, so you can log a receipt any time without billing anything new.</p>
+        <div class="grid2">
+          <div class="field"><label>Customer</label><select id="receiptCustomer"></select></div>
+          <div class="field"><label>Receipt date</label><input id="receiptDate" type="date"></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label>Amount (₹)</label><input id="receiptAmount" type="number" min="0" step="0.01" oninput="updateAmountWords('receiptAmount','receiptAmountWords')">
+            <p class="sub" id="receiptAmountWords" style="margin-top:4px"></p>
+          </div>
+          <div class="field"><label>Mode (Cash / UPI / Bank...)</label><input id="receiptMode"></div>
+        </div>
+        <div class="field"><label>Note (optional)</label><input id="receiptNote"></div>
+        <input type="hidden" id="receiptEditId">
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn primary" onclick="saveReceipt()">Save Receipt</button>
+          <button class="btn small hidden" id="receiptCancelEditBtn" onclick="cancelEditReceipt()">Cancel Edit</button>
+        </div>
+        <p class="msg" id="receiptMsg"></p>
+      </div>
+      <div class="card">
+        <h2>Receipt History</h2>
+        <p class="sub">Click a customer's name to open their full dashboard.</p>
+        <div class="grid3" style="align-items:end">
+          <div class="field"><label>From date</label><input id="receiptHistFrom" type="date" onchange="renderReceiptsTable()"></div>
+          <div class="field"><label>To date</label><input id="receiptHistTo" type="date" onchange="renderReceiptsTable()"></div>
+        </div>
+        <table><thead><tr><th>Date</th><th>Customer</th><th>Amount</th><th>Mode</th><th>Note</th><th></th></tr></thead>
+        <tbody id="receiptsEntryTable"></tbody></table>
+      </div>
+    </div>
+
+    <!-- CUSTOMER DASHBOARD (receivables — the mirror of Supplier Dashboard) -->
+    <div id="view-customer-dashboard" class="view hidden">
+      <div class="card hidden" id="paymentConfirmCard" style="background:#FFF7ED;border:1.5px solid #E8A32C">
+        <h2>Payment Confirmations</h2>
+        <p class="sub">A linked buyer says they've paid you directly (not through Billing) and is waiting for you to confirm it actually arrived. Approving adds it to your Receipts and their Payment History; rejecting leaves both unchanged.</p>
+        <table><thead><tr><th>Buyer</th><th>Date</th><th>Amount</th><th>Mode</th><th>Note</th><th></th></tr></thead>
+        <tbody id="paymentConfirmTable"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>All Customers — Amount Receivable</h2>
+        <p class="sub">Every customer ranked by balance due, highest first, so you can see who to follow up with next.</p>
+        <table><thead><tr><th>Customer</th><th>Total Billed</th><th>Total Received</th><th>Balance Receivable</th><th></th></tr></thead>
+        <tbody id="receivablesTable"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Customer Dashboard</h2>
+        <p class="sub">Pick a customer to review everything at a glance — invoices billed, items sold, amount received, and balance still receivable.</p>
+        <div class="field" style="max-width:320px"><label>Customer</label><select id="custDashCustomer" onchange="renderCustomerDashboard(this.value)"></select></div>
+
+        <div id="custDashSummaryWrap" class="hidden">
+          <div class="grid3" style="margin-top:8px">
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Invoices</h3><p style="font-size:20px;font-weight:700;margin:0" id="custDashEntries">0</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Items Sold</h3><p style="font-size:20px;font-weight:700;margin:0" id="custDashItems">0</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Billed</h3><p style="font-size:20px;font-weight:700;margin:0" id="custDashTotalBilled">₹0.00</p></div>
+          </div>
+          <div class="grid3" style="margin-top:12px">
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Received</h3><p style="font-size:20px;font-weight:700;margin:0" id="custDashTotalReceived">₹0.00</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Balance Receivable</h3><p style="font-size:20px;font-weight:700;margin:0;color:var(--paprika-dark)" id="custDashBalance">₹0.00</p></div>
+            <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Last Invoice</h3><p style="font-size:14px;font-weight:600;margin:0" id="custDashLastInvoice">—</p></div>
+          </div>
+          <div style="margin-top:18px;max-height:320px;overflow-y:auto">
+            <table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th>Qty</th><th>Billed (Dr)</th><th>Received (Cr)</th><th>Balance</th><th></th></tr></thead>
+            <tbody id="custDashTable"></tbody></table>
+          </div>
+        </div>
+        <p class="sub hidden" id="custDashEmptyMsg">No invoices or receipts recorded for this customer yet.</p>
+      </div>
+    </div>
+
+    <!-- GSTR-1 FILING -->
+    <div id="view-gstr1" class="view hidden">
+      <div class="card">
+        <h2>GST Filing — Sales &amp; Purchases</h2>
+        <p class="sub">Pick a return period below and generate both sides at once: your outward supplies (Sales, from Invoices) and inward supplies (Purchases, from Purchase Entry — including ones auto-created when a linked buyer's order is accepted). Download an Excel with both, or a GST-portal-ready JSON for the Sales side (the portal doesn't accept a direct Purchases upload — ITC comes from your suppliers' own filings via 2A/2B).</p>
+        <div class="grid3">
+          <div class="field"><label>Financial Year</label><select id="gstrFY" onchange="onFYChange()"></select></div>
+          <div class="field"><label>Filing type</label>
+            <select id="gstrType" onchange="onFilingTypeChange()">
+              <option value="monthly">Monthly</option>
+              <option value="quarterly">Quarterly (QRMP)</option>
+            </select>
+          </div>
+          <div class="field" id="gstrMonthWrap"><label>Month</label><select id="gstrMonth"></select></div>
+          <div class="field hidden" id="gstrQuarterWrap"><label>Quarter</label><select id="gstrQuarter"></select></div>
+        </div>
+        <button class="btn primary" onclick="generateGstr1()">Generate Report</button>
+        <p class="msg" id="gstrMsg"></p>
+      </div>
+
+      <div class="card hidden" id="gstrSummaryCard">
+        <h2>Sales (Outward Supplies) — <span id="gstrPeriodLabel"></span></h2>
+        <div class="grid3">
+          <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">B2B invoices</h3><p style="font-size:22px;font-weight:700;margin:0" id="gstrB2bCount">0</p></div>
+          <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">B2CL invoices</h3><p style="font-size:22px;font-weight:700;margin:0" id="gstrB2clCount">0</p></div>
+          <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">B2CS lines</h3><p style="font-size:22px;font-weight:700;margin:0" id="gstrB2csCount">0</p></div>
+        </div>
+        <p class="sub" style="margin-top:16px">B2CL = unregistered, inter-state, invoice value over ₹1,00,000 (current GST threshold). Everything else unregistered goes into B2CS, grouped by state and tax rate.</p>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">B2B — Registered Customers</h3>
+        <div style="max-height:320px;overflow-y:auto">
+          <table><thead><tr><th>GSTIN</th><th>Customer</th><th>Invoice #</th><th>Date</th><th>Invoice Value</th><th>Place of Supply</th><th>Rate</th><th>Taxable</th></tr></thead>
+          <tbody id="gstrB2bTable"></tbody></table>
+        </div>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">B2CL — Unregistered, Inter-State, Over ₹1L</h3>
+        <div style="max-height:260px;overflow-y:auto">
+          <table><thead><tr><th>Invoice #</th><th>Date</th><th>Invoice Value</th><th>Place of Supply</th><th>Rate</th><th>Taxable</th></tr></thead>
+          <tbody id="gstrB2clTable"></tbody></table>
+        </div>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">B2CS — Everything Else Unregistered</h3>
+        <div style="max-height:260px;overflow-y:auto">
+          <table><thead><tr><th>Type</th><th>Place of Supply</th><th>Rate</th><th>Taxable</th></tr></thead>
+          <tbody id="gstrB2csTable"></tbody></table>
+        </div>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">HSN-wise Summary</h3>
+        <div style="max-height:320px;overflow-y:auto">
+          <table><thead><tr><th>HSN</th><th>Description</th><th>UQC</th><th>Qty</th><th>Rate</th><th>Taxable</th><th>IGST</th><th>CGST</th><th>SGST</th><th>Total Value</th></tr></thead>
+          <tbody id="gstrHsnTable"></tbody></table>
+        </div>
+      </div>
+
+      <div class="card hidden" id="pgSummaryCard">
+        <h2>Purchases (Inward Supplies) — <span id="pgPeriodLabel"></span></h2>
+        <div class="totals-row"><span>Taxable value</span><span id="pgTaxable">0.00</span></div>
+        <div class="totals-row"><span>GST</span><span id="pgGst">0.00</span></div>
+        <div class="totals-row grand"><span>Grand total</span><span id="pgGrand">0.00</span></div>
+        <table style="margin-top:14px"><thead><tr><th>GST Rate</th><th>Taxable Value</th><th>GST Amount</th><th>Total</th></tr></thead>
+        <tbody id="pgRateTable"></tbody></table>
+        <p class="sub" style="margin-top:10px" id="pgEmptyMsg">No purchases in this period.</p>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">Purchase Register — By Supplier</h3>
+        <div style="max-height:280px;overflow-y:auto">
+          <table><thead><tr><th>Date</th><th>Supplier</th><th>GSTIN</th><th>Taxable</th><th>GST</th><th>Total</th></tr></thead>
+          <tbody id="pgRegisterTable"></tbody></table>
+        </div>
+
+        <h3 style="font-family:var(--display);font-size:15px;margin:18px 0 8px">Purchase Register — By Item (HSN-wise)</h3>
+        <div style="max-height:320px;overflow-y:auto">
+          <table><thead><tr><th>Date</th><th>Supplier</th><th>Product</th><th>HSN</th><th>Qty</th><th>Rate %</th><th>Taxable</th><th>GST Amt</th><th>Total</th></tr></thead>
+          <tbody id="pgItemsTable"></tbody></table>
+        </div>
+      </div>
+
+      <div class="card hidden" id="gstrDownloadCard">
+        <h2>Download</h2>
+        <p class="sub">Excel includes both Sales and Purchases sheets for this period. JSON covers Sales only, in a GST-offline-tool-style layout — <b>please import it into the current official GST offline utility and check for errors before relying on it for an actual filing</b>, since the portal's exact schema can change and this isn't validated against a live filing.</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn primary" onclick="downloadGstr1Excel()">Download Excel (Sales + Purchases)</button>
+          <button class="btn" onclick="downloadGstr1Json()">Download JSON (Sales — GST Portal Format)</button>
+        </div>
+      </div>
+
+      <div class="card hidden" id="gstrMarkFiledCard">
+        <h2>Mark This Period as Filed</h2>
+        <p class="sub">Once you've actually submitted this return on the GST portal, mark it filed here — every invoice and purchase in this period then becomes locked from editing or deletion, so the records behind an already-submitted return can't drift out of sync with what you filed. This can't be undone from the app; contact yourself-as-support (i.e. edit Firestore directly) if you need to unlock a period marked by mistake.</p>
+        <button class="btn danger" onclick="markPeriodAsFiled()">Mark <span id="gstrMarkFiledPeriodLabel"></span> as Filed</button>
+        <p class="msg" id="gstrMarkFiledMsg"></p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- SUPPLIER LEDGER MODAL -->
+<div id="ledgerModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <h2 id="ledgerSupplierName" style="margin:0">Supplier</h2>
+      <button class="btn small" onclick="closeSupplierLedger()">✕ Close</button>
+    </div>
+    <p class="sub" style="margin-top:6px">Product-wise, date-wise purchases and payments for this supplier.</p>
+
+    <div class="grid3" style="margin-top:8px">
+      <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Purchases</h3><p style="font-size:20px;font-weight:700;margin:0" id="ledgerTotalPurchase">₹0.00</p></div>
+      <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Total Paid</h3><p style="font-size:20px;font-weight:700;margin:0" id="ledgerTotalPaid">₹0.00</p></div>
+      <div class="box"><h3 style="font-family:var(--mono);font-size:11px;text-transform:uppercase;color:var(--muted);margin:0 0 4px">Balance to Pay</h3><p style="font-size:20px;font-weight:700;margin:0;color:var(--paprika-dark)" id="ledgerBalance">₹0.00</p></div>
+    </div>
+
+    <div style="margin-top:18px;max-height:300px;overflow-y:auto">
+      <table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th>Qty</th><th>Purchase (Dr)</th><th>Paid (Cr)</th><th>Balance</th><th></th></tr></thead>
+      <tbody id="ledgerTable"></tbody></table>
+    </div>
+
+    <div style="margin-top:20px;border-top:1px solid var(--thread);padding-top:16px">
+      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Record a Payment</h3>
+      <div class="grid3">
+        <div class="field"><label>Date</label><input id="ledgerPayDate" type="date"></div>
+        <div class="field"><label>Amount (₹)</label><input id="ledgerPayAmount" type="number" step="0.01"></div>
+        <div class="field"><label>Mode (Cash / UPI / Bank...)</label><input id="ledgerPayMode"></div>
+      </div>
+      <div class="field"><label>Note (optional)</label><input id="ledgerPayNote"></div>
+      <button class="btn primary" onclick="recordSupplierPayment()">Save Payment</button>
+      <p class="msg" id="ledgerPayMsg"></p>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT PAYMENT MODAL (used from Supplier Dashboard, Ledger, and Payment History) -->
+<div id="editPaymentModal" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:440px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <h2 style="margin:0">Edit Payment</h2>
+      <button class="btn small" onclick="closeEditPaymentModal()">✕ Close</button>
+    </div>
+    <div class="field"><label>Date</label><input id="editPayDate" type="date"></div>
+    <div class="field"><label>Amount (₹)</label><input id="editPayAmount" type="number" min="0" step="0.01"></div>
+    <div class="field"><label>Mode (Cash / UPI / Bank...)</label><input id="editPayMode"></div>
+    <div class="field"><label>Note (optional)</label><input id="editPayNote"></div>
+    <input type="hidden" id="editPayId">
+    <button class="btn primary" onclick="saveEditedPayment()">Save Changes</button>
+    <p class="msg" id="editPayMsg"></p>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script src="assets/user-menu.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="assets/indian-states.js"></script>
+<script src="assets/billing-app.js"></script>
+</body>
+</html>
