@@ -310,7 +310,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
       <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Packaging Stock</th>
       <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Label Stock</th>
     </tr></thead><tbody id="vlcStockTable"></tbody></table>
-    <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:10px 0 0">Rows in red are at or below your reorder level — set it per product in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a>, where you also define packaging/label size. Stock reduces once per label the first time it's actually cropped &amp; downloaded here — re-downloading the exact same labels won't reduce it again.</p>
+    <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:10px 0 0">Rows in red are at or below your reorder level — set it per product in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a>, where you also define packaging/label size. <b>Packaging</b> reduces once per label the first time it's actually cropped &amp; downloaded — re-downloading the exact same labels won't reduce it again, since the same box/bag doesn't get used twice. <b>Label</b> reduces on every crop &amp; download, reprint or not — a fresh label sticker is used each time you actually print, jam or no jam.</p>
   </div>
 
   <div id="vlcUnmappedCard" style="display:none;margin-top:18px;padding:18px 20px;background:#FFF7ED;border:1.5px solid #E8A32C;border-radius:var(--radius,10px)">
@@ -1109,7 +1109,18 @@ async function handleFile(file){
   if(currentPlatform === 'amazon'){
     document.getElementById('vlcStatus').textContent = 'Reading SKUs from invoice pages…';
     await detectAmazonSkus();
-    document.getElementById('vlcStatus').textContent = '';
+    // A zero-item result on a multi-page Amazon PDF almost always means the
+    // invoice's line-item text didn't match the expected "( SKU ) HSN:..."
+    // layout for this particular order/category — not that there's simply
+    // nothing to detect. Left silent, this looks identical to an empty
+    // file: the Detected SKUs panel, the stock panel, and "Send to
+    // Label-Based Auto Order" all just don't appear, with no indication why
+    // — which is exactly what made this hard to notice was even happening.
+    if(!Object.keys(amazonSkuByLabelIndex).length && pdfJsDoc.numPages >= 2){
+      document.getElementById('vlcStatus').innerHTML = '⚠ No SKU could be read off this Amazon invoice — its line-item text doesn\'t match the expected layout. "Send to Label-Based Auto Order" won\'t appear and stock won\'t be deducted for this file. You can still download the cropped labels once "Require sending order first" is turned off above.';
+    } else {
+      document.getElementById('vlcStatus').textContent = '';
+    }
   }
   if(currentPlatform === 'flipkart'){
     document.getElementById('vlcStatus').textContent = 'Reading SKUs from labels…';
@@ -1425,16 +1436,6 @@ async function consumeStockForExport(pageIndexOrder, courierFilter, amazonSkuMod
   const skus = Object.keys(skuQty);
   if(!skus.length) return; // nothing resolvable to a SKU on this export — nothing to consume
 
-  const hash = 'stockgrp_' + hashText(`${currentPlatform}|${courierFilter||'all'}|${pdfFile ? pdfFile.name : ''}|${pageIndexOrder.join('-')}|${JSON.stringify(skuQty)}`);
-  const markerRef = db.collection('users').doc(cropperUser.uid).collection('stockConsumedGroups').doc(hash);
-  try{
-    const already = await markerRef.get();
-    if(already.exists) return; // this exact export has already had its stock deducted — a reprint
-  }catch(err){
-    console.error('Stock dedup check failed, skipping stock deduction for this export to avoid a possible double-count:', err);
-    return;
-  }
-
   // Aggregate by SIZE, not by product — several products (and several SKUs
   // within one product) can share the same packaging size and/or label
   // size, and must all draw from that one shared pool rather than each
@@ -1454,18 +1455,39 @@ async function consumeStockForExport(pageIndexOrder, courierFilter, amazonSkuMod
 
   const pszCol = db.collection('users').doc(cropperUser.uid).collection('buyerPackagingSizes');
   const lszCol = db.collection('users').doc(cropperUser.uid).collection('buyerLabelSizes');
-  const updates = [
-    ...Object.keys(qtyByPackagingSizeId).map(id => pszCol.doc(id).update({
-      stock: firebase.firestore.FieldValue.increment(-qtyByPackagingSizeId[id])
-    }).catch(err => console.error(`Packaging size stock update failed for ${id}:`, err))),
-    ...Object.keys(qtyByLabelSizeId).map(id => lszCol.doc(id).update({
-      stock: firebase.firestore.FieldValue.increment(-qtyByLabelSizeId[id])
-    }).catch(err => console.error(`Label size stock update failed for ${id}:`, err)))
-  ];
-  if(updates.length) await Promise.all(updates);
 
-  try{ await markerRef.set({ consumedAt: firebase.firestore.FieldValue.serverTimestamp(), skuQty, courierFilter: courierFilter || null }); }
-  catch(err){ console.error('Failed to mark this export as stock-consumed — a reprint of the same file may double-deduct:', err); }
+  // Packaging: a real box/bag is only used once for a given shipment, no
+  // matter how many times its label gets reprinted — so this stays behind
+  // the one-time-per-export dedup marker, exactly as before.
+  const hash = 'stockgrp_' + hashText(`${currentPlatform}|${courierFilter||'all'}|${pdfFile ? pdfFile.name : ''}|${pageIndexOrder.join('-')}|${JSON.stringify(skuQty)}`);
+  const markerRef = db.collection('users').doc(cropperUser.uid).collection('stockConsumedGroups').doc(hash);
+  let packagingAlreadyDone = false;
+  try{
+    const already = await markerRef.get();
+    packagingAlreadyDone = already.exists;
+  }catch(err){
+    console.error('Packaging stock dedup check failed — skipping packaging deduction for this export to avoid a possible double-count:', err);
+    packagingAlreadyDone = true; // fail safe: skip rather than risk double-deducting on an uncertain check
+  }
+  if(!packagingAlreadyDone){
+    if(Object.keys(qtyByPackagingSizeId).length){
+      await Promise.all(Object.keys(qtyByPackagingSizeId).map(id => pszCol.doc(id).update({
+        stock: firebase.firestore.FieldValue.increment(-qtyByPackagingSizeId[id])
+      }).catch(err => console.error(`Packaging size stock update failed for ${id}:`, err))));
+    }
+    try{ await markerRef.set({ consumedAt: firebase.firestore.FieldValue.serverTimestamp(), skuQty, courierFilter: courierFilter || null }); }
+    catch(err){ console.error('Failed to mark this export as packaging-consumed — a reprint of the same file may double-deduct packaging:', err); }
+  }
+
+  // Label: the opposite rule — a fresh physical label sticker is used on
+  // EVERY print, reprint or not (a jam or a bad print still burns a label),
+  // so this deducts every single time this function runs, with no dedup
+  // gate at all.
+  if(Object.keys(qtyByLabelSizeId).length){
+    await Promise.all(Object.keys(qtyByLabelSizeId).map(id => lszCol.doc(id).update({
+      stock: firebase.firestore.FieldValue.increment(-qtyByLabelSizeId[id])
+    }).catch(err => console.error(`Label size stock update failed for ${id}:`, err))));
+  }
 
   await Promise.all([loadPackagingSizes(), loadLabelSizes()]); // pick up the new numbers
   renderStockPanel(lastDetectedRows);
