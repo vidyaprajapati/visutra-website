@@ -31,7 +31,7 @@
 
   <div class="card">
     <h2>Import Historical Purchase Data</h2>
-    <p class="sub">Bring your old day-wise purchase records in from Excel/CSV — supplier dues, <a href="purchases-gstr.html">GSTR-1 Filing</a>, and <a href="purchase-entry.html">Purchase Entry</a>'s history will all reflect them, exactly as if you'd typed each one in by hand. A Product Name that matches one of your <a href="buyer-sku-master.html">Buyer SKU Master</a> products (by name) also adds that quantity to its <a href="stock.html">Stock</a> — same as any other purchase. A name with no match still imports fine, just without a stock effect; the preview below marks which rows that applies to.</p>
+    <p class="sub">Bring your old day-wise purchase records in from Excel/CSV — supplier dues, <a href="purchases-gstr.html">GSTR-1 Filing</a>, and <a href="purchase-entry.html">Purchase Entry</a>'s history will all reflect them, exactly as if you'd typed each one in by hand. Each row is matched to one of <b>your products</b> in <a href="buyer-sku-master.html">Buyer SKU Master</a> — by SKU first (your own SKU, the seller's SKU, or an Amazon/Meesho/Flipkart SKU), then by product name — and matched quantities are added to that product's <a href="stock.html">Stock</a>, same as any other purchase. Before importing you can check every match and pick the right product for anything unmatched; your picks are remembered for the next import.</p>
 
     <div class="box" style="margin-bottom:16px">
       <p class="sub" style="margin:0 0 8px">New to this? Download the blank template, fill it in, then upload it below — its headers are already exactly what this page expects, so every column maps itself automatically.</p>
@@ -85,6 +85,13 @@
   <div class="card hidden" id="previewCard">
     <h2>Step 2 — Preview &amp; Import</h2>
     <p class="sub" id="previewSummary"></p>
+    <div class="box" style="margin-bottom:16px">
+      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 6px">Match items to your products</h3>
+      <p class="sub" style="margin:0 0 10px">One row per different item in the file. The product picked here gets that item's quantity added to its stock; <b>No stock effect</b> still imports the purchase, just without touching stock. Don't see the product? <a href="buyer-sku-master.html" target="_blank" rel="noopener">Add it in Buyer SKU Master</a>, then click <b>Next: Preview</b> again.</p>
+      <table><thead><tr><th>Item in file</th><th>SKU in file</th><th>Rows</th><th>Total qty</th><th>Matched by</th><th>Your product</th></tr></thead>
+      <tbody id="itemMatchTable"></tbody></table>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:13px"><input type="checkbox" id="rememberItemMatches" checked style="width:auto"> Remember these picks for future imports</label>
+    </div>
     <table><thead><tr><th>Date</th><th>Supplier</th><th>Items</th><th>Taxable</th><th>GST</th><th>Total</th><th>Paid</th></tr></thead>
     <tbody id="previewTable"></tbody></table>
     <button class="btn primary" style="margin-top:14px" onclick="runImport()">Import All</button>
@@ -115,7 +122,8 @@ let importGroups = []; // built in buildImportPreview(): one per date (supplier 
 
 const IMPORT_FIELD_GUESSES = {
   date: ['date of purchase', 'date', 'purchase date', 'bill date', 'invoice date'],
-  item: ['product name', 'item', 'item name', 'product', 'description'],
+  item: ['product name', 'item name', 'item', 'product', 'description'],
+  sku: ['my sku', 'sku', 'sku code', 'item code', 'product code'],
   qty: ['qty', 'quantity'],
   value: ['purchase price including gst', 'purchase price', 'amount', 'total', 'rate', 'value'],
   gst: ['gst %', 'gst', 'gst%', 'gst rate', 'tax%', 'tax rate'],
@@ -124,6 +132,7 @@ const IMPORT_FIELD_GUESSES = {
 const IMPORT_FIELDS = [
   { key: 'date', label: 'Date of Purchase', required: true },
   { key: 'item', label: 'Product Name (optional)', required: false },
+  { key: 'sku', label: 'SKU (optional — your own, seller or marketplace SKU)', required: false },
   { key: 'qty', label: 'Qty (optional)', required: false },
   { key: 'value', label: 'Purchase Price', required: true },
   { key: 'gst', label: 'GST % column (optional)', required: false },
@@ -149,12 +158,42 @@ auth.onAuthStateChanged(async user => {
 
   await loadSuppliers();
   const mapSnap = await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').where('status', '==', 'ACTIVE').get();
-  mySkuMappingsCache = mapSnap.docs.map(d => ({id: d.id, ...d.data()}));
+  mySkuMappingsCache = mapSnap.docs.map(d => ({id: d.id, ...d.data()}))
+    .sort((a,b) => (a.productName||'').localeCompare(b.productName||''));
+  try{
+    const memSnap = await db.collection('users').doc(currentUser.uid).collection('buyerImportItemMap').get();
+    importItemMemory = {};
+    memSnap.docs.forEach(d => { importItemMemory[d.id] = d.data(); });
+  }catch(err){ console.error('Could not load remembered import matches:', err); }
 });
-function findMySkuMapping(productName){
-  const norm = (productName || '').trim().toLowerCase();
-  if(!norm) return null;
-  return mySkuMappingsCache.find(m => (m.productName || '').trim().toLowerCase() === norm) || null;
+/* ---------------- Matching an imported item to one of your products ----------------
+   Order: (1) SKU column against every SKU a product carries — your own SKU,
+   the seller's SKU, Amazon/Meesho/Flipkart SKUs; (2) a pick you made on an
+   earlier import for this same item (buyerImportItemMap); (3) product name
+   against your product name or the linked seller's product name. All
+   case/whitespace-insensitive. You can override every result in the preview. */
+let importItemMemory = {};   // itemKey -> { mappingId, name, sku }
+let itemMatchChoices = {};   // itemKey -> mappingId ('' = no stock effect), from the preview dropdowns
+const norm = v => String(v == null ? '' : v).trim().toLowerCase().replace(/\s+/g, ' ');
+function itemKeyOf(name, sku){ return 'k' + hashKey(norm(name) + '|' + norm(sku)); }
+function hashKey(str){ let h = 0; for(let i = 0; i < str.length; i++){ h = (Math.imul(31, h) + str.charCodeAt(i)) | 0; } return (h >>> 0).toString(36); }
+function autoMatch(name, sku){
+  const s = norm(sku), n = norm(name);
+  if(s){
+    const bySku = mySkuMappingsCache.find(m => ['buyerSku','sellerSku','amazonSku','meeshoSku','flipkartSku'].some(f => norm(m[f]) === s));
+    if(bySku) return { mapping: bySku, how: 'SKU' };
+  }
+  const mem = importItemMemory[itemKeyOf(name, sku)];
+  if(mem){
+    if(mem.mappingId === '') return { mapping: null, how: 'Remembered' };
+    const m = mySkuMappingsCache.find(x => x.id === mem.mappingId);
+    if(m) return { mapping: m, how: 'Remembered' };
+  }
+  if(n && n !== 'purchase'){
+    const byName = mySkuMappingsCache.find(m => norm(m.productName) === n || norm(m.sellerProductName) === n);
+    if(byName) return { mapping: byName, how: 'Name' };
+  }
+  return { mapping: null, how: '' };
 }
 
 // Same supplier list Purchase Entry uses (linked VISUTRA sellers and your
@@ -190,7 +229,7 @@ async function addNewSupplier(){
 // Headers here are deliberately worded to match IMPORT_FIELD_GUESSES below
 // exactly, so a file built from this template auto-maps every column
 // without the person having to touch Step 1 at all.
-const IMPORT_TEMPLATE_HEADERS = ['Date of Purchase', 'Product Name', 'Qty', 'Purchase Price (Incl. GST)', 'GST %', 'Payment'];
+const IMPORT_TEMPLATE_HEADERS = ['Date of Purchase', 'Product Name', 'SKU', 'Qty', 'Purchase Price (Incl. GST)', 'GST %', 'Payment'];
 function downloadImportTemplate(){
   const ws = XLSX.utils.aoa_to_sheet([IMPORT_TEMPLATE_HEADERS]);
   ws['!cols'] = IMPORT_TEMPLATE_HEADERS.map(h => ({ wch: Math.max(h.length + 2, 12) }));
@@ -292,17 +331,18 @@ function buildImportPreview(){
     const gstRate = col.gst !== -1 ? (parseFloat(colVal(row, col.gst)) || 0) : defaultGst;
     const paid = col.paid !== -1 ? (parseFloat(colVal(row, col.paid)) || 0) : 0;
     const itemName = col.item !== -1 ? (String(colVal(row, col.item)).trim() || 'Purchase') : 'Purchase';
+    const itemSku = col.sku !== -1 ? String(colVal(row, col.sku)).trim() : '';
 
     const gross = valueMode === 'rate' ? qty * rawValue : rawValue;
     const taxable = priceMode === 'incl' ? gross / (1 + gstRate/100) : gross;
     const gstAmt = taxable * gstRate / 100;
 
-    const mapping = findMySkuMapping(itemName);
     if(!groups.has(date)) groups.set(date, { date, items: [], paid: 0 });
     const g = groups.get(date);
     g.items.push({
-      name: itemName, qty, rate: valueMode === 'rate' ? rawValue : (qty ? gross/qty : gross), gstRate, priceMode, taxable, gstAmt, total: taxable + gstAmt,
-      linkedSkuMappingId: mapping ? mapping.id : null
+      name: itemName, sku: itemSku, itemKey: itemKeyOf(itemName, itemSku),
+      qty, rate: valueMode === 'rate' ? rawValue : (qty ? gross/qty : gross), gstRate, priceMode, taxable, gstAmt, total: taxable + gstAmt,
+      linkedSkuMappingId: null
     });
     g.paid += paid;
   });
@@ -313,23 +353,95 @@ function buildImportPreview(){
     return;
   }
 
-  const allItems = importGroups.flatMap(g => g.items);
-  const unmatchedCount = allItems.filter(i => !i.linkedSkuMappingId).length;
-  document.getElementById('previewSummary').textContent =
-    `${importGroups.length} purchase(s) will be created for ${supplier.name}. ` +
-    `${allItems.length - unmatchedCount} of ${allItems.length} item(s) matched a Buyer SKU Master product and will add to Stock` +
-    (unmatchedCount ? `; ${unmatchedCount} unmatched item(s) (highlighted) import fine but won't affect stock.` : '.') +
-    (skipped ? ` ${skipped} row(s) skipped (missing Date).` : '');
-  document.getElementById('previewTable').innerHTML = importGroups.map(g => {
-    const subtotal = g.items.reduce((s,i)=>s+i.taxable,0);
-    const gstTotal = g.items.reduce((s,i)=>s+i.gstAmt,0);
-    const itemsHtml = g.items.map(i => esc(i.name) + ' × ' + i.qty + (i.linkedSkuMappingId ? '' : ' <span class="badge" title="No Buyer SKU Master match — imports fine, no stock effect">unmatched</span>')).join(', ');
-    return `<tr><td>${esc(g.date)}</td><td>${esc(supplier.name)}</td><td>${itemsHtml}</td>
-      <td>₹${fmtMoney(subtotal)}</td><td>₹${fmtMoney(gstTotal)}</td><td>₹${fmtMoney(subtotal+gstTotal)}</td><td>${g.paid ? '₹'+fmtMoney(g.paid) : '—'}</td></tr>`;
-  }).join('');
+  // One matching row per distinct item (name + SKU), auto-matched, overridable.
+  importSkippedCount = skipped;
+  itemMatchChoices = {};
+  const distinct = new Map();
+  importGroups.flatMap(g => g.items).forEach(i => {
+    if(!distinct.has(i.itemKey)) distinct.set(i.itemKey, { key: i.itemKey, name: i.name, sku: i.sku, rows: 0, qty: 0 });
+    const d = distinct.get(i.itemKey); d.rows++; d.qty += i.qty;
+  });
+  importDistinctItems = Array.from(distinct.values());
+  importDistinctItems.forEach(d => {
+    const r = autoMatch(d.name, d.sku);
+    d.how = r.how;
+    itemMatchChoices[d.key] = r.mapping ? r.mapping.id : '';
+  });
+  const productOptions = mySkuMappingsCache.map(m =>
+    `<option value="${m.id}">${esc(m.productName)}${m.buyerSku ? ' — ' + esc(m.buyerSku) : ''} (stock ${m.stock||0})</option>`).join('');
+  document.getElementById('itemMatchTable').innerHTML = importDistinctItems.map((d, i) => `
+    <tr${itemMatchChoices[d.key] ? '' : ' style="background:#FFF7ED"'} id="imRow-${i}">
+      <td>${esc(d.name)}</td><td>${d.sku ? '<code>' + esc(d.sku) + '</code>' : '—'}</td><td>${d.rows}</td><td>${d.qty}</td>
+      <td>${d.how ? '<span class="badge">' + esc(d.how) + '</span>' : '<span class="badge" style="background:#F6D9A8">Unmatched</span>'}</td>
+      <td><select onchange="onItemMatchChange(${i}, this.value)" style="max-width:320px">
+        <option value="">No stock effect</option>${productOptions}
+      </select></td>
+    </tr>`).join('');
+  importDistinctItems.forEach((d, i) => {
+    document.querySelector(`#imRow-${i} select`).value = itemMatchChoices[d.key];
+  });
+  if(!mySkuMappingsCache.length){
+    document.getElementById('itemMatchTable').insertAdjacentHTML('beforeend',
+      '<tr><td colspan="6" style="color:var(--muted)">You have no products yet — add them in Buyer SKU Master to have this import update stock.</td></tr>');
+  }
+  applyItemMatches();
+  renderImportPreviewTable(supplier);
 
   document.getElementById('columnMapCard').classList.add('hidden');
   document.getElementById('previewCard').classList.remove('hidden');
+}
+
+let importDistinctItems = [];
+let importSkippedCount = 0;
+function onItemMatchChange(i, mappingId){
+  const d = importDistinctItems[i];
+  if(!d) return;
+  itemMatchChoices[d.key] = mappingId;
+  if(d.how !== 'Picked') d.how = 'Picked';
+  const row = document.getElementById('imRow-' + i);
+  row.style.background = mappingId ? '' : '#FFF7ED';
+  row.children[4].innerHTML = '<span class="badge">Picked</span>';
+  applyItemMatches();
+  renderImportPreviewTable(suppliersCache.find(s => s.id === document.getElementById('importSupplier').value));
+}
+function applyItemMatches(){
+  importGroups.forEach(g => g.items.forEach(i => { i.linkedSkuMappingId = itemMatchChoices[i.itemKey] || null; }));
+}
+function renderImportPreviewTable(supplier){
+  if(!supplier) return;
+  const allItems = importGroups.flatMap(g => g.items);
+  const matched = allItems.filter(i => i.linkedSkuMappingId);
+  const unmatchedCount = allItems.length - matched.length;
+  const qtyIn = matched.reduce((a, i) => a + i.qty, 0);
+  document.getElementById('previewSummary').textContent =
+    `${importGroups.length} purchase(s) will be created for ${supplier.name}. ` +
+    `${matched.length} of ${allItems.length} item row(s) are matched to your products and will add ${qtyIn} to Stock` +
+    (unmatchedCount ? `; ${unmatchedCount} row(s) with No stock effect (highlighted) still import as purchases.` : '.') +
+    (importSkippedCount ? ` ${importSkippedCount} row(s) skipped (missing Date).` : '');
+  const nameOf = id => { const m = mySkuMappingsCache.find(x => x.id === id); return m ? m.productName : ''; };
+  document.getElementById('previewTable').innerHTML = importGroups.map(g => {
+    const subtotal = g.items.reduce((s,i)=>s+i.taxable,0);
+    const gstTotal = g.items.reduce((s,i)=>s+i.gstAmt,0);
+    const itemsHtml = g.items.map(i => esc(i.name) + ' × ' + i.qty + (i.linkedSkuMappingId
+      ? (nameOf(i.linkedSkuMappingId) && norm(nameOf(i.linkedSkuMappingId)) !== norm(i.name) ? ' <span style="color:var(--muted)">→ ' + esc(nameOf(i.linkedSkuMappingId)) + '</span>' : '')
+      : ' <span class="badge" title="No stock effect — imports as a purchase only">no stock</span>')).join(', ');
+    return `<tr><td>${esc(g.date)}</td><td>${esc(supplier.name)}</td><td>${itemsHtml}</td>
+      <td>₹${fmtMoney(subtotal)}</td><td>₹${fmtMoney(gstTotal)}</td><td>₹${fmtMoney(subtotal+gstTotal)}</td><td>${g.paid ? '₹'+fmtMoney(g.paid) : '—'}</td></tr>`;
+  }).join('');
+}
+async function saveItemMatchMemory(){
+  if(!document.getElementById('rememberItemMatches').checked) return;
+  const col = db.collection('users').doc(currentUser.uid).collection('buyerImportItemMap');
+  // Only remember what isn't already found automatically by SKU — that
+  // keeps the memory to the genuinely ambiguous names/codes.
+  await Promise.all(importDistinctItems.filter(d => d.how !== 'SKU').map(d => {
+    const mappingId = itemMatchChoices[d.key] || '';
+    const prev = importItemMemory[d.key];
+    if(prev && prev.mappingId === mappingId) return null;
+    importItemMemory[d.key] = { mappingId, name: d.name, sku: d.sku };
+    return col.doc(d.key).set({ mappingId, name: d.name, sku: d.sku, updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+      .catch(err => console.error('Could not remember match for ' + d.name + ':', err));
+  }));
 }
 
 function cancelImportPreview(){
@@ -345,19 +457,18 @@ async function runImport(){
 
   showMsg('importApplyMsg', `Importing ${importGroups.length} purchase(s)…`, true);
   let created = 0;
+  try{ await saveItemMatchMemory(); }catch(err){ console.error(err); }
   try{
     for(const g of importGroups){
       const subtotal = g.items.reduce((s,i)=>s+i.taxable,0);
       const gstTotal = g.items.reduce((s,i)=>s+i.gstAmt,0);
 
-      // No linkedSkuMappingId on any item, ever, for an import — this is a
-      // backfill of OLD purchases, and stock reversal logic elsewhere
-      // (Delete Purchase, Invoice Deletion Requests) would otherwise treat
-      // deleting one of these as reason to decrement CURRENT stock, which
-      // would be wrong for a purchase that's already long since been used.
+      // Matched items carry linkedSkuMappingId, exactly like a manual
+      // Purchase Entry — so Delete Purchase / Invoice Deletion Requests
+      // reverse their stock the same way.
       await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').add({
         supplierId, supplierName: supplier.name, date: g.date,
-        items: g.items.map(i => ({ name: i.name, qty: i.qty, rate: i.rate, gstRate: i.gstRate, priceMode: i.priceMode, taxable: i.taxable, gstAmt: i.gstAmt, total: i.total, linkedSkuMappingId: i.linkedSkuMappingId || null })),
+        items: g.items.map(i => ({ name: i.name, sku: i.sku || '', qty: i.qty, rate: i.rate, gstRate: i.gstRate, priceMode: i.priceMode, taxable: i.taxable, gstAmt: i.gstAmt, total: i.total, linkedSkuMappingId: i.linkedSkuMappingId || null })),
         subtotal, gstTotal, grandTotal: subtotal + gstTotal,
         recordedByBuyer: true, importedHistorical: true,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -382,7 +493,9 @@ async function runImport(){
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
-          type: 'purchase-in', mappingId: item.linkedSkuMappingId, productName: item.name, qty: item.qty, date: g.date,
+          type: 'purchase-in', mappingId: item.linkedSkuMappingId,
+          productName: (mySkuMappingsCache.find(m => m.id === item.linkedSkuMappingId) || {}).productName || item.name,
+          qty: item.qty, date: g.date,
           note: `Imported purchase from ${supplier.name}`,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
@@ -393,6 +506,10 @@ async function runImport(){
     document.getElementById('previewCard').classList.add('hidden');
     document.getElementById('importFile').value = '';
     importRows = []; importGroups = [];
+    try{
+      const mapSnap = await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').where('status', '==', 'ACTIVE').get();
+      mySkuMappingsCache = mapSnap.docs.map(d => ({id: d.id, ...d.data()})).sort((a,b) => (a.productName||'').localeCompare(b.productName||''));
+    }catch(err){ /* only affects the stock numbers shown in the next preview */ }
   }catch(err){
     showMsg('importApplyMsg', `Stopped after ${created} of ${importGroups.length} — ${err.message}. Already-imported rows are saved; re-running will create duplicates for those, so remove them from your sheet before retrying the rest.`, false);
   }
