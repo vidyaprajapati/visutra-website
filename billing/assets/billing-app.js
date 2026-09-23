@@ -471,8 +471,73 @@ function renderStockMovementsTable(){
   `).join('') || '<tr><td colspan="5" style="color:var(--muted)">No stock movements yet.</td></tr>';
 }
 async function loadSkuMappings(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('skuMappings').get();
+  const snap = await db.collection('users').doc(currentUser.uid).collection('skuMappings').orderBy('rawKey').get();
   skuMappingsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
+  renderSkuMappingsTable();
+}
+// Standing management view of every SKU -> Product mapping, whether it was
+// created here, from an unrecognized label SKU, or from the Monthly
+// Inventory Reconciliation upload — all three write to the same
+// skuMappings collection, so this one table covers all of them.
+function renderSkuMappingsTable(){
+  const table = document.getElementById('skuMappingsTable');
+  if(!table) return;
+  const productSelect = document.getElementById('skuMapProduct');
+  if(productSelect){
+    const prev = productSelect.value;
+    productSelect.innerHTML = '<option value="">Select product…</option>' + productsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    if(prev) productSelect.value = prev;
+  }
+  table.innerHTML = skuMappingsCache.map(m => `
+    <tr><td>${esc(m.rawKey)}</td><td>${esc(m.productName)}</td>
+    <td class="row-actions">
+      <button class="btn small" onclick="editSkuMapping('${m.id}')">Edit</button>
+      <button class="btn small danger" onclick="deleteSkuMapping('${m.id}')">Delete</button>
+    </td></tr>
+  `).join('') || '<tr><td colspan="3" style="color:var(--muted)">No SKU mappings yet — add one below, or one gets created automatically the first time you map an unrecognized label SKU or reconciliation row.</td></tr>';
+}
+async function saveSkuMapping(){
+  const rawKey = document.getElementById('skuMapRawKey').value.trim();
+  const productId = document.getElementById('skuMapProduct').value;
+  const editId = document.getElementById('skuMapEditId').value;
+  const product = productsCache.find(p => p.id === productId);
+  if(!rawKey){ showMsg('skuMappingMsg', 'Enter the marketplace SKU.', false); return; }
+  if(!product){ showMsg('skuMappingMsg', 'Select a product.', false); return; }
+
+  const dupe = skuMappingsCache.find(m => m.rawKey.toLowerCase() === rawKey.toLowerCase() && m.id !== editId);
+  if(dupe){ showMsg('skuMappingMsg', `"${rawKey}" is already mapped to ${dupe.productName} — edit that one instead of creating a duplicate.`, false); return; }
+
+  const data = { rawKey, productId, productName: product.name };
+  if(editId){
+    await db.collection('users').doc(currentUser.uid).collection('skuMappings').doc(editId).set(data, {merge: true});
+  } else {
+    data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+    await db.collection('users').doc(currentUser.uid).collection('skuMappings').add(data);
+  }
+  resetSkuMappingForm();
+  await loadSkuMappings();
+  showMsg('skuMappingMsg', `Saved — ${rawKey} → ${product.name}.`, true);
+}
+function editSkuMapping(id){
+  const m = skuMappingsCache.find(x => x.id === id);
+  if(!m) return;
+  document.getElementById('skuMapEditId').value = id;
+  document.getElementById('skuMapRawKey').value = m.rawKey;
+  document.getElementById('skuMapProduct').value = m.productId;
+  document.getElementById('skuMapFormTitle').textContent = 'Edit SKU Mapping';
+  document.getElementById('skuMapCancelBtn').style.display = 'inline-block';
+}
+function resetSkuMappingForm(){
+  document.getElementById('skuMapEditId').value = '';
+  document.getElementById('skuMapRawKey').value = '';
+  document.getElementById('skuMapProduct').value = '';
+  document.getElementById('skuMapFormTitle').textContent = 'Add a SKU Mapping';
+  document.getElementById('skuMapCancelBtn').style.display = 'none';
+}
+async function deleteSkuMapping(id){
+  if(!confirm('Delete this SKU mapping? Labels or reconciliation rows with this SKU will need mapping again next time.')) return;
+  await db.collection('users').doc(currentUser.uid).collection('skuMappings').doc(id).delete();
+  await loadSkuMappings();
 }
 async function loadStockMovements(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('stockMovements').orderBy('createdAt','desc').limit(200).get();
