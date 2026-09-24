@@ -436,13 +436,13 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
   </div>
 
   <div id="vlcStockPanel" style="display:none;margin-top:18px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
-    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:10px">Packaging &amp; Label Stock — For Products In This File</div>
-    <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
-      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Product</th>
-      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Packaging Stock</th>
-      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Label Stock</th>
-    </tr></thead><tbody id="vlcStockTable"></tbody></table>
-    <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:10px 0 0">Rows in red are at or below your reorder level — set it per product in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a>, where you also define packaging/label size. <b>Packaging</b> reduces once per label the first time it's actually cropped &amp; downloaded — re-downloading the exact same labels won't reduce it again, since the same box/bag doesn't get used twice. <b>Label</b> reduces on every crop &amp; download, reprint or not — a fresh label sticker is used each time you actually print, jam or no jam.</p>
+    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:6px">Buyer Stock — Products In This File</div>
+    <p id="vlcBuyerStockNote" style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:0 0 12px"></p>
+    <div class="vlc-tbl-wrap"><table class="vlc-tbl"><thead><tr>
+      <th>Marketplace</th><th>SKU</th><th>Qty</th><th>Product (buyer section)</th><th>Buyer Stock</th><th>Packing size</th><th>Label size</th>
+    </tr></thead><tbody id="vlcStockTable"></tbody></table></div>
+    <p id="vlcBuyerStockMsg" style="font-size:12.5px;margin:10px 0 0"></p>
+    <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:10px 0 0"><b>Map</b> adds the SKU to the product you pick (a product can hold several SKUs, sharing one stock) — or choose <b>＋ New product</b> to create one right here. <b>Buyer stock</b> reduces once per label the first time it's cropped &amp; downloaded; labels printed before their SKU was mapped are deducted the moment you map it. <b>Packing</b> is one per label on first print; <b>label</b> stock on every print. Full product details (name, own SKU, linked seller) are in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a>.</p>
   </div>
 
   <div id="vlcUnmappedCard" style="display:none;margin-top:18px;padding:18px 20px;background:#FFF7ED;border:1.5px solid #E8A32C;border-radius:var(--radius,10px)">
@@ -529,6 +529,8 @@ firebase.auth().onAuthStateChanged(async user => {
     updateLabelStockHint();
     await loadSellerEmails();
     await loadTodayDrafts();
+    // A file dropped before sign-in finished: draw the Buyer Stock box now.
+    if(getRole() !== 'seller' && lastDetectedRows.length) renderStockPanel(lastDetectedRows);
   }catch(err){
     console.error('Auto Order setup failed:', err);
     // Non-fatal for the cropper itself — cropping/downloading (once unlocked)
@@ -1767,39 +1769,155 @@ function renderSkuSummary(){
    used to fail silently (the whole panel just wouldn't appear), which
    looked identical to "no stock at all" even though sizes existed but
    simply weren't assigned to this product yet. */
+/* ---------------- Buyer Stock panel ----------------
+   Mirror of the Seller Stock box, for the Buyer section: one row per
+   detected marketplace SKU. Mapped → your buyer product + its stock and
+   packing/label size pickers. Unmapped → pick one of your buyer products
+   (or create a new one) and Map: the SKU is added to that product's
+   marketplace SKU list in buyerSkuMappings — nothing on the Seller side. */
+const NEW_BUYER_PRODUCT = '__new__';
+function mkField(marketplace){ return { AMAZON: 'amazonSku', MEESHO: 'meeshoSku', FLIPKART: 'flipkartSku' }[marketplace]; }
 function renderStockPanel(rows){
   const panelEl = document.getElementById('vlcStockPanel');
-  if(getRole() === 'seller'){ panelEl.style.display = 'none'; return; }
-  const seenProducts = {}; // `${sellerUid}_${productId}` -> { productName, pkg (may be null) }
-  rows.forEach(r => {
-    const mapping = findMapping(r.marketplace || currentPlatform.toUpperCase(), r.sku);
-    if(!mapping) return; // no SKU mapping at all — shown separately in the "New SKUs Found" card
-    const key = `${mapping.sellerId}_${mapping.productId}`;
-    const pkg = findPackaging(mapping.sellerId, mapping.productId);
-    seenProducts[key] = { productName: mapping.productName, pkg };
-  });
-  const list = Object.values(seenProducts);
-  if(!list.length){ panelEl.style.display = 'none'; return; }
-  document.getElementById('vlcStockTable').innerHTML = list.map(entry => {
-    const p = entry.pkg;
-    if(!p){
-      return `<tr style="background:#FFF7ED;color:#8A5A12">
-        <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${escapeHtml(entry.productName)}</td>
-        <td colspan="2" style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">No packaging/label size assigned yet — set it up in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a> → "Assign Sizes to a Product".</td>
+  if(getRole() === 'seller' || !rows.length){ panelEl.style.display = 'none'; return; }
+  const note = document.getElementById('vlcBuyerStockNote');
+  if(!cropperUser){
+    note.textContent = 'Loading your products…';
+    document.getElementById('vlcStockTable').innerHTML = '';
+    panelEl.style.display = 'block';
+    return;
+  }
+  const unmappedCount = rows.filter(r => !findMapping(r.marketplace, r.sku)).length;
+  note.innerHTML = unmappedCount
+    ? `<b style="color:#9E3608">${unmappedCount} SKU${unmappedCount===1?'':'s'} not mapped yet</b> — pick your product (or ＋ New product) and click Map. One mapping covers every future label with that SKU.`
+    : 'All SKUs in this file are mapped to your buyer products.';
+  const active = mappingsCache.filter(m => m.status === 'ACTIVE')
+    .slice().sort((a,b) => String(a.productName||'').localeCompare(String(b.productName||'')));
+  const productOptions = active.map(m =>
+    `<option value="${escapeHtml(m.id)}">${escapeHtml(m.productName)}${m.buyerSku ? ' — ' + escapeHtml(m.buyerSku) : ''} (stock ${m.stock||0})</option>`).join('');
+
+  document.getElementById('vlcStockTable').innerHTML = rows.map((r, i) => {
+    const m = findMapping(r.marketplace, r.sku);
+    if(!m){
+      return `<tr class="vlc-unmapped-row">
+        <td>${escapeHtml(r.marketplace)}</td>
+        <td style="font-family:var(--font-mono)">${escapeHtml(r.sku)}</td>
+        <td>${r.qty}</td>
+        <td colspan="4">
+          <div class="vlc-map-row">
+            <span class="vlc-pill" style="background:#F6D9A8;color:#6B4308">Not mapped</span>
+            <select id="vlcBuyerMapSel-${i}">
+              <option value="">Select your product…</option>
+              <option value="${NEW_BUYER_PRODUCT}">＋ New product with this SKU…</option>${productOptions}
+            </select>
+            <button class="vlc-map-btn" id="vlcBuyerMapBtn-${i}" onclick="saveBuyerMapping(${i})">Map</button>
+          </div>
+        </td>
       </tr>`;
     }
-    const pszSize = packagingSizesCache.find(s => s.id === p.packagingSizeId);
-    const lszSize = labelSizesCache.find(s => s.id === p.labelSizeId);
-    const pkgLow = pszSize && (pszSize.stock||0) <= (pszSize.minQty||0);
-    const lblLow = lszSize && (lszSize.stock||0) <= (lszSize.minQty||0);
-    const rowStyle = (pkgLow || lblLow) ? ' style="background:#FBE4DE;color:#7A2A12"' : '';
-    return `<tr${rowStyle}>
-      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${escapeHtml(entry.productName)}</td>
-      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${pszSize ? escapeHtml(pszSize.name) + ': ' + (pszSize.stock||0) : 'No packaging size assigned'}${pkgLow ? ' ⚠ reorder' : ''}</td>
-      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${lszSize ? escapeHtml(lszSize.name) + ': ' + (lszSize.stock||0) : 'No label size assigned'}${lblLow ? ' ⚠ reorder' : ''}</td>
+    const stock = m.stock || 0;
+    const reorder = m.reorderLevel || 0;
+    const low = reorder > 0 && stock <= reorder;
+    const pkg = findPackaging(m.sellerId, m.productId);
+    const psz = pkg ? packagingSizesCache.find(x => x.id === pkg.packagingSizeId) : null;
+    const lsz = pkg ? labelSizesCache.find(x => x.id === pkg.labelSizeId) : null;
+    const sizeSelect = (kind, list, currentId) => {
+      const opts = list.filter(z => isSizeActive(z) || z.id === currentId);
+      return `<select onchange="saveBuyerSizeAssign('${escapeAttr(m.id)}','${kind}',this.value)" style="padding:4px;font-size:12px;max-width:160px">
+        <option value="">— none —</option>${opts.map(z => `<option value="${escapeHtml(z.id)}"${z.id === currentId ? ' selected' : ''}>${escapeHtml(z.name)} (${z.stock||0})${isSizeActive(z) ? '' : ' — inactive'}</option>`).join('')}
+      </select>`;
+    };
+    const linked = m.linkType === 'OWN' || String(m.productId||'').startsWith('own_') ? '' : `<div style="font-size:11px;color:var(--ink-soft)">from ${escapeHtml(m.sellerName || '')}</div>`;
+    return `<tr${low ? ' class="vlc-low-row"' : ''}>
+      <td>${escapeHtml(r.marketplace)}</td>
+      <td style="font-family:var(--font-mono)">${escapeHtml(r.sku)}</td>
+      <td>${r.qty}</td>
+      <td>${escapeHtml(m.productName)}${linked}</td>
+      <td><b>${stock}</b>${low ? ' <span style="color:#9E3608">⚠ reorder</span>' : ''}</td>
+      <td>${sizeSelect('packagingSizeId', packagingSizesCache, pkg ? pkg.packagingSizeId : '')}${psz && (psz.stock||0) <= (psz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : ''}</td>
+      <td>${sizeSelect('labelSizeId', labelSizesCache, pkg ? pkg.labelSizeId : '')}${lsz && (lsz.stock||0) <= (lsz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : ''}</td>
     </tr>`;
   }).join('');
   panelEl.style.display = 'block';
+}
+function buyerMsg(text, ok){
+  const el = document.getElementById('vlcBuyerStockMsg');
+  el.textContent = text; el.style.color = ok ? '#0A5C4F' : '#9E3608';
+}
+async function saveBuyerMapping(i){
+  const r = lastDetectedRows[i];
+  const sel = document.getElementById('vlcBuyerMapSel-' + i);
+  const btn = document.getElementById('vlcBuyerMapBtn-' + i);
+  if(!r || !sel || !cropperUser) return;
+  const field = mkField(r.marketplace);
+  if(!field){ buyerMsg('Unknown marketplace for ' + r.sku + '.', false); return; }
+  const choice = sel.value;
+  if(!choice){ buyerMsg('Pick a product for ' + r.sku + ' first (or ＋ New product).', false); return; }
+  const uid = cropperUser.uid;
+  const col = db.collection('users').doc(uid).collection('buyerSkuMappings');
+  // Never let one SKU sit on two products — a label couldn't pick which stock.
+  const clash = mappingsCache.find(m => m.status === 'ACTIVE' && skuListHas(m[field], r.sku));
+  if(clash){ buyerMsg(`${r.sku} is already on "${clash.productName}".`, false); return; }
+  btn.disabled = true;
+  buyerMsg('Saving…', true);
+  try{
+    let mapping;
+    if(choice === NEW_BUYER_PRODUCT){
+      const name = (prompt(`Name for the new product with ${r.marketplace} SKU ${r.sku}:`, r.sku) || '').trim();
+      if(!name){ btn.disabled = false; buyerMsg('Cancelled.', false); return; }
+      const ref = col.doc();
+      // Same shape Buyer SKU Master saves for a "Not linked" product.
+      mapping = {
+        linkType: 'OWN', sellerId: uid, sellerName: 'Not linked (own product)', productId: 'own_' + ref.id,
+        productName: name, sellerProductName: '', sellerSku: '', buyerSku: '',
+        amazonSku: '', meeshoSku: '', flipkartSku: '', [field]: r.sku,
+        status: 'ACTIVE', stock: 0, reorderLevel: 0,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+      await ref.set(mapping);
+      mapping = { id: ref.id, ...mapping };
+    } else {
+      mapping = mappingsCache.find(m => m.id === choice);
+      if(!mapping){ btn.disabled = false; return; }
+      const newList = joinSkuList([mapping[field] || '', r.sku].join(','));
+      await col.doc(mapping.id).set({ [field]: newList, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      mapping = { ...mapping, [field]: newList };
+    }
+    // Clear it from Buyer SKU Master's Unmapped SKUs list.
+    try{
+      await db.collection('users').doc(uid).collection('unmappedSkus').doc(`${r.marketplace}_${r.sku}`.replace(/[\/\s]+/g, '_')).delete();
+    }catch(e){}
+    // Labels with this SKU printed before it was mapped: deduct them now.
+    const pkg = findPackaging(mapping.sellerId, mapping.productId);
+    const done = await VLS.settleQueued(uid, VLS.queueDocId(r.sku), { id: mapping.id, name: mapping.productName }, pkg, sizeNameOf,
+      { col: VLS.BUYER_Q, buyerMapping: mapping });
+    await loadMappings();
+    await Promise.all([loadPackagingSizes(), loadLabelSizes()]);
+    refreshSizeViews();
+    let late = '';
+    if(done && (done.labels || done.packing || done.stickers)) late = ` Also deducted ${done.units} unit(s) for ${done.labels} label(s) you'd already printed.`;
+    buyerMsg(`Mapped ${r.sku} → ${mapping.productName}.${late}`, true);
+  }catch(err){
+    console.error('Buyer mapping failed:', err);
+    buyerMsg('Could not save: ' + (err.code || err.message), false);
+    btn.disabled = false;
+  }
+}
+/* Packing / label size for a buyer product — same record Buyer SKU Master's
+   "Assign Sizes to a Product" uses (buyerProductPackaging/{sellerId}_{productId}). */
+async function saveBuyerSizeAssign(mappingId, field, sizeId){
+  const m = mappingsCache.find(x => x.id === mappingId);
+  if(!m || !cropperUser) return;
+  try{
+    await db.collection('users').doc(cropperUser.uid).collection('buyerProductPackaging').doc(`${m.sellerId}_${m.productId}`).set({
+      sellerUid: m.sellerId, sellerName: m.sellerName || '', productId: m.productId, productName: m.productName,
+      [field]: sizeId || null,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await loadPackaging();
+    renderStockPanel(lastDetectedRows);
+    buyerMsg(`${field === 'packagingSizeId' ? 'Packing' : 'Label'} size saved for ${m.productName}.`, true);
+  }catch(err){ buyerMsg('Could not save: ' + (err.code || err.message), false); }
 }
 
 /* ---------------- Seller Stock panel ----------------
@@ -2443,9 +2561,11 @@ async function processPdf(courierFilter){
     // Seller: unmapped labels just printed go to the Unmapped Label SKUs list
     // (Billing → Stock Management). If their sticker already came off the
     // printer-size stock, settling them later won't take another.
-    if(prodRes && prodRes.role === 'seller' && prodRes.unmapped.length){
-      try{ await VLS.queueUnmapped(cropperUser.uid, prodRes.unmapped, !!(stockRes && stockRes.labelFromPaper), 'label-cropper'); }
-      catch(err){ console.error('Queueing unmapped SKUs failed:', err); }
+    if(prodRes && prodRes.unmapped.length){
+      try{
+        await VLS.queueUnmapped(cropperUser.uid, prodRes.unmapped, !!(stockRes && stockRes.labelFromPaper), 'label-cropper',
+          prodRes.role === 'seller' ? VLS.SELLER_Q : VLS.BUYER_Q);
+      }catch(err){ console.error('Queueing unmapped SKUs failed:', err); }
     }
     const parts = [];
     if(prodRes){
@@ -2456,7 +2576,7 @@ async function processPdf(courierFilter){
         const u = [...new Set(prodRes.unmapped.map(it => it.sku))];
         parts.push(prodRes.role === 'seller'
           ? `${u.length} SKU(s) not mapped — listed in Billing → Stock Management; map there or below and they'll be deducted then`
-          : `${u.length} SKU(s) not in Buyer SKU Master — added to its Unmapped SKUs list`);
+          : `${u.length} SKU(s) not mapped — map them in the Buyer Stock box above and they'll be deducted then`);
       }
     }
     if(stockRes){
