@@ -96,14 +96,19 @@
     return true;
   }
 
-  /* ---------- Unmapped seller-label queue (users/{uid}/sellerUnmappedLabelSkus) ---------- */
+  /* ---------- Unmapped-label queues ----------
+     Seller: users/{uid}/sellerUnmappedLabelSkus  (shown in Billing → Stock Management)
+     Buyer : users/{uid}/buyerUnmappedLabelSkus   (settled when the SKU is added to a
+             buyer product — in Label Cropper's Buyer Stock box or Buyer SKU Master) */
+  const SELLER_Q = 'sellerUnmappedLabelSkus', BUYER_Q = 'buyerUnmappedLabelSkus';
   function queueDocId(sku){ return 'sku_' + hashText(String(sku).trim().toLowerCase()); }
-  async function queueUnmapped(uid, items, labelDone, source){
+  async function queueUnmapped(uid, items, labelDone, source, col){
+    col = col || SELLER_Q;
     const bySku = {};
     items.forEach(it => { const k = it.sku.trim().toLowerCase(); (bySku[k] = bySku[k] || []).push(it); });
     for(const k of Object.keys(bySku)){
       const first = bySku[k][0];
-      const ref = u(uid).collection('sellerUnmappedLabelSkus').doc(queueDocId(first.sku));
+      const ref = u(uid).collection(col).doc(queueDocId(first.sku));
       try{
         await db.runTransaction(async tx => {
           const snap = await tx.get(ref);
@@ -130,8 +135,11 @@
   /* Deducts everything queued under one doc for `product`, then deletes it.
      pkg = the product's buyerProductPackaging assignment (or null),
      sizeName(col, id) = display name lookup for history notes. */
-  async function settleQueued(uid, docId, product, pkg, sizeName){
-    const ref = u(uid).collection('sellerUnmappedLabelSkus').doc(docId);
+  /* opts.col = which queue (default Seller); opts.buyerMapping = the buyer
+     product to deduct instead of a Seller product. */
+  async function settleQueued(uid, docId, product, pkg, sizeName, opts){
+    opts = opts || {};
+    const ref = u(uid).collection(opts.col || SELLER_Q).doc(docId);
     const snap = await ref.get();
     const out = { labels: 0, units: 0, already: 0, packing: 0, stickers: 0 };
     if(!snap.exists) return out;
@@ -140,7 +148,9 @@
     }));
     const stickerLabels = new Set();
     for(const it of pending){
-      const r = await sellerProductOnce(uid, it, product, 'queue');
+      const r = opts.buyerMapping
+        ? await buyerProductOnce(uid, it, opts.buyerMapping, 'queue')
+        : await sellerProductOnce(uid, it, product, 'queue');
       if(r === 'deducted'){ out.labels++; out.units += it.qty; } else out.already++;
       if(pkg && pkg.packagingSizeId && await packingOnce(uid, it, pkg.packagingSizeId, sizeName('buyerPackagingSizes', pkg.packagingSizeId), `Catch-up — ${it.marketplace} ${it.sku}`)) out.packing++;
       if(pkg && pkg.labelSizeId && !it.labelDone) stickerLabels.add(it.packKey || it.key);
@@ -169,5 +179,5 @@
     return wasSold ? 'returned' : 'returned-unsold';
   }
 
-  global.VLS = { today, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce };
+  global.VLS = { SELLER_Q, BUYER_Q, today, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce };
 })(window);
