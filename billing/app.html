@@ -177,7 +177,7 @@
 
       <div class="card hidden" id="labelSkuQueueCard" style="border:1.5px solid #E8A32C;background:#FFF7ED">
         <h2>Unmapped Label SKUs <span id="labelSkuQueueCount" class="badge"></span></h2>
-        <p class="sub">Labels you printed in <a href="../tools/label-cropper.html" target="_blank" rel="noopener">Label Cropper</a> (as Seller) whose SKU isn't linked to a Product yet — nothing was deducted for them. Pick the product and click <b>Map &amp; Deduct</b>: the mapping is saved, and product stock, packing and label stock are deducted for every label listed (each label only ever once). <b>Not a stock item</b> removes it without deducting anything.</p>
+        <p class="sub">Labels you printed in <a href="../tools/label-cropper.html?role=seller" target="_blank" rel="noopener">Label Cropper</a> (as Seller) whose SKU isn't linked to a Product yet — nothing was deducted for them. Pick the product and click <b>Map &amp; Deduct</b>: the mapping is saved, and product stock, packing and label stock are deducted for every label listed (each label only ever once). <b>Not a stock item</b> removes it without deducting anything.</p>
         <table><thead><tr><th>Marketplace</th><th>SKU</th><th>Labels</th><th>Units</th><th>First / last printed</th><th>Product</th><th></th></tr></thead>
         <tbody id="labelSkuQueueTable"></tbody></table>
         <p class="msg" id="labelSkuQueueMsg"></p>
@@ -201,17 +201,10 @@
 
       <div class="card">
         <h2>Sell via Label — Deduct Stock</h2>
-        <p class="sub">If you also sell directly on Amazon/Meesho/Flipkart (not just through buyers placing orders in this app), upload those shipping-label PDFs here — each one found deducts that product's stock right away. This is a direct sale, not a procurement request, so <b>no order is created</b> for it. A SKU mapped here is remembered for the Monthly Inventory Reconciliation upload above too, and vice versa.</p>
+        <p class="sub">If you also sell directly on Amazon/Meesho/Flipkart (not just through buyers placing orders in this app), upload those shipping-label PDFs here — each one found deducts that product's stock right away — plus one packing and one label (the sizes picked for the product in Label Cropper's Seller Stock box), the first time that shipment is seen. Counting is per shipment (order ID), shared with <a href="../tools/label-cropper.html?role=seller" target="_blank" rel="noopener">Label Cropper</a>, so a label processed in both places is only counted once. Unrecognised SKUs go to <b>Unmapped Label SKUs</b> above. This is a direct sale, so <b>no order is created</b> for it. A SKU mapped here is remembered for the Monthly Inventory Reconciliation upload above too, and vice versa.</p>
         <input type="file" id="sellerLabelFiles" multiple accept="application/pdf">
         <button class="btn primary" style="margin-left:8px" onclick="processSellerLabelFiles()">Process Labels</button>
         <p class="msg" id="sellerLabelMsg"></p>
-
-        <div id="sellerLabelUnmappedCard" class="hidden" style="margin-top:14px">
-          <h3 style="font-family:var(--display);font-size:15px;margin:0 0 8px">Map Unrecognized SKUs</h3>
-          <p class="sub">These label SKUs don't match a Product yet — pick which product each one is, once, and it's remembered for next time.</p>
-          <div id="sellerLabelUnmappedList"></div>
-          <button class="btn primary" style="margin-top:10px" onclick="applySellerLabelMappings()">Save Mappings &amp; Deduct Stock</button>
-        </div>
 
         <table style="margin-top:14px"><thead><tr><th>Marketplace</th><th>SKU</th><th>Matched Product</th><th>Qty</th><th>Status</th></tr></thead>
         <tbody id="sellerLabelResultsTable"></tbody></table>
@@ -799,6 +792,7 @@
 <script src="assets/indian-states.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="assets/label-sku-extract.js"></script>
+<script src="assets/label-stock-core.js"></script>
 <script src="assets/billing-app.js"></script>
 </body>
 </html>
