@@ -925,8 +925,8 @@ async function loadSellerEmails(){
 function findMapping(marketplace, sku){
   const field = { AMAZON: 'amazonSku', MEESHO: 'meeshoSku', FLIPKART: 'flipkartSku' }[marketplace];
   if(!field) return null;
-  const skuLower = sku.trim().toLowerCase();
-  return mappingsCache.find(m => (m[field] || '').trim().toLowerCase() === skuLower) || null;
+  // A field can hold several SKUs ("A, B, C") — see splitSkuList().
+  return mappingsCache.find(m => skuListHas(m[field], sku)) || null;
 }
 async function isAlreadyProcessed(pageHash){
   try{
