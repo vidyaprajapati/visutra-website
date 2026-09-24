@@ -5,6 +5,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="../billing/assets/firebase-config.js"></script>
+<script src="../billing/assets/label-sku-extract.js"></script>
+<script src="../billing/assets/label-stock-core.js"></script>
 <script src="../billing/assets/user-menu.js"></script>
 <script src="assets/auth-guard.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
@@ -209,10 +211,10 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         <div id="vlcStockOverviewLabels"></div>
       </div>
     </div>
-    <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:14px 0 0">Active sizes only. Add stock, define packing sizes and switch sizes on/off in <b>Label &amp; Packing Settings</b> below; assign them to products in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a>.</p>
+    <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:14px 0 0">Active sizes only. Add stock, define packing sizes and switch sizes on/off in <b>Label &amp; Packing Settings</b> below; assign them to products <span id="vlcAssignWhere">in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a></span>.</p>
   </div>
 
-  <details class="vlc-settings" id="vlcSizeSettings">
+  <details class="vlc-settings" id="vlcSizeSettings" ontoggle="if(this.open) loadSizeHistory()">
     <summary><span>⚙ Label &amp; Packing Settings</span><span id="vlcSettingsSummary" style="text-transform:none;letter-spacing:0;font-family:var(--font-body);font-size:12px;color:var(--ink-soft);margin-left:auto"></span></summary>
     <div class="vlc-settings-body">
       <div>
@@ -221,14 +223,14 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         <div class="vlc-tbl-wrap"><table class="vlc-tbl"><thead><tr><th>Size</th><th>Active</th><th>Stock</th><th>Reorder below</th><th>Add stock</th></tr></thead>
         <tbody id="vlcLabelSettingsTable"></tbody></table></div>
         <div id="vlcLegacyLabelWrap" style="display:none;margin-top:14px">
-          <p class="sub" style="margin-bottom:6px"><b>Other label stock</b> (defined earlier in Buyer SKU Master). Link one to a printer size to use it when printing at that size.</p>
+          <p class="sub" style="margin-bottom:6px"><b>Other label stock</b> (custom-named label stock added earlier). Link one to a printer size to use it when printing at that size.</p>
           <div class="vlc-tbl-wrap"><table class="vlc-tbl"><thead><tr><th>Name</th><th>Active</th><th>Stock</th><th>Reorder below</th><th>Add stock</th><th>Printer size</th></tr></thead>
           <tbody id="vlcLegacyLabelTable"></tbody></table></div>
         </div>
       </div>
       <div>
         <h3>Packing sizes</h3>
-        <p class="sub">Bags / boxes you pack with. Tick <b>Active</b> to make a size selectable for products in Buyer SKU Master. Packing is deducted only the <b>first</b> time a label is printed — never on a reprint.</p>
+        <p class="sub">Bags / boxes you pack with. Tick <b>Active</b> to make a size selectable when assigning packing to products. Packing is deducted only the <b>first</b> time a label is printed — never on a reprint.</p>
         <div class="vlc-tbl-wrap"><table class="vlc-tbl"><thead><tr><th>Name</th><th>Active</th><th>Stock</th><th>Reorder below</th><th>Add stock</th><th></th></tr></thead>
         <tbody id="vlcPackSettingsTable"></tbody></table></div>
         <div class="vlc-add-row">
@@ -240,6 +242,16 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         </div>
       </div>
       <p id="vlcSettingsMsg" style="grid-column:1/-1;font-size:12.5px;margin:0;min-height:16px"></p>
+      <div style="grid-column:1/-1">
+        <h3>Stock history</h3>
+        <p class="sub">Every change to label and packing stock — stock added, printed, reprinted, caught up after mapping, returned, or edited in Buyer SKU Master. Latest 150.</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <select id="vlcHistFilter" onchange="renderSizeHistory()" style="padding:6px;font-size:12.5px"><option value="">All sizes</option></select>
+          <button class="vlc-mini-btn" onclick="loadSizeHistory()">Refresh</button>
+        </div>
+        <div class="vlc-tbl-wrap" style="max-height:340px;overflow-y:auto"><table class="vlc-tbl"><thead><tr><th>Date</th><th>Size</th><th>Change</th><th>Type</th><th>Note</th></tr></thead>
+        <tbody id="vlcHistTable"></tbody></table></div>
+      </div>
     </div>
   </details>
 
@@ -404,10 +416,23 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:6px">Seller Stock — Products In This File</div>
     <p id="vlcSellerStockNote" style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:0 0 12px"></p>
     <div class="vlc-tbl-wrap"><table class="vlc-tbl"><thead><tr>
-      <th>Marketplace</th><th>SKU</th><th>Qty</th><th>Product (seller section)</th><th>Product Stock</th><th>Packaging</th><th>Label</th>
+      <th>Marketplace</th><th>SKU</th><th>Qty</th><th>Product (seller section)</th><th>Product Stock</th><th>Packing size</th><th>Label size</th>
     </tr></thead><tbody id="vlcSellerStockTable"></tbody></table></div>
     <p id="vlcSellerStockMsg" style="font-size:12.5px;margin:10px 0 0"></p>
-    <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:10px 0 0"><b>Product stock</b> reduces once per label, the first time it's cropped &amp; downloaded — reprints don't reduce it again (same record as Billing → Sell via Label, so a label processed in either place is only counted once). <b>Packaging</b> and <b>Label</b> stock follow the same rules as the buyer side. Mappings are saved to your Billing SKU mappings — manage them, and your products, in <a href="../billing/app.html?view=products" target="_blank" rel="noopener">Billing → Products</a>; packaging/label sizes live in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a> (assign them with seller = "Myself").</p>
+    <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:10px 0 0"><b>Product stock</b> reduces once per label, the first time it's cropped &amp; downloaded — reprints don't reduce it again (same record as Billing → Sell via Label, so a label processed in either place is only counted once). <b>Packaging</b> and <b>Label</b> stock follow the same rules as the buyer side. Mappings are saved to your Billing SKU mappings — manage them, and your products, in <a href="../billing/app.html?view=products" target="_blank" rel="noopener">Billing → Products</a>. Pick each product's packing and label size right in this table; define sizes and add stock in <b>Label &amp; Packing Settings</b> above.</p>
+  </div>
+
+  <div id="vlcReturnsCard" style="display:none;margin-top:18px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
+    <div style="font-family:var(--font-mono,monospace);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft,#6B6255);margin-bottom:6px">Returns / RTO — add stock back</div>
+    <p style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:0 0 10px">Upload the shipping label (or the original label PDF) of parcels that came back. Each product line is added back to your product stock <b>once</b> — processing the same return twice does nothing. SKUs are read the same way as for printing. Not a label? Use <a href="../billing/app.html?view=stock" target="_blank" rel="noopener">Billing → Adjust Stock</a>.</p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input type="file" id="vlcReturnFiles" accept="application/pdf" multiple style="font-size:12.5px">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12.5px"><input type="checkbox" id="vlcReturnPacking" style="width:auto"> Packing is reusable — add it back too</label>
+      <button class="vlc-map-btn" onclick="processReturns()">Process returns</button>
+    </div>
+    <p id="vlcReturnsMsg" style="font-size:12.5px;margin:10px 0 0"></p>
+    <div class="vlc-tbl-wrap"><table class="vlc-tbl" style="margin-top:8px"><thead><tr><th>Marketplace</th><th>SKU</th><th>Qty</th><th>Product</th><th>Result</th></tr></thead>
+    <tbody id="vlcReturnsTable"></tbody></table></div>
   </div>
 
   <div id="vlcStockPanel" style="display:none;margin-top:18px;padding:18px 20px;background:var(--card,#fff);border:1.5px solid var(--ink);border-radius:var(--radius,10px)">
@@ -488,7 +513,6 @@ let sellerDataLoaded = false;
 // Billing → Stock Management → "Unmapped Label SKUs" and survives closing
 // this tab; mapping the SKU there OR here deducts product + packing + label
 // for every label already printed, then clears it from the list.
-const SELLER_QUEUE_COL = 'sellerUnmappedLabelSkus';
 
 firebase.auth().onAuthStateChanged(async user => {
   if(!user) return; // assets/auth-guard.js already redirects to login when signed out — nothing to do here
@@ -535,11 +559,8 @@ async function reloadSellerProducts(){
   sellerProductsCache = snap.docs.map(d => ({id: d.id, ...d.data()}))
     .sort((a,b) => String(a.name||'').localeCompare(String(b.name||'')));
 }
-/* Resolves a detected marketplace SKU to one of YOUR OWN products (seller
-   section). Billing's skuMappings is checked first (that's the seller
-   section's own mapping table); if nothing's there, a Buyer SKU Master
-   mapping made with seller = "Myself" is honoured too, since that points at
-   the same product. Case-insensitive, like the buyer-side findMapping(). */
+/* Resolves a detected marketplace SKU to one of YOUR OWN products (Seller
+   section) through Billing's skuMappings only. Case-insensitive. */
 function resolveSellerProduct(marketplace, sku){
   if(!cropperUser || !sku) return null;
   const key = String(sku).trim().toLowerCase();
@@ -548,11 +569,7 @@ function resolveSellerProduct(marketplace, sku){
     const product = sellerProductsCache.find(p => p.id === m.productId);
     if(product) return { productId: product.id, productName: product.name, product, mappingId: m.id };
   }
-  const bm = findMapping(marketplace, sku);
-  if(bm && bm.sellerId === cropperUser.uid){
-    const product = sellerProductsCache.find(p => p.id === bm.productId);
-    if(product) return { productId: product.id, productName: product.name, product, mappingId: null };
-  }
+  // Seller section only — Buyer SKU Master mappings are never used here.
   return null;
 }
 async function loadPackaging(){
@@ -712,6 +729,7 @@ function updateLabelStockHint(){
 async function afterSizeChange(msg){
   await Promise.all([loadPackagingSizes(), loadLabelSizes()]);
   refreshSizeViews();
+  if(document.getElementById('vlcSizeSettings').open) loadSizeHistory();
   if(msg) settingsMsg(msg, true);
 }
 function sizeCol(col){ return db.collection('users').doc(cropperUser.uid).collection(col); }
@@ -731,8 +749,11 @@ async function addPaperLabelStock(key){
   try{
     const d = labelDocForPaper(key);
     const ps = LABEL_PAPER_SIZES.find(x => x.key === key);
-    if(d) await sizeCol('buyerLabelSizes').doc(d.id).update({ stock: firebase.firestore.FieldValue.increment(qty), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-    else await sizeCol('buyerLabelSizes').doc('paper_' + key).set({ name: ps.name, paperKey: key, stock: qty, minQty: 0, active: true, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    if(d) await VLS.adjustSize(cropperUser.uid, 'buyerLabelSizes', d.id, qty, { sizeName: ps.name, type: qty > 0 ? 'stock-add' : 'correction', note: 'Label & Packing Settings' });
+    else {
+      await sizeCol('buyerLabelSizes').doc('paper_' + key).set({ name: ps.name, paperKey: key, stock: qty, minQty: 0, active: true, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+      await VLS.logSize(cropperUser.uid, 'buyerLabelSizes', 'paper_' + key, ps.name, qty, 'stock-add', 'Opening stock');
+    }
     await afterSizeChange(`${qty > 0 ? 'Added' : 'Removed'} ${Math.abs(qty)} × ${ps.name} label${d ? '' : ' (and activated it)'}.`);
   }catch(err){ settingsMsg('Could not save: ' + (err.code || err.message), false); }
 }
@@ -741,9 +762,10 @@ async function addSizeStock(col, id){
   const qty = parseInt(input.value, 10);
   if(!qty){ settingsMsg('Enter a quantity to add (use a negative number to correct a count).', false); return; }
   try{
-    await sizeCol(col).doc(id).update({ stock: firebase.firestore.FieldValue.increment(qty), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
     const list = col === 'buyerLabelSizes' ? labelSizesCache : packagingSizesCache;
     const d = list.find(x => x.id === id);
+    const ok = await VLS.adjustSize(cropperUser.uid, col, id, qty, { sizeName: d ? d.name : '', type: qty > 0 ? 'stock-add' : 'correction', note: 'Label & Packing Settings' });
+    if(!ok) throw new Error('update failed');
     await afterSizeChange(`${qty > 0 ? 'Added' : 'Removed'} ${Math.abs(qty)} × ${d ? d.name : 'item'}.`);
   }catch(err){ settingsMsg('Could not save: ' + (err.code || err.message), false); }
 }
@@ -775,13 +797,15 @@ async function addPackingSize(){
     settingsMsg(`"${name}" already exists — add stock to it instead.`, false); return;
   }
   try{
-    await sizeCol('buyerPackagingSizes').add({
+    const opening = parseInt(document.getElementById('vlcNewPackStock').value, 10) || 0;
+    const newRef = await sizeCol('buyerPackagingSizes').add({
       name,
-      stock: parseInt(document.getElementById('vlcNewPackStock').value, 10) || 0,
+      stock: opening,
       minQty: parseInt(document.getElementById('vlcNewPackMin').value, 10) || 0,
       active: document.getElementById('vlcNewPackActive').checked,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
+    await VLS.logSize(cropperUser.uid, 'buyerPackagingSizes', newRef.id, name, opening, 'stock-add', 'Opening stock');
     document.getElementById('vlcNewPackName').value = '';
     document.getElementById('vlcNewPackStock').value = 0;
     document.getElementById('vlcNewPackMin').value = 0;
@@ -805,6 +829,88 @@ async function deletePackingSize(id){
     await afterSizeChange('Deleted.');
   }catch(err){ settingsMsg('Could not delete: ' + (err.code || err.message), false); }
 }
+/* ---------------- Size stock history ---------------- */
+let sizeHistoryCache = [];
+const HIST_TYPE_LABEL = { 'stock-add':'Stock added', 'correction':'Correction', 'print':'Printed', 'reprint':'Reprint', 'catch-up':'Catch-up after mapping', 'return':'Return', 'stock-set':'Edited (SKU Master)', 'sell-via-label':'Sell via Label' };
+async function loadSizeHistory(){
+  if(!cropperUser) return;
+  try{
+    const snap = await db.collection('users').doc(cropperUser.uid).collection('sizeStockMovements').orderBy('createdAt', 'desc').limit(150).get();
+    sizeHistoryCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }catch(err){ console.error('Loading size stock history failed:', err); sizeHistoryCache = []; }
+  const sel = document.getElementById('vlcHistFilter');
+  const prev = sel.value;
+  const sizes = [...labelSizesCache.map(d => ({ id: d.id, name: 'Label — ' + d.name })), ...packagingSizesCache.map(d => ({ id: d.id, name: 'Packing — ' + d.name }))];
+  sel.innerHTML = '<option value="">All sizes</option>' + sizes.map(z => `<option value="${escapeHtml(z.id)}">${escapeHtml(z.name)}</option>`).join('');
+  sel.value = sizes.some(z => z.id === prev) ? prev : '';
+  renderSizeHistory();
+}
+function renderSizeHistory(){
+  const f = document.getElementById('vlcHistFilter').value;
+  const rows = sizeHistoryCache.filter(m => !f || m.sizeId === f);
+  document.getElementById('vlcHistTable').innerHTML = rows.map(m => `
+    <tr><td style="white-space:nowrap">${escapeHtml(m.date || '')}</td>
+    <td>${escapeHtml((m.kind === 'label' ? 'Label — ' : 'Packing — ') + (m.sizeName || ''))}</td>
+    <td style="font-family:var(--font-mono);color:${m.qty < 0 ? '#9E3608' : '#0A5C4F'}">${m.qty > 0 ? '+' : ''}${m.qty}</td>
+    <td>${escapeHtml(HIST_TYPE_LABEL[m.type] || m.type || '')}</td>
+    <td style="font-size:12px;color:var(--ink-soft)">${escapeHtml(m.note || '')}</td></tr>`).join('')
+    || '<tr><td colspan="5" style="color:var(--ink-soft)">No history yet.</td></tr>';
+}
+
+/* ---------------- Returns (Seller) ----------------
+   Adds product stock back once per product line per shipment (same order-ID
+   key as printing — sellerReturnedLabels guards against processing a return
+   twice). Optional: add one packet back per returned label. */
+async function processReturns(){
+  const msg = document.getElementById('vlcReturnsMsg');
+  const files = document.getElementById('vlcReturnFiles').files;
+  if(!cropperUser){ msg.textContent = 'Still checking your account — try again in a moment.'; return; }
+  if(!files || !files.length){ msg.textContent = 'Choose the returned label PDF(s) first.'; msg.style.color = '#9E3608'; return; }
+  if(!sellerDataLoaded) await loadSellerData();
+  const addPacking = document.getElementById('vlcReturnPacking').checked;
+  msg.textContent = 'Reading labels…'; msg.style.color = 'var(--ink-soft)';
+  const items = [];
+  for(const file of files){
+    try{
+      const doc = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+      for(let i = 1; i <= doc.numPages; i++){
+        const content = await (await doc.getPage(i)).getTextContent();
+        const text = content.items.map(it => it.str).join(' ');
+        extractAllMarketplaceItems(text).forEach(it => items.push({ ...it, key: labelKey(it.marketplace, it.sku, text), packKey: packingKey(it.marketplace, text) }));
+      }
+    }catch(err){ msg.textContent = `Could not read ${file.name}: ${err.message}`; msg.style.color = '#9E3608'; return; }
+  }
+  if(!items.length){ msg.textContent = 'No marketplace SKU could be read from the file(s).'; msg.style.color = '#9E3608'; return; }
+  const uid = cropperUser.uid;
+  const rows = [];
+  let units = 0, packs = 0;
+  const packedBack = new Set();
+  for(const it of items){
+    const p = resolveSellerProduct(it.marketplace, it.sku);
+    if(!p){ rows.push({ it, product: '', result: 'SKU not mapped — map it in the Seller Stock box / Billing first, then process again' }); continue; }
+    try{
+      const r = await VLS.sellerReturnOnce(uid, it, { id: p.productId, name: p.productName });
+      if(r === 'already'){ rows.push({ it, product: p.productName, result: 'Already returned before — skipped' }); continue; }
+      units += it.qty;
+      rows.push({ it, product: p.productName, result: r === 'returned' ? `+${it.qty} added back` : `+${it.qty} added back (no matching sale on record)` });
+      if(addPacking && !packedBack.has(it.packKey)){
+        packedBack.add(it.packKey);
+        const pkg = findPackaging(uid, p.productId);
+        if(pkg && pkg.packagingSizeId && await VLS.adjustSize(uid, 'buyerPackagingSizes', pkg.packagingSizeId, 1, { sizeName: sizeNameOf('buyerPackagingSizes', pkg.packagingSizeId), type: 'return', note: `${it.marketplace} ${it.sku}` })) packs++;
+      }
+    }catch(err){ rows.push({ it, product: p.productName, result: 'Failed: ' + (err.code || err.message) }); }
+  }
+  document.getElementById('vlcReturnsTable').innerHTML = rows.map(r => `<tr>
+    <td>${escapeHtml(r.it.marketplace)}</td><td style="font-family:var(--font-mono)">${escapeHtml(r.it.sku)}</td><td>${r.it.qty}</td>
+    <td>${escapeHtml(r.product || '—')}</td><td>${escapeHtml(r.result)}</td></tr>`).join('');
+  msg.textContent = `Done — ${units} unit(s) added back to product stock` + (packs ? `, ${packs} packing added back` : '') + '.';
+  msg.style.color = '#0A5C4F';
+  document.getElementById('vlcReturnFiles').value = '';
+  await reloadSellerProducts();
+  await Promise.all([loadPackagingSizes(), loadLabelSizes()]);
+  refreshSizeViews();
+}
+
 async function loadMappings(){
   const snap = await db.collection('users').doc(cropperUser.uid).collection('buyerSkuMappings').get();
   mappingsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(m => m.status === 'ACTIVE');
@@ -1019,6 +1125,12 @@ function onRequireOrderToggleChange(){
             order summary are all hidden, and printing deducts straight from
             your own product stock (plus packaging & label stock).
    Persisted so it survives a reopen, like every other setting here. */
+(function roleFromUrl(){
+  try{
+    const r = new URLSearchParams(window.location.search).get('role');
+    if(r === 'seller' || r === 'buyer') localStorage.setItem('vlc_printer_role', r);
+  }catch(e){}
+})();
 function getRole(){
   try{ return localStorage.getItem('vlc_printer_role') === 'seller' ? 'seller' : 'buyer'; }catch(e){ return 'buyer'; }
 }
@@ -1045,6 +1157,10 @@ function applyRoleUi(){
   document.getElementById('vlcSkuSummaryBuyerNote').style.display = seller ? 'none' : '';
   document.getElementById('vlcSkuSummaryBuyerLink').style.display = seller ? 'none' : '';
   document.getElementById('vlcSkuSummarySellerNote').style.display = seller ? 'block' : 'none';
+  document.getElementById('vlcReturnsCard').style.display = seller ? 'block' : 'none';
+  document.getElementById('vlcAssignWhere').innerHTML = seller
+    ? 'in the <b>Seller Stock</b> box (appears after you upload a file)'
+    : 'in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a>';
   if(seller){
     document.getElementById('vlcSendGateWrap').style.display = 'none';
     document.getElementById('vlcSendGateNote').style.display = 'none';
@@ -1121,45 +1237,6 @@ let groupOrder = [];      // list of group keys in the order to export them
 let groupByCourier = true;
 let groupBySku = false;
 
-function extractMeeshoSkuQty(text){
-  // 1) Find the "SKU Size Qty Color Order No." header printed on every standard
-  //    Meesho label. Once found, the SKU is taken as the very first token right
-  //    after it — no assumption is made about how Size/Qty/Color are formatted
-  //    (single word, multiple words, unusual characters, etc.), so this works
-  //    for absolutely any SKU format any seller uses, not just VISUTRA's own.
-  const headerMatch = text.match(/SKU\s*Size\s*Qty\s*Color\s*Order\s*No\.?/i);
-  if(headerMatch){
-    const afterHeader = text.slice(headerMatch.index + headerMatch[0].length).trim();
-    const skuMatch = afterHeader.match(/\S+/);
-    if(skuMatch){
-      const sku = skuMatch[0];
-      // Qty: the last standalone 1–3 digit number before the Order No. pattern
-      // (Order No. itself is excluded from this search so it's never mistaken for Qty).
-      const orderNoMatch = afterHeader.match(/\d{6,}_\d{1,3}/);
-      const searchZone = orderNoMatch ? afterHeader.slice(0, orderNoMatch.index) : afterHeader;
-      const qtyMatches = searchZone.match(/\b\d{1,3}\b/g);
-      const qty = qtyMatches && qtyMatches.length ? parseInt(qtyMatches[qtyMatches.length - 1], 10) : 1;
-      return { sku, qty: qty || 1 };
-    }
-  }
-  // 2) No header found at all (non-standard/garbled label text): anchor on the
-  //    LAST occurrence of the Order No. pattern (6+ digits, underscore, 1-3
-  //    digits) — using the last one rather than the first avoids being fooled by
-  //    a numeric SKU earlier in the text that happens to look the same shape —
-  //    then take the nearest product-code-shaped token before it.
-  const allOrderNos = text.match(/\d{6,}_\d{1,3}\b/g);
-  if(allOrderNos && allOrderNos.length){
-    const idx = text.lastIndexOf(allOrderNos[allOrderNos.length - 1]);
-    const before = text.slice(0, idx).slice(-120);
-    const tokens = before.trim().split(/\s+/).filter(t => t.length >= 3 && /[A-Za-z0-9]/.test(t));
-    if(tokens.length){
-      const codeLike = tokens.filter(t => /[-_]/.test(t) || (/[A-Za-z]/.test(t) && /\d/.test(t)));
-      return { sku: codeLike[codeLike.length - 1] || tokens[tokens.length - 1], qty: 1 };
-    }
-  }
-  return { sku: 'Unknown SKU', qty: 1 };
-}
-
 async function detectCouriers(){
   pageCouriers = [];
   pageSkus = [];
@@ -1176,7 +1253,7 @@ async function detectCouriers(){
     }
     pageCouriers.push(found);
     pageTexts[i-1] = text;
-    const skuQty = extractMeeshoSkuQty(text);
+    const skuQty = extractMeeshoSkuQty(text) || { sku: 'Unknown SKU', qty: 1 };
     pageSkus.push(skuQty.sku);
     pageQtys.push(skuQty.qty);
   }
@@ -1243,44 +1320,6 @@ function renderCourierPanel(){
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function escapeAttr(s){ return String(s).replace(/'/g, "\\'"); }
 
-/* ---------------- Flipkart SKU + Qty extraction ----------------
-   Built and tested against a real Flipkart shipping-label PDF. Two
-   independent anchors are tried — either is enough on its own, since the
-   label section and the tax-invoice section both print the SKU in a
-   stable, distinct spot:
-
-   1) The label's own "SKU ID | Description" table:
-        "SKU ID | Description QTY 1 VST-WA-FA30-6_7.5 | Visutra Top Loading
-         Washing Machine Cover Grey 1"
-   2) The tax invoice's product line, which always prints the SKU
-      immediately before "| IMEI/SrNo":
-        "... WA-FA30-6_7.5 | VST-WA-FA30-6_7.5 | IMEI/SrNo: [[]] HSN: 63049291
-         | IGST: 5.00% | CESS: 0.00% 1 230.00 ..." */
-function extractFlipkartSkuQty(text){
-  const headerMatch = text.match(/SKU\s*ID\s*\|\s*Description/i);
-  if(headerMatch){
-    let after = text.slice(headerMatch.index + headerMatch[0].length);
-    after = after.replace(/^\s*QTY\s*/i, '');
-    after = after.replace(/^\s*\d+\s+/, ''); // drop the row's leading index number
-    const skuMatch = after.match(/^\s*([A-Za-z0-9][A-Za-z0-9\-_.]{2,60}?)\s*\|/);
-    if(skuMatch){
-      const sku = skuMatch[1].trim();
-      const afterSku = after.slice(skuMatch[0].length);
-      const qtyMatch = afterSku.match(/\b(\d{1,3})\b/);
-      return { sku, qty: qtyMatch ? (parseInt(qtyMatch[1], 10) || 1) : 1 };
-    }
-  }
-  const imeiMatch = text.match(/\|\s*([A-Za-z0-9][A-Za-z0-9\-_.]{2,60})\s*\|\s*IMEI\s*\/?\s*SrNo/i);
-  if(imeiMatch){
-    const sku = imeiMatch[1].trim();
-    const after = text.slice(imeiMatch.index + imeiMatch[0].length);
-    const cessMatch = after.match(/CESS\s*:\s*[\d.]+\s*%/i);
-    const searchZone = cessMatch ? after.slice(cessMatch.index + cessMatch[0].length) : after;
-    const qtyMatch = searchZone.match(/\b(\d{1,3})\b/);
-    return { sku, qty: qtyMatch ? (parseInt(qtyMatch[1], 10) || 1) : 1 };
-  }
-  return { sku: 'Unknown SKU', qty: 1 };
-}
 async function detectFlipkartSkus(){
   pageSkus = []; pageQtys = [];
   pageSkusPlatform = 'flipkart';
@@ -1289,7 +1328,7 @@ async function detectFlipkartSkus(){
     const content = await page.getTextContent();
     const text = content.items.map(it=>it.str).join(' ');
     pageTexts[i-1] = text;
-    const skuQty = extractFlipkartSkuQty(text);
+    const skuQty = extractFlipkartSkuQty(text) || { sku: 'Unknown SKU', qty: 1 };
     pageSkus.push(skuQty.sku);
     pageQtys.push(skuQty.qty);
   }
@@ -1318,16 +1357,8 @@ async function detectAmazonSkus(){
       const page = await pdfJsDoc.getPage(invoicePageNum);
       const content = await page.getTextContent();
       const text = content.items.map(it=>it.str).join(' ');
-      // Each invoice line item reads, in content-stream order:
-      // "... Display Shield | B0G433K43L ( led-clr-55 ) HSN:63049291  ₹419.00 2 ₹838.00 ..."
-      // i.e. SKU in parentheses, then "HSN:<code>", then Unit Price, then Qty, then Net Amount.
-      // Matched globally so multi-item orders (several products on one invoice) all get picked up.
-      const itemRegex = /\(\s*([^()]+?)\s*\)\s*HSN\s*:\s*\d+\s*(?:₹|Rs\.?|INR)?\s*[\d,]+(?:\.\d+)?\s+(\d+)\s+(?:₹|Rs\.?|INR)?\s*[\d,]+(?:\.\d+)?/gi;
-      const items = [];
-      let m;
-      while((m = itemRegex.exec(text)) !== null){
-        items.push({ sku: m[1].trim(), qty: parseInt(m[2], 10) || 1 });
-      }
+      // SKU in parentheses, then HSN, unit price, Qty — every line item (shared extractor).
+      const items = extractAmazonItems(text);
       if(items.length){
         amazonSkuByLabelIndex[i] = items;
         amazonInvoiceTextByLabelIndex[i] = text;
@@ -1343,27 +1374,6 @@ async function detectAmazonSkus(){
    a marketplace named in the page text is tried first so a Flipkart page
    isn't also mis-read by Meesho's looser Order-No fallback. First extractor
    that yields wins for that page (Amazon can yield several line items). */
-function extractItemsAnyMarketplace(text){
-  const lower = text.toLowerCase();
-  const hint = lower.includes('flipkart') ? 'FLIPKART' : lower.includes('meesho') ? 'MEESHO' : lower.includes('amazon') ? 'AMAZON' : null;
-  const tryers = {
-    FLIPKART: () => { const r = extractFlipkartSkuQty(text); return (r && r.sku !== 'Unknown SKU') ? [{ sku: r.sku, qty: r.qty }] : []; },
-    MEESHO:   () => { const r = extractMeeshoSkuQty(text);   return (r && r.sku !== 'Unknown SKU') ? [{ sku: r.sku, qty: r.qty }] : []; },
-    AMAZON:   () => {
-      const itemRegex = /\(\s*([^()]+?)\s*\)\s*HSN\s*:\s*\d+\s*(?:₹|Rs\.?|INR)?\s*[\d,]+(?:\.\d+)?\s+(\d+)\s+(?:₹|Rs\.?|INR)?\s*[\d,]+(?:\.\d+)?/gi;
-      const out = []; let m;
-      while((m = itemRegex.exec(text)) !== null) out.push({ sku: m[1].trim(), qty: parseInt(m[2], 10) || 1 });
-      return out;
-    }
-  };
-  // Amazon's pattern is the strictest, so it goes before Meesho's loose fallback.
-  const order = hint ? [hint, ...['FLIPKART','AMAZON','MEESHO'].filter(x => x !== hint)] : ['FLIPKART','AMAZON','MEESHO'];
-  for(const mk of order){
-    const items = tryers[mk]();
-    if(items.length) return items.map(it => ({ marketplace: mk, sku: it.sku, qty: it.qty }));
-  }
-  return [];
-}
 async function detectGenericSkus(){
   genericItemsByPage = {};
   for(let i=1;i<=pdfJsDoc.numPages;i++){
@@ -1372,7 +1382,7 @@ async function detectGenericSkus(){
       const content = await page.getTextContent();
       const text = content.items.map(it=>it.str).join(' ');
       pageTexts[i-1] = text;
-      const items = extractItemsAnyMarketplace(text);
+      const items = extractAllMarketplaceItems(text);
       if(items.length) genericItemsByPage[i-1] = items;
     }catch(e){ /* skip unreadable page */ }
   }
@@ -1399,6 +1409,12 @@ function getDetectedByPage(){
       out[idx] = genericItemsByPage[idx].map(it => ({ ...it, text: pageTexts[idx] || '' }));
     });
   }
+  // Shipment-based duplicate keys (see label-sku-extract.js): key = this
+  // product line on this shipment, packKey = this shipment.
+  Object.values(out).forEach(list => list.forEach(it => {
+    it.key = labelKey(it.marketplace, it.sku, it.text);
+    it.packKey = packingKey(it.marketplace, it.text);
+  }));
   return out;
 }
 function isUsingGenericDetection(){
@@ -1844,17 +1860,48 @@ function renderSellerStockPanel(rows){
     const pkg = findPackaging(cropperUser.uid, res.productId);
     const psz = pkg ? packagingSizesCache.find(x => x.id === pkg.packagingSizeId) : null;
     const lsz = pkg ? labelSizesCache.find(x => x.id === pkg.labelSizeId) : null;
+    const sizeSelect = (kind, list, currentId) => {
+      const opts = list.filter(z => isSizeActive(z) || z.id === currentId);
+      return `<select onchange="saveSellerSizeAssign('${escapeAttr(res.productId)}','${kind}',this.value)" style="padding:4px;font-size:12px;max-width:160px">
+        <option value="">— none —</option>${opts.map(z => `<option value="${escapeHtml(z.id)}"${z.id === currentId ? ' selected' : ''}>${escapeHtml(z.name)} (${z.stock||0})${isSizeActive(z) ? '' : ' — inactive'}</option>`).join('')}
+      </select>`;
+    };
     return `<tr${low || short ? ' class="vlc-low-row"' : ''}>
       <td>${escapeHtml(r.marketplace)}</td>
       <td style="font-family:var(--font-mono)">${escapeHtml(r.sku)}</td>
       <td>${r.qty}</td>
       <td>${escapeHtml(res.productName)}</td>
       <td><b>${stock}</b>${short ? ' <span style="color:#9E3608">⚠ less than this file needs</span>' : (low ? ' <span style="color:#9E3608">⚠ reorder</span>' : '')}</td>
-      <td>${sizeCell(psz, pkg ? 'No packaging size' : 'Not assigned')}</td>
-      <td>${sizeCell(lsz, pkg ? 'No label size' : 'Not assigned')}</td>
+      <td>${sizeSelect('packagingSizeId', packagingSizesCache, pkg ? pkg.packagingSizeId : '')}${psz && (psz.stock||0) <= (psz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : ''}</td>
+      <td>${sizeSelect('labelSizeId', labelSizesCache, pkg ? pkg.labelSizeId : '')}${lsz && (lsz.stock||0) <= (lsz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : ''}</td>
     </tr>`;
   }).join('');
   panelEl.style.display = 'block';
+}
+/* Seller-side packing/label size for one of your Billing products — saved
+   here so the Seller section never has to go into Buyer SKU Master.
+   (Label size is only used when the Output paper size has no active label
+   stock; otherwise the printer-size stock is used.) */
+async function saveSellerSizeAssign(productId, field, sizeId){
+  const msg = document.getElementById('vlcSellerStockMsg');
+  const product = sellerProductsCache.find(p => p.id === productId);
+  if(!product || !cropperUser) return;
+  const uid = cropperUser.uid;
+  const docId = `${uid}_${productId}`;
+  try{
+    await db.collection('users').doc(uid).collection('buyerProductPackaging').doc(docId).set({
+      sellerUid: uid, sellerName: 'Seller (my Billing products)', productId, productName: product.name,
+      [field]: sizeId || null,
+      [field === 'packagingSizeId' ? 'packagingSizeName' : 'labelSizeName']: sizeNameOf(field === 'packagingSizeId' ? 'buyerPackagingSizes' : 'buyerLabelSizes', sizeId) || '',
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    await loadPackaging();
+    renderSellerStockPanel(lastDetectedRows);
+    msg.textContent = `${field === 'packagingSizeId' ? 'Packing' : 'Label'} size saved for ${product.name}.`;
+    msg.style.color = '#0A5C4F';
+  }catch(err){
+    msg.textContent = 'Could not save: ' + (err.code || err.message); msg.style.color = '#9E3608';
+  }
 }
 async function saveSellerMapping(i){
   const r = lastDetectedRows[i];
@@ -1882,8 +1929,8 @@ async function saveSellerMapping(i){
     // Labels with this SKU already printed while it was unmapped (from any
     // earlier session too): deduct them now, then clear them from the list.
     let lateMsg = '';
-    const done = await settleQueuedSku(r.sku);
-    if(done && done.labels){
+    const done = await settleQueuedSku(r.sku, product);
+    if(done && (done.labels || done.packing || done.stickers)){
       await Promise.all([loadPackagingSizes(), loadLabelSizes()]);
       refreshSizeViews();
       lateMsg = ` Also deducted ${done.units} unit(s) for ${done.labels} label(s) you'd already printed.`;
@@ -1960,12 +2007,6 @@ async function sendToLabelOrder(){
   markSentToOrder(fileSignatureFor(pdfFile ? pdfFile.name : '', lastDetectedRows));
   applyDownloadGate();
 }
-function hashText(str){
-  let h = 0;
-  for(let i=0;i<str.length;i++){ h = (Math.imul(31,h) + str.charCodeAt(i)) | 0; }
-  return 'h' + (h >>> 0).toString(36);
-}
-
 async function renderPreview(){
   const mount = document.getElementById('vlcPreviewMount');
   mount.innerHTML = '';
@@ -2048,30 +2089,17 @@ const OUT_SIZES = {
   '4x8': [288, 576]
 };
 
-/* ---------------- Packaging & Label stock consumption ----------------
-   Runs from processPdf() itself (the actual "Crop & download PDF" action),
-   independent of the "Require sending order first" toggle and the
-   order-draft system — stock must reduce whether or not an order is sent.
-
-   LABEL — a fresh sticker is used on EVERY print, reprint or not (a jam or
-   a bad print still burns one), so there's no dedup at all:
-     • Output paper size = one of the standard sizes (4×6, 4×4 …) AND that
-       size's label stock is set up + Active in Label & Packing Settings →
-       every label page printed comes off THAT size. This is the normal path.
-     • Otherwise ("Keep cropped size", or that size isn't set up/active) →
-       falls back to the label size assigned to each product in Buyer SKU
-       Master, one per printed label.
-     Either way it's one per PRINTED LABEL, not per unit of qty — a label
-     for "x2" is still one sticker.
-
-   PACKING — only the FIRST time a given label is printed. Tracked per
-   physical label (marketplace | sku | that page's text), in
-   users/{uid}/packagingConsumedLabels, so a reprint — whole file, one
-   courier's batch, or any overlap of the two — never deducts it again.
-   Packing size comes from the product's assignment in Buyer SKU Master,
-   qty per unit as before. Exports already counted under the older
-   whole-export marker (stockConsumedGroups) are still honoured. */
-/* Every detected item on the pages actually exported in this call. */
+/* ---------------- Stock effects of a print ----------------
+   All rules live in billing/assets/label-stock-core.js (shared with Billing
+   and the buyer pages), so every page counts a label the same way:
+     PRODUCT — once per product line per shipment (reprints never again).
+               Seller → your Billing product; Buyer → your buyer product.
+     PACKING — ONE packet per shipment label, first print only.
+     LABEL   — every physical print: from the active printer-size stock for
+               the chosen Output paper size, else the product's assigned
+               label size (one per printed label).
+   Duplicate protection is keyed on the shipment's order ID (see
+   label-sku-extract.js), not on page text. */
 function collectExportItems(pageIndexOrder){
   const detected = getDetectedByPage();
   const items = [];
@@ -2080,10 +2108,7 @@ function collectExportItems(pageIndexOrder){
   });
   return items;
 }
-/* Packaging-size / label-size lookup for one detected item, per role:
-   Buyer  -> Buyer SKU Master mapping -> buyerProductPackaging(sellerId, productId)
-   Seller -> your own product (skuMappings) -> buyerProductPackaging(yourUid, productId),
-             i.e. whatever you assigned with seller = "Myself" in Buyer SKU Master. */
+/* Packaging assignment (buyerProductPackaging) for one item, per role. */
 function packagingForItem(item, role){
   if(role === 'seller'){
     const res = resolveSellerProduct(item.marketplace, item.sku);
@@ -2092,67 +2117,39 @@ function packagingForItem(item, role){
   const mapping = findMapping(item.marketplace, item.sku);
   return mapping ? findPackaging(mapping.sellerId, mapping.productId) : null;
 }
-async function applySizeDeductions(qtyById, colName){
-  const col = db.collection('users').doc(cropperUser.uid).collection(colName);
-  await Promise.all(Object.keys(qtyById).filter(id => qtyById[id]).map(id => col.doc(id).update({
-    stock: firebase.firestore.FieldValue.increment(-qtyById[id])
-  }).catch(err => console.error(`${colName} stock update failed for ${id}:`, err))));
+function sizeNameOf(col, id){
+  const list = col === 'buyerLabelSizes' ? labelSizesCache : packagingSizesCache;
+  const d = list.find(x => x.id === id);
+  return d ? d.name : '';
 }
-function packingLabelHash(it){
-  if(it.packHash) return it.packHash;
-  return 'pack_' + hashText(`${it.marketplace}|${it.sku}|${(it.text || '').slice(0, 200)}`);
+function groupByLabel(items){
+  const byLabel = new Map();
+  items.forEach(it => { const k = it.packKey || it.key; if(!byLabel.has(k)) byLabel.set(k, []); byLabel.get(k).push(it); });
+  return byLabel;
 }
-/* Packing, first print only. Returns { units, sizes:{sizeId:qty}, alreadyDone }. */
-async function deductPackingFirstPrint(items, role){
-  const col = db.collection('users').doc(cropperUser.uid).collection('packagingConsumedLabels');
-  const qtyBySize = {};
-  let alreadyDone = 0;
-  const seen = new Set();
-  for(const it of items){
-    const pkg = packagingForItem(it, role);
-    if(!pkg || !pkg.packagingSizeId) continue;
-    const hash = packingLabelHash(it);
-    if(seen.has(hash)) continue;
-    seen.add(hash);
-    try{
-      const snap = await col.doc(hash).get();
-      if(snap.exists){ alreadyDone++; continue; }
-      await col.doc(hash).set({
-        marketplace: it.marketplace, sku: it.sku, qty: it.qty, packagingSizeId: pkg.packagingSizeId,
-        consumedAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-      qtyBySize[pkg.packagingSizeId] = (qtyBySize[pkg.packagingSizeId] || 0) + it.qty;
-    }catch(err){
-      // Fail safe: an uncertain check skips rather than risks double-deducting.
-      console.error('Packing dedup check failed — skipped for this label:', err);
-    }
-  }
-  await applySizeDeductions(qtyBySize, 'buyerPackagingSizes');
-  return { units: Object.values(qtyBySize).reduce((a,b)=>a+b,0), alreadyDone };
-}
-/* Seller-mode catch-up for labels printed while unmapped, now mapped:
-   packing (first print, same per-label marker) + label only if no label
-   stock was taken for them at print time. */
-async function deductPackagingLabelForItems(items, role){
-  await deductPackingFirstPrint(items, role);
-  const labelBySize = {};
-  items.filter(it => !it.labelDone).forEach(it => {
-    const pkg = packagingForItem(it, role);
-    if(pkg && pkg.labelSizeId) labelBySize[pkg.labelSizeId] = (labelBySize[pkg.labelSizeId] || 0) + 1;
-  });
-  await applySizeDeductions(labelBySize, 'buyerLabelSizes');
-}
-/* opts: { outSizeKey, labelsPrinted, labelsPerPage } */
+/* opts: { outSizeKey, labelsPrinted, labelsPerPage, fileName } */
 async function consumeStockForExport(pageIndexOrder, courierFilter, opts){
   const result = { labelSize: null, labelCount: 0, labelFallback: 0, packingUnits: 0, packingSkipped: 0, labelFromPaper: false };
   if(!cropperUser) return result;
+  const uid = cropperUser.uid;
   const role = getRole();
   const items = collectExportItems(pageIndexOrder);
+  const byLabel = groupByLabel(items);
+
+  // Was every label in this export already packed before? Then it's a reprint.
+  let anyNew = false;
+  const doneBefore = {};
+  for(const k of byLabel.keys()){
+    try{ doneBefore[k] = await VLS.packingDone(uid, k); }catch(err){ doneBefore[k] = true; }
+    if(!doneBefore[k]) anyNew = true;
+  }
+  const printType = (byLabel.size && !anyNew) ? 'reprint' : 'print';
+  const note = `${opts.fileName || 'labels'}${courierFilter ? ' — ' + courierFilter : ''}`;
 
   // ---- LABEL (every print)
   const paperLabel = activeLabelForPaper(opts.outSizeKey);
   if(paperLabel && opts.labelsPrinted > 0){
-    await applySizeDeductions({ [paperLabel.id]: opts.labelsPrinted }, 'buyerLabelSizes');
+    await VLS.adjustSize(uid, 'buyerLabelSizes', paperLabel.id, -opts.labelsPrinted, { sizeName: paperLabel.name, type: printType, note });
     result.labelSize = paperLabel; result.labelCount = opts.labelsPrinted; result.labelFromPaper = true;
   } else {
     // Fallback: each printed label uses its product's assigned label size.
@@ -2163,148 +2160,109 @@ async function consumeStockForExport(pageIndexOrder, courierFilter, opts){
       const pkg = pageItems.map(it => packagingForItem(it, role)).find(p => p && p.labelSizeId);
       if(pkg) labelBySize[pkg.labelSizeId] = (labelBySize[pkg.labelSizeId] || 0) + (opts.labelsPerPage || 1);
     });
-    await applySizeDeductions(labelBySize, 'buyerLabelSizes');
+    for(const id of Object.keys(labelBySize)){
+      await VLS.adjustSize(uid, 'buyerLabelSizes', id, -labelBySize[id], { sizeName: sizeNameOf('buyerLabelSizes', id), type: printType, note });
+    }
     result.labelFallback = Object.values(labelBySize).reduce((a,b)=>a+b,0);
   }
 
-  // ---- PACKING (first print of each label only)
-  if(items.length){
-    // Older whole-export marker (before per-label tracking): if this exact
-    // export was already counted that way, its packing is already done.
-    const skuQty = {};
-    items.forEach(it => { skuQty[it.sku] = (skuQty[it.sku] || 0) + it.qty; });
-    const legacyHash = 'stockgrp_' + hashText(`${currentPlatform}|${courierFilter||'all'}|${pdfFile ? pdfFile.name : ''}|${pageIndexOrder.join('-')}|${JSON.stringify(skuQty)}`);
-    let legacyDone = false;
-    try{ legacyDone = (await db.collection('users').doc(cropperUser.uid).collection('stockConsumedGroups').doc(legacyHash).get()).exists; }
-    catch(err){ legacyDone = false; }
-    if(legacyDone){
-      result.packingSkipped = items.length;
-    } else {
-      const pr = await deductPackingFirstPrint(items, role);
-      result.packingUnits = pr.units; result.packingSkipped = pr.alreadyDone;
-    }
+  // ---- PACKING (one per shipment label, first print only)
+  for(const [k, list] of byLabel){
+    if(doneBefore[k]){ result.packingSkipped++; continue; }
+    const withPkg = list.map(it => ({ it, pkg: packagingForItem(it, role) })).find(x => x.pkg && x.pkg.packagingSizeId);
+    if(!withPkg) continue; // unmapped / no packing size yet — Seller mode catches up when mapped
+    try{
+      if(await VLS.packingOnce(uid, withPkg.it, withPkg.pkg.packagingSizeId, sizeNameOf('buyerPackagingSizes', withPkg.pkg.packagingSizeId), note)) result.packingUnits++;
+    }catch(err){ console.error('Packing deduction failed:', err); }
   }
 
-  await Promise.all([loadPackagingSizes(), loadLabelSizes()]); // pick up the new numbers
+  await Promise.all([loadPackagingSizes(), loadLabelSizes()]);
   refreshSizeViews();
   return result;
 }
-
-/* ---------------- Seller product stock (Seller mode only) ----------------
-   Once per physical label: keyed by users/{uid}/processedSellerLabels/{hash}
-   with the hash built EXACTLY like Billing → Sell via Label builds it
-   (marketplace | sku | first 200 chars of that page's text), so a label
-   processed in either place is never deducted twice. Each deduction is one
-   atomic batch: product stock, a 'sale-out' stockMovements entry (so it shows
-   in Billing's movement history + Monthly Stock Report), and the marker. */
-function sellerLabelHash(it){
-  if(it.sellerHash) return it.sellerHash;
-  return hashText(`${it.marketplace}|${it.sku}|${(it.text || '').slice(0, 200)}`);
-}
-async function deductSellerProductStock(items){
+/* Product stock, once per item. Seller → Billing product; Buyer → buyer
+   product (linked or your own). Returns { role, deductedUnits, alreadyDone, unmapped }. */
+async function consumeProductStockForExport(pageIndexOrder){
+  const res = { role: getRole(), deductedUnits: 0, alreadyDone: 0, unmapped: [] };
+  if(!cropperUser) return res;
   const uid = cropperUser.uid;
-  const today = new Date().toISOString().slice(0,10);
-  const result = { deductedUnits: 0, deductedLabels: 0, alreadyDone: 0, unmapped: [] };
-  const seenThisRun = new Set();
-  for(const it of items){
-    const res = resolveSellerProduct(it.marketplace, it.sku);
-    if(!res){ result.unmapped.push(it); continue; }
-    const hash = sellerLabelHash(it);
-    if(seenThisRun.has(hash)){ result.alreadyDone++; continue; }
-    seenThisRun.add(hash);
-    const markerRef = db.collection('users').doc(uid).collection('processedSellerLabels').doc(hash);
-    try{
-      const already = await markerRef.get();
-      if(already.exists){ result.alreadyDone++; continue; }
-      const batch = db.batch();
-      batch.update(db.collection('users').doc(uid).collection('products').doc(res.productId), {
-        stock: firebase.firestore.FieldValue.increment(-it.qty)
-      });
-      batch.set(db.collection('users').doc(uid).collection('stockMovements').doc(), {
-        type: 'sale-out', productId: res.productId, productName: res.productName, qty: -it.qty, date: today,
-        note: `Label printed — ${it.marketplace} ${it.sku}`,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-      batch.set(markerRef, {
-        marketplace: it.marketplace, sku: it.sku, qty: it.qty, productId: res.productId,
-        source: 'label-cropper', processedAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-      await batch.commit();
-      result.deductedUnits += it.qty;
-      result.deductedLabels++;
-    }catch(err){
-      console.error(`Seller stock deduction failed for ${it.marketplace} ${it.sku}:`, err);
-    }
-  }
-  return result;
-}
-async function consumeSellerStockForExport(pageIndexOrder){
-  if(!cropperUser || getRole() !== 'seller') return null;
-  if(!sellerDataLoaded) await loadSellerData();
+  if(res.role === 'seller' && !sellerDataLoaded) await loadSellerData();
   const items = collectExportItems(pageIndexOrder);
-  if(!items.length) return null;
-  const res = await deductSellerProductStock(items);
-  // Unmapped labels are queued by processPdf() AFTER label stock is taken,
-  // since whether their sticker was already counted depends on that step.
-  await reloadSellerProducts();
-  renderSellerStockPanel(lastDetectedRows);
+  const reportedUnmapped = new Set();
+  for(const it of items){
+    try{
+      let r;
+      if(res.role === 'seller'){
+        const p = resolveSellerProduct(it.marketplace, it.sku);
+        if(!p){ res.unmapped.push(it); continue; }
+        r = await VLS.sellerProductOnce(uid, it, { id: p.productId, name: p.productName }, 'label-cropper');
+      } else {
+        const m = findMapping(it.marketplace, it.sku);
+        if(!m){
+          res.unmapped.push(it);
+          const k = it.marketplace + '|' + it.sku;
+          if(!reportedUnmapped.has(k)){ reportedUnmapped.add(k); await reportUnmappedSku(it.marketplace, it.sku); }
+          continue;
+        }
+        r = await VLS.buyerProductOnce(uid, it, m, 'label-cropper');
+      }
+      if(r === 'deducted') res.deductedUnits += it.qty; else res.alreadyDone++;
+    }catch(err){ console.error(`Product stock deduction failed for ${it.marketplace} ${it.sku}:`, err); }
+  }
+  if(res.role === 'seller'){ await reloadSellerProducts(); renderSellerStockPanel(lastDetectedRows); }
+  else { await loadMappings(); renderStockPanel(lastDetectedRows); }
   return res;
 }
-
-/* ---------------- Unmapped-SKU queue (Seller mode) ----------------
-   Doc id is derived from the lower-cased SKU, matching how mappings are
-   matched (case-insensitive rawKey). Each printed label is stored once under
-   pending.<sellerHash> with both per-label dedup keys, so settling it later —
-   here or in Billing — uses the exact same markers as a normal print and can
-   never double-count: product (processedSellerLabels), packing
-   (packagingConsumedLabels). labelDone = its sticker already came off a
-   printer-size label stock at print time. */
-function queueDocIdForSku(sku){ return 'sku_' + hashText(String(sku).trim().toLowerCase()); }
-async function queueSellerUnmapped(items, labelDone){
-  if(!cropperUser || !items.length) return;
-  const today = new Date().toISOString().slice(0,10);
-  const bySku = {};
-  items.forEach(it => { const k = it.sku.trim().toLowerCase(); (bySku[k] = bySku[k] || []).push(it); });
-  for(const k of Object.keys(bySku)){
-    const first = bySku[k][0];
-    const ref = db.collection('users').doc(cropperUser.uid).collection(SELLER_QUEUE_COL).doc(queueDocIdForSku(first.sku));
-    try{
-      await db.runTransaction(async tx => {
-        const snap = await tx.get(ref);
-        const data = snap.exists ? snap.data() : { sku: first.sku, marketplace: first.marketplace, firstSeen: today, pending: {} };
-        data.pending = data.pending || {};
-        bySku[k].forEach(it => {
-          const h = sellerLabelHash(it);
-          const cur = data.pending[h];
-          if(cur){ if(labelDone) cur.labelDone = true; }
-          else data.pending[h] = { sellerHash: h, packHash: packingLabelHash(it), marketplace: it.marketplace, sku: it.sku, qty: it.qty, labelDone: !!labelDone, printedAt: today };
-        });
-        const list = Object.values(data.pending);
-        data.labelCount = list.length;
-        data.unitCount = list.reduce((a, x) => a + (x.qty || 0), 0);
-        data.marketplaces = [...new Set(list.map(x => x.marketplace))];
-        data.lastSeen = today;
-        data.status = 'UNMAPPED';
-        data.source = 'label-cropper';
-        data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
-        tx.set(ref, data);
-      });
-    }catch(err){ console.error('Could not queue unmapped SKU ' + first.sku + ':', err); }
-  }
+/* Seller: after mapping a SKU, deduct every label already printed for it
+   (from any session) and clear it from the Unmapped Label SKUs list. */
+async function settleQueuedSku(sku, product){
+  const pkg = findPackaging(cropperUser.uid, product.id);
+  return VLS.settleQueued(cropperUser.uid, VLS.queueDocId(sku), { id: product.id, name: product.name }, pkg, sizeNameOf);
 }
-/* Deducts everything queued for a SKU that now resolves to a product, then
-   removes it from the queue. Returns { labels, units } or null. */
-async function settleQueuedSku(sku){
-  const ref = db.collection('users').doc(cropperUser.uid).collection(SELLER_QUEUE_COL).doc(queueDocIdForSku(sku));
-  const snap = await ref.get();
-  if(!snap.exists) return null;
-  const pending = Object.values(snap.data().pending || {});
-  if(!pending.length){ await ref.delete(); return null; }
-  if(!resolveSellerProduct(pending[0].marketplace, pending[0].sku)) return null;
-  const res = await deductSellerProductStock(pending);
-  await deductPackagingLabelForItems(pending, 'seller');
-  await ref.delete();
-  return { labels: pending.length, units: res.deductedUnits };
+
+/* ---------------- Pre-print stock check ----------------
+   Before cropping, works out what THIS print will actually take (skipping
+   anything already counted) and asks before going below zero. */
+async function checkStockBeforePrint(pageIndexOrder, opts){
+  if(!cropperUser) return [];
+  const uid = cropperUser.uid;
+  const role = getRole();
+  const items = collectExportItems(pageIndexOrder);
+  const warnings = [];
+  // Label stickers
+  const paperLabel = activeLabelForPaper(opts.outSizeKey);
+  if(paperLabel && (paperLabel.stock || 0) < opts.labelsPrinted){
+    warnings.push(`${paperLabel.name} labels: ${paperLabel.stock || 0} in stock, this print uses ${opts.labelsPrinted}.`);
+  }
+  // Packing (new labels only)
+  const needPack = {};
+  for(const [k, list] of groupByLabel(items)){
+    const pkg = list.map(it => packagingForItem(it, role)).find(p => p && p.packagingSizeId);
+    if(!pkg) continue;
+    let done = true;
+    try{ done = await VLS.packingDone(uid, k); }catch(e){}
+    if(!done) needPack[pkg.packagingSizeId] = (needPack[pkg.packagingSizeId] || 0) + 1;
+  }
+  Object.keys(needPack).forEach(id => {
+    const d = packagingSizesCache.find(x => x.id === id);
+    if(d && (d.stock || 0) < needPack[id]) warnings.push(`Packing "${d.name}": ${d.stock || 0} in stock, needs ${needPack[id]}.`);
+  });
+  // Seller product stock (new labels only)
+  if(role === 'seller'){
+    const needProd = {};
+    for(const it of items){
+      const p = resolveSellerProduct(it.marketplace, it.sku);
+      if(!p) continue;
+      let done = true;
+      try{ done = (await db.collection('users').doc(uid).collection('processedSellerLabels').doc(it.key).get()).exists; }catch(e){}
+      if(!done) needProd[p.productId] = (needProd[p.productId] || 0) + it.qty;
+    }
+    Object.keys(needProd).forEach(id => {
+      const prod = sellerProductsCache.find(x => x.id === id);
+      if(prod && (prod.stock || 0) < needProd[id]) warnings.push(`${prod.name}: ${prod.stock || 0} in stock, this print needs ${needProd[id]}.`);
+    });
+  }
+  return warnings;
 }
 
 async function processPdf(courierFilter){
@@ -2359,6 +2317,17 @@ async function processPdf(courierFilter){
     if(amazonSkuMode){
       pageIndexOrder = pageIndexOrder.filter(i => i % 2 === 0);
     }
+
+    // Stock check before printing — asks instead of silently going below zero.
+    const labelsPerPage = (amazonSkuMode || v.mode === 'single') ? 1 : 2;
+    try{
+      status.textContent = 'Checking stock…';
+      const warnings = await checkStockBeforePrint(pageIndexOrder, { outSizeKey, labelsPrinted: pageIndexOrder.length * labelsPerPage });
+      if(warnings.length && !confirm('Low stock:\n\n• ' + warnings.join('\n• ') + '\n\nPrint anyway? (stock will go below zero)')){
+        status.textContent = 'Print cancelled — add stock in Label & Packing Settings / Billing, then print again.';
+        return;
+      }
+    }catch(err){ console.error('Stock check failed (printing anyway):', err); }
 
     status.textContent = `Cropping ${pageIndexOrder.length} page(s)…`;
 
@@ -2459,49 +2428,45 @@ async function processPdf(courierFilter){
     URL.revokeObjectURL(url);
     status.textContent = `Done — ${outDoc.getPageCount()} label(s) exported${courierFilter ? ' for ' + courierFilter : ''}.`;
 
-    // Reduce packaging/label stock for whatever was actually exported just
-    // now — after the download itself succeeded, and independent of the
-    // "Require sending order first" toggle (see the function's own comment
-    // for the reprint-safe dedup this relies on).
-    // Seller mode: product stock first (so the unmapped list is known), then
-    // packaging & label exactly as the buyer side does it.
-    let sellerRes = null;
-    try{ sellerRes = await consumeSellerStockForExport(pageIndexOrder); }
-    catch(err){ console.error('Seller product stock update failed (download itself still succeeded):', err); }
+    // Stock effects — after the download itself succeeded. Product first
+    // (so the unmapped list is known), then label & packing.
+    let prodRes = null;
+    try{ prodRes = await consumeProductStockForExport(pageIndexOrder); }
+    catch(err){ console.error('Product stock update failed (download itself still succeeded):', err); }
     let stockRes = null;
     try{
       stockRes = await consumeStockForExport(pageIndexOrder, courierFilter, {
-        outSizeKey, labelsPrinted: outDoc.getPageCount(),
-        labelsPerPage: (amazonSkuMode || v.mode === 'single') ? 1 : 2
+        outSizeKey, labelsPrinted: outDoc.getPageCount(), labelsPerPage, fileName: pdfFile ? pdfFile.name : ''
       });
     }
     catch(err){ console.error('Packaging/label stock update failed (download itself still succeeded):', err); }
-    if(stockRes){
-      const sp = [];
-      if(stockRes.labelFromPaper) sp.push(`${stockRes.labelCount} × ${stockRes.labelSize.name} label`);
-      else if(stockRes.labelFallback) sp.push(`${stockRes.labelFallback} label(s) from product-assigned sizes`);
-      else sp.push('no label stock deducted — set up this paper size in Label & Packing Settings');
-      if(stockRes.packingUnits) sp.push(`${stockRes.packingUnits} packing`);
-      if(stockRes.packingSkipped) sp.push(`packing skipped for ${stockRes.packingSkipped} reprinted label(s)`);
-      status.textContent += ' Used: ' + sp.join(', ') + '.';
-    }
-    // Seller mode: save unmapped labels just printed to the queue (Billing →
-    // Stock Management shows it). If their sticker already came off the
-    // printer-size label stock, settling them later won't take another.
-    if(sellerRes && sellerRes.unmapped.length){
-      try{ await queueSellerUnmapped(sellerRes.unmapped, !!(stockRes && stockRes.labelFromPaper)); }
+    // Seller: unmapped labels just printed go to the Unmapped Label SKUs list
+    // (Billing → Stock Management). If their sticker already came off the
+    // printer-size stock, settling them later won't take another.
+    if(prodRes && prodRes.role === 'seller' && prodRes.unmapped.length){
+      try{ await VLS.queueUnmapped(cropperUser.uid, prodRes.unmapped, !!(stockRes && stockRes.labelFromPaper), 'label-cropper'); }
       catch(err){ console.error('Queueing unmapped SKUs failed:', err); }
     }
-    if(sellerRes){
-      const parts = [];
-      if(sellerRes.deductedUnits) parts.push(`${sellerRes.deductedUnits} unit(s) deducted from product stock`);
-      if(sellerRes.alreadyDone) parts.push(`${sellerRes.alreadyDone} label(s) already deducted before (reprint — not deducted again)`);
-      if(sellerRes.unmapped.length){
-        const u = [...new Set(sellerRes.unmapped.map(it => it.sku))];
-        parts.push(`${u.length} SKU(s) not mapped — saved to Billing → Stock Management → Unmapped Label SKUs; map there or below and they'll be deducted then`);
+    const parts = [];
+    if(prodRes){
+      const where = prodRes.role === 'seller' ? 'product stock' : 'your buyer product stock';
+      if(prodRes.deductedUnits) parts.push(`${prodRes.deductedUnits} unit(s) off ${where}`);
+      if(prodRes.alreadyDone) parts.push(`${prodRes.alreadyDone} item(s) already counted before (reprint)`);
+      if(prodRes.unmapped.length){
+        const u = [...new Set(prodRes.unmapped.map(it => it.sku))];
+        parts.push(prodRes.role === 'seller'
+          ? `${u.length} SKU(s) not mapped — listed in Billing → Stock Management; map there or below and they'll be deducted then`
+          : `${u.length} SKU(s) not in Buyer SKU Master — added to its Unmapped SKUs list`);
       }
-      if(parts.length) status.textContent += ' Stock: ' + parts.join('; ') + '.';
     }
+    if(stockRes){
+      if(stockRes.labelFromPaper) parts.push(`${stockRes.labelCount} × ${stockRes.labelSize.name} label`);
+      else if(stockRes.labelFallback) parts.push(`${stockRes.labelFallback} label(s) from product-assigned sizes`);
+      else parts.push('no label stock deducted — set up this paper size in Label & Packing Settings');
+      if(stockRes.packingUnits) parts.push(`${stockRes.packingUnits} packing`);
+      if(stockRes.packingSkipped) parts.push(`packing skipped for ${stockRes.packingSkipped} label(s) already packed`);
+    }
+    if(parts.length) status.textContent += ' Stock: ' + parts.join('; ') + '.';
   }catch(err){
     console.error(err);
     status.textContent = 'Something went wrong — check the file is a valid PDF.';
