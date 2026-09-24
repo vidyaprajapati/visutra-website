@@ -689,7 +689,27 @@ async function saveMapping(){
     ...splitSkuList(flipkartSku).map(x => resolveUnmappedIfMatching('FLIPKART', x))
   ]);
 
-  showMsg('mappingMsg', `Saved "${name}".`, true);
+  // Labels printed in Label Cropper (Buyer) before these SKUs were mapped:
+  // deduct them from this product now (shared rules, label-stock-core.js).
+  let late = '';
+  try{
+    const allSkus = [...splitSkuList(amazonSku), ...splitSkuList(meeshoSku), ...splitSkuList(flipkartSku)];
+    if(allSkus.length){
+      const uid = currentUser.uid;
+      const saved = { id: ref.id, ...data };
+      const pkgSnap = await db.collection('users').doc(uid).collection('buyerProductPackaging').doc(`${sellerId}_${productId}`).get();
+      const pkg = pkgSnap.exists ? pkgSnap.data() : null;
+      const nameOf = (col, id) => { const list = col === 'buyerLabelSizes' ? labelSizesCache : packagingSizesCache; const z = list.find(x => x.id === id); return z ? z.name : ''; };
+      let units = 0, labels = 0;
+      for(const sku of allSkus){
+        const out = await VLS.settleQueued(uid, VLS.queueDocId(sku), { id: saved.id, name: name }, pkg, nameOf, { col: VLS.BUYER_Q, buyerMapping: saved });
+        units += out.units; labels += out.labels;
+      }
+      if(labels) late = ` Also deducted ${units} unit(s) for ${labels} label(s) already printed.`;
+    }
+  }catch(err){ console.error('Catch-up for printed labels failed:', err); }
+
+  showMsg('mappingMsg', `Saved "${name}".${late}`, true);
   resetMappingForm();
   await loadMappings();
   await loadUnmapped();
