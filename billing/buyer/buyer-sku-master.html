@@ -15,7 +15,7 @@
   <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Buyer SKU Master</b></a>
   <div class="topbar-right">
     <a class="btn small" href="my-sellers.html">My Sellers</a>
-    <a class="btn small" href="../app.html">Back to Billing</a>
+    <a class="btn small" href="dashboard.html">Buyer Dashboard</a>
     <div id="userMenuMount"></div>
   </div>
 </div>
@@ -78,7 +78,7 @@
 
   <div class="card" id="labelSizesCard">
     <h2 id="labelSizeFormTitle">Label Sizes</h2>
-    <p class="sub">Same idea as packaging sizes above, for label stock — one shared pool per size. Standard printer sizes (4×6, 4×4 …) are switched on and stocked in <a href="../../tools/label-cropper.html" target="_blank" rel="noopener">Label Cropper → Label &amp; Packing Settings</a>; when you print at one of those sizes, that size's stock is used directly.</p>
+    <p class="sub">Same idea as packaging sizes above, for label stock — one shared pool per size. Standard printer sizes (4×6, 4×4 …) are switched on and stocked in <a href="../../tools/label-cropper.html?role=buyer" target="_blank" rel="noopener">Label Cropper → Label &amp; Packing Settings</a>; when you print at one of those sizes, that size's stock is used directly.</p>
     <div class="grid3">
       <div class="field"><label>Size name</label><input id="lszName" placeholder="e.g. 4x6 inch thermal"></div>
       <div class="field"><label>Stock on hand</label><input id="lszStock" type="number" min="0" value="0"></div>
@@ -94,7 +94,7 @@
 
   <div class="card" id="packagingFormCard">
     <h2 id="packagingFormTitle">Assign Sizes to a Product</h2>
-    <p class="sub">Pick <b>My products (buyer side)</b> for a product you added above as Not linked, <b>My Billing products</b> for your seller-side catalog, or a linked seller + their product — then pick which packaging size and label size it uses — only <b>Active</b> sizes are listed (switch sizes on/off above or in Label Cropper → Label &amp; Packing Settings). No stock to enter here, since stock lives on the size itself and several products can share one size.</p>
+    <p class="sub">Pick <b>My products (not linked)</b> for a product you added above as Not linked, or a linked seller + their product — then pick which packaging size and label size it uses — only <b>Active</b> sizes are listed (switch sizes on/off above or in Label Cropper → Label &amp; Packing Settings). No stock to enter here, since stock lives on the size itself and several products can share one size.</p>
     <div class="grid2">
       <div class="field"><label>Source</label><select id="pkgSeller" onchange="onPackagingSellerChange()"><option value="">Select…</option></select></div>
       <div class="field"><label>Product</label><select id="pkgProduct" onchange="onPackagingProductChange()"><option value="">Select source first…</option></select></div>
@@ -155,6 +155,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="../assets/label-stock-core.js"></script>
 <script>
 let currentUser = null;
 let sellersCache = [];      // linked ACTIVE sellers: {sellerUid, sellerName}
@@ -223,14 +224,18 @@ async function loadLinkedSellers(){
   const selfOption = `<option value="${currentUser.uid}">${esc(SELF_SELLER_LABEL)}</option>`;
   const sellerOptions = sellersCache.map(s => `<option value="${s.sellerUid}">${esc(s.sellerName)}</option>`).join('');
 
+  // Buyer section only: your Seller-side (Billing) catalog is NOT offered
+  // here — Seller-side SKU mapping and packing/label sizes are handled in
+  // Billing and in Label Cropper (Seller). selfOption is only added back
+  // when editing an older product that already points at it.
   const sel = document.getElementById('mSeller');
-  sel.innerHTML = ownOption + sellerOptions + selfOption;
+  sel.innerHTML = ownOption + sellerOptions;
 
   const pkgSel = document.getElementById('pkgSeller');
-  pkgSel.innerHTML = '<option value="">Select…</option>' + `<option value="${OWN_SOURCE}">My products (buyer side)</option>` + selfOption + sellerOptions;
+  pkgSel.innerHTML = '<option value="">Select…</option>' + `<option value="${OWN_SOURCE}">My products (not linked)</option>` + sellerOptions;
 
   const fSel = document.getElementById('fSeller');
-  fSel.innerHTML = '<option value="">All</option>' + ownOption + sellerOptions + selfOption;
+  fSel.innerHTML = '<option value="">All</option>' + ownOption + sellerOptions;
 }
 async function onMappingSellerChange(){
   const sellerUid = document.getElementById('mSeller').value;
@@ -309,7 +314,17 @@ async function savePackagingSize(){
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   const col = db.collection('users').doc(currentUser.uid).collection('buyerPackagingSizes');
-  if(editId){ await col.doc(editId).set(data, {merge: true}); } else { await col.add(data); }
+  // Stock typed here is an absolute count — log the difference so Label
+  // Cropper's Stock history shows it (label-stock-core.js).
+  if(editId){
+    const prev = packagingSizesCache.find(x => x.id === editId);
+    await col.doc(editId).set(data, {merge: true});
+    const delta = data.stock - ((prev && prev.stock) || 0);
+    if(delta) await VLS.logSize(currentUser.uid, 'buyerPackagingSizes', editId, name, delta, 'stock-set', 'Edited in Buyer SKU Master');
+  } else {
+    const ref = await col.add(data);
+    if(data.stock) await VLS.logSize(currentUser.uid, 'buyerPackagingSizes', ref.id, name, data.stock, 'stock-add', 'Opening stock (Buyer SKU Master)');
+  }
   showMsg('packagingSizeMsg', 'Saved.', true);
   resetPackagingSizeForm();
   await loadPackagingSizes();
@@ -368,7 +383,17 @@ async function saveLabelSize(){
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   const col = db.collection('users').doc(currentUser.uid).collection('buyerLabelSizes');
-  if(editId){ await col.doc(editId).set(data, {merge: true}); } else { await col.add(data); }
+  // Stock typed here is an absolute count — log the difference so Label
+  // Cropper's Stock history shows it (label-stock-core.js).
+  if(editId){
+    const prev = labelSizesCache.find(x => x.id === editId);
+    await col.doc(editId).set(data, {merge: true});
+    const delta = data.stock - ((prev && prev.stock) || 0);
+    if(delta) await VLS.logSize(currentUser.uid, 'buyerLabelSizes', editId, name, delta, 'stock-set', 'Edited in Buyer SKU Master');
+  } else {
+    const ref = await col.add(data);
+    if(data.stock) await VLS.logSize(currentUser.uid, 'buyerLabelSizes', ref.id, name, data.stock, 'stock-add', 'Opening stock (Buyer SKU Master)');
+  }
   showMsg('labelSizeMsg', 'Saved.', true);
   resetLabelSizeForm();
   await loadLabelSizes();
@@ -462,7 +487,10 @@ function onPackagingProductChange(){
 }
 async function loadPackaging(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('buyerProductPackaging').get();
-  packagingCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  // Assignments for your Seller-side (Billing) products are made in Label
+  // Cropper (Seller) and belong to the Seller section — not listed here.
+  packagingCache = snap.docs.map(d => ({id: d.id, ...d.data()}))
+    .filter(p => !(p.sellerUid === currentUser.uid && !String(p.productId||'').startsWith('own_')));
   renderPackaging();
 }
 function renderPackaging(){
@@ -509,7 +537,11 @@ async function savePackaging(){
 function editPackaging(id){
   const p = packagingCache.find(x => x.id === id);
   if(!p) return;
-  document.getElementById('pkgSeller').value = String(p.productId||'').startsWith('own_') ? OWN_SOURCE : p.sellerUid;
+  const src = String(p.productId||'').startsWith('own_') ? OWN_SOURCE : p.sellerUid;
+  if(!document.querySelector(`#pkgSeller option[value="${src}"]`)){
+    document.getElementById('pkgSeller').insertAdjacentHTML('beforeend', `<option value="${esc(src)}">${esc(p.sellerName || 'Seller')}</option>`);
+  }
+  document.getElementById('pkgSeller').value = src;
   onPackagingSellerChange().then(() => {
     document.getElementById('pkgProduct').value = p.productId;
     document.getElementById('pkgEditId').value = p.id;
@@ -648,7 +680,8 @@ function editMapping(id){
   // A seller that's since been unlinked isn't in the dropdown — say so
   // rather than silently switching the product to "Not linked".
   if(src !== OWN_SOURCE && !document.querySelector(`#mSeller option[value="${src}"]`)){
-    document.getElementById('mSeller').insertAdjacentHTML('beforeend', `<option value="${esc(src)}">${esc(m.sellerName || 'Seller')} (no longer linked)</option>`);
+    const label = src === currentUser.uid ? SELF_SELLER_LABEL : `${m.sellerName || 'Seller'} (no longer linked)`;
+    document.getElementById('mSeller').insertAdjacentHTML('beforeend', `<option value="${esc(src)}">${esc(label)}</option>`);
   }
   document.getElementById('mSeller').value = src;
   onMappingSellerChange().then(() => {

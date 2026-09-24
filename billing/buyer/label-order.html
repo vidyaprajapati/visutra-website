@@ -60,6 +60,7 @@
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
 <script src="../assets/label-sku-extract.js"></script>
+<script src="../assets/label-stock-core.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js".replace('pdf.min.js', 'pdf.worker.min.js');
@@ -147,8 +148,10 @@ async function processFiles(){
         const text = content.items.map(it => it.str).join(' ');
         const pageHits = extractAllMarketplaceItems(text);
         for(const hit of pageHits){
-          const pageHash = hashText(`${hit.marketplace}|${hit.sku}|${text.slice(0, 200)}`);
-          hits.push({ ...hit, pageHash });
+          // Shipment (order-ID) key — two orders of the same SKU are never
+          // mistaken for one another, and it matches Label Cropper's key.
+          const key = labelKey(hit.marketplace, hit.sku, text);
+          hits.push({ ...hit, key, packKey: packingKey(hit.marketplace, text), pageHash: key });
         }
       }
     }catch(err){
@@ -253,16 +256,11 @@ async function mergeItemIntoDraft(mapping, hit){
    Kept in sync locally on mappingsCache too, so the "Balance to Order"
    figure below reflects it immediately without a re-fetch. */
 async function deductStockForLabel(mapping, hit){
-  await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(mapping.id).update({
-    stock: firebase.firestore.FieldValue.increment(-hit.qty),
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-  });
-  await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
-    type: 'sale-out', mappingId: mapping.id, productName: mapping.productName, qty: -hit.qty,
-    date: todayKey, note: `Label printed — ${hit.marketplace} ${hit.sku}`,
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  });
-  mapping.stock = (mapping.stock || 0) - hit.qty; // mapping is the actual object sitting in mappingsCache — mutate in place
+  // Shared rule (label-stock-core.js): once per product line per shipment,
+  // tracked in buyerProcessedLabels — the same record Label Cropper (Buyer)
+  // uses, so a label handled on both pages is only deducted once.
+  const r = await VLS.buyerProductOnce(currentUser.uid, { ...hit, key: hit.key || hit.pageHash }, mapping, 'upload-labels');
+  if(r === 'deducted') mapping.stock = (mapping.stock || 0) - hit.qty; // mapping is the object in mappingsCache — mutate in place
 }
 
 // A demand entry may predate this feature (drafts saved before mappingId
