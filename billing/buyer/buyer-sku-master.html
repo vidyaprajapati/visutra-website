@@ -125,8 +125,17 @@
         <option value="">All statuses</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option>
       </select></div>
     </div>
-    <table><thead><tr><th>Product</th><th>My SKU</th><th>Linked seller product</th><th>Amazon</th><th>Meesho</th><th>Flipkart</th><th>Status</th><th></th></tr></thead>
+    <style>
+      .pm-table td{vertical-align:middle}
+      .pm-prod td.pm-p{border-top:2px solid var(--line,#E4D8BD)}
+      .pm-off td.pm-s{color:var(--muted)}
+      .pm-off td.pm-s code{text-decoration:line-through}
+      .badge.on{background:#D6EFE7;color:#0A5C4F}
+      .badge.off{background:#EDE6DA;color:#8A8171}
+    </style>
+    <table class="pm-table"><thead><tr><th>Product</th><th>My SKU</th><th>Linked seller product</th><th>Marketplace</th><th>SKU</th><th>SKU status</th><th></th><th>Product status</th><th></th></tr></thead>
     <tbody id="mappingsTable"></tbody></table>
+    <p class="msg" id="skuListMsg"></p>
   </div>
 
   <div class="card">
@@ -568,6 +577,16 @@ async function loadMappings(){
   mappingsCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
   renderMappings();
 }
+/* My Products: one row per marketplace SKU, each row showing the product
+   it's mapped to (name, My SKU, linked seller product). Product status and
+   Edit / Deactivate / Delete sit on the product's first row. Each SKU can be switched Active/Inactive — inactive = kept on the
+   product but ignored when reading labels. */
+const MK_LIST = [['AMAZON','Amazon','amazonSku'],['MEESHO','Meesho','meeshoSku'],['FLIPKART','Flipkart','flipkartSku']];
+function skuRowsOf(m){
+  const out = [];
+  MK_LIST.forEach(([mk, label, field]) => splitSkuList(m[field]).forEach(sku => out.push({ mk, label, sku, off: isSkuInactive(m, mk, sku) })));
+  return out;
+}
 function renderMappings(){
   const search = document.getElementById('fSearch').value.trim().toLowerCase();
   const fSeller = document.getElementById('fSeller').value;
@@ -581,22 +600,66 @@ function renderMappings(){
     }
     return true;
   });
-  document.getElementById('mappingsTable').innerHTML = rows.map(m => `
-    <tr><td>${esc(m.productName)}</td>
-    <td>${m.buyerSku ? `<code>${esc(m.buyerSku)}</code>`
-      : (m.amazonSku || m.meeshoSku || m.flipkartSku)
-        ? '<span style="color:var(--muted)" title="No own SKU — identified by its marketplace SKU(s)">— (uses marketplace SKU)</span>'
-        : '<span class="badge" title="Edit to add an SKU">No SKU</span>'}</td>
-    <td>${isOwnProduct(m) ? '<span style="color:var(--muted)">Not linked</span>'
-      : `${esc(m.sellerName||'')} — ${esc(m.sellerProductName || m.productName)}${m.sellerSku ? ` <span style="color:var(--muted)">(${esc(m.sellerSku)})</span>` : ''}`}</td>
-    <td>${skuCell(m.amazonSku)}</td><td>${skuCell(m.meeshoSku)}</td><td>${skuCell(m.flipkartSku)}</td>
-    <td><span class="badge">${esc(m.status)}</span></td>
-    <td class="row-actions">
-      <button class="btn small" onclick="editMapping('${m.id}')">Edit</button>
-      <button class="btn small" onclick="toggleMappingStatus('${m.id}')">${m.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}</button>
-      <button class="btn small danger" onclick="deleteMapping('${m.id}')">Delete</button>
-    </td></tr>
-  `).join('') || '<tr><td colspan="8" style="color:var(--muted)">No products yet — add one above.</td></tr>';
+  document.getElementById('mappingsTable').innerHTML = rows.map(m => {
+    const skus = skuRowsOf(m);
+    const productCellsFor = first => `
+      <td class="${first ? 'pm-p' : ''}"><b>${esc(m.productName)}</b></td>
+      <td class="${first ? 'pm-p' : ''}">${m.buyerSku ? `<code>${esc(m.buyerSku)}</code>` : '<span style="color:var(--muted)">—</span>'}</td>
+      <td class="${first ? 'pm-p' : ''}">${isOwnProduct(m) ? '<span style="color:var(--muted)">Not linked</span>'
+        : `${esc(m.sellerName||'')} — ${esc(m.sellerProductName || m.productName)}${m.sellerSku ? ` <span style="color:var(--muted)">(${esc(m.sellerSku)})</span>` : ''}`}</td>`;
+    const productCells = productCellsFor(true);
+    const emptyTail = '<td></td><td></td>';
+    const productTail = `
+      <td class="pm-p"><span class="badge">${esc(m.status)}</span></td>
+      <td class="pm-p row-actions">
+        <button class="btn small" onclick="editMapping('${m.id}')">Edit</button>
+        <button class="btn small" onclick="toggleMappingStatus('${m.id}')">${m.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}</button>
+        <button class="btn small danger" onclick="deleteMapping('${m.id}')">Delete</button>
+      </td>`;
+    if(!skus.length){
+      return `<tr class="pm-prod">${productCells}<td class="pm-p" colspan="4" style="color:var(--muted)">No marketplace SKUs</td>${productTail}</tr>`;
+    }
+    return skus.map((x, i) => {
+      const skuArg = JSON.stringify(x.sku).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      const skuCells = `
+        <td class="pm-s${i === 0 ? ' pm-p' : ''}">${x.label}</td>
+        <td class="pm-s${i === 0 ? ' pm-p' : ''}"><code>${esc(x.sku)}</code></td>
+        <td class="pm-s${i === 0 ? ' pm-p' : ''}"><span class="badge ${x.off ? 'off' : 'on'}">${x.off ? 'Inactive' : 'Active'}</span></td>
+        <td class="pm-s${i === 0 ? ' pm-p' : ''}"><button class="btn small" onclick="toggleSkuActive('${m.id}','${x.mk}',${skuArg})">${x.off ? 'Activate' : 'Deactivate'}</button></td>`;
+      return i === 0
+        ? `<tr class="pm-prod${x.off ? ' pm-off' : ''}">${productCells}${skuCells}${productTail}</tr>`
+        : `<tr class="${x.off ? 'pm-off' : ''}">${productCellsFor(false)}${skuCells}${emptyTail}</tr>`;
+    }).join('');
+  }).join('') || '<tr><td colspan="9" style="color:var(--muted)">No products yet — add one above.</td></tr>';
+}
+async function toggleSkuActive(id, mk, sku){
+  const m = mappingsCache.find(x => x.id === id);
+  if(!m) return;
+  const key = skuStateKey(mk, sku);
+  const list = Array.isArray(m.inactiveSkus) ? m.inactiveSkus.slice() : [];
+  const nowOff = !list.includes(key);
+  const next = nowOff ? [...list, key] : list.filter(k => k !== key);
+  await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(id)
+    .set({ inactiveSkus: next, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+  await loadMappings();
+  showMsg('skuListMsg', `${sku} ${nowOff ? 'deactivated — labels with it will show as unmapped' : 'activated'}.`, true);
+}
+/* Labels printed in Label Cropper (Buyer) before these SKUs were on a
+   product: deduct them from this product now (shared rules). */
+async function settleBuyerQueueFor(mapping, skus){
+  try{
+    if(!skus.length) return '';
+    const uid = currentUser.uid;
+    const pkgSnap = await db.collection('users').doc(uid).collection('buyerProductPackaging').doc(`${mapping.sellerId}_${mapping.productId}`).get();
+    const pkg = pkgSnap.exists ? pkgSnap.data() : null;
+    const nameOf = (col, sid) => { const list = col === 'buyerLabelSizes' ? labelSizesCache : packagingSizesCache; const z = list.find(x => x.id === sid); return z ? z.name : ''; };
+    let units = 0, labels = 0;
+    for(const sku of skus){
+      const out = await VLS.settleQueued(uid, VLS.queueDocId(sku), { id: mapping.id, name: mapping.productName }, pkg, nameOf, { col: VLS.BUYER_Q, buyerMapping: mapping });
+      units += out.units; labels += out.labels;
+    }
+    return labels ? ` Also deducted ${units} unit(s) for ${labels} label(s) already printed.` : '';
+  }catch(err){ console.error('Catch-up for printed labels failed:', err); return ''; }
 }
 /* Resolves a display name for either a real linked seller or the "Myself"
    pseudo-seller — used wherever a mapping/assignment needs a sellerName to
@@ -668,7 +731,15 @@ async function saveMapping(){
     }
   }
 
+  // Keep "switched off" flags only for SKUs still on the product.
+  const prevDoc = editId ? mappingsCache.find(m => m.id === editId) : null;
+  const inactiveSkus = ((prevDoc && prevDoc.inactiveSkus) || []).filter(k => {
+    const [mk, ...rest] = k.split(':');
+    const sku = rest.join(':');
+    return skuListHas({ AMAZON: amazonSku, MEESHO: meeshoSku, FLIPKART: flipkartSku }[mk], sku);
+  });
   const data = {
+    inactiveSkus,
     linkType: isOwn ? 'OWN' : (sellerId === currentUser.uid ? 'SELF_BILLING' : 'SELLER'),
     sellerId, sellerName, productId, productName: name, sellerProductName, sellerSku,
     buyerSku, amazonSku, meeshoSku, flipkartSku,
@@ -689,25 +760,9 @@ async function saveMapping(){
     ...splitSkuList(flipkartSku).map(x => resolveUnmappedIfMatching('FLIPKART', x))
   ]);
 
-  // Labels printed in Label Cropper (Buyer) before these SKUs were mapped:
-  // deduct them from this product now (shared rules, label-stock-core.js).
-  let late = '';
-  try{
-    const allSkus = [...splitSkuList(amazonSku), ...splitSkuList(meeshoSku), ...splitSkuList(flipkartSku)];
-    if(allSkus.length){
-      const uid = currentUser.uid;
-      const saved = { id: ref.id, ...data };
-      const pkgSnap = await db.collection('users').doc(uid).collection('buyerProductPackaging').doc(`${sellerId}_${productId}`).get();
-      const pkg = pkgSnap.exists ? pkgSnap.data() : null;
-      const nameOf = (col, id) => { const list = col === 'buyerLabelSizes' ? labelSizesCache : packagingSizesCache; const z = list.find(x => x.id === id); return z ? z.name : ''; };
-      let units = 0, labels = 0;
-      for(const sku of allSkus){
-        const out = await VLS.settleQueued(uid, VLS.queueDocId(sku), { id: saved.id, name: name }, pkg, nameOf, { col: VLS.BUYER_Q, buyerMapping: saved });
-        units += out.units; labels += out.labels;
-      }
-      if(labels) late = ` Also deducted ${units} unit(s) for ${labels} label(s) already printed.`;
-    }
-  }catch(err){ console.error('Catch-up for printed labels failed:', err); }
+  // Labels printed in Label Cropper (Buyer) before these SKUs were mapped.
+  const late = await settleBuyerQueueFor({ id: ref.id, ...data },
+    [...splitSkuList(amazonSku), ...splitSkuList(meeshoSku), ...splitSkuList(flipkartSku)]);
 
   showMsg('mappingMsg', `Saved "${name}".${late}`, true);
   resetMappingForm();
