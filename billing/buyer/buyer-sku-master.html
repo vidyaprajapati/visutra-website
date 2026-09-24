@@ -39,7 +39,7 @@
     <p class="sub">Your own product list on the buyer side — each product has <b>your name</b> and <b>your own SKU</b>, and can optionally be <b>linked to a seller's product</b> (the one you buy it as). Linking is what lets orders and Label-Based Auto Order go to that seller, and an accepted order add to this product's stock. Leave it <b>Not linked</b> for something you don't buy through a linked seller. Marketplace SKUs let label files find this product.</p>
     <div class="grid2">
       <div class="field"><label>Product name *</label><input id="mName" placeholder="e.g. Top Load Washing Machine Cover — Grey 7kg"></div>
-      <div class="field"><label>My SKU (own) *</label><input id="mBuyerSku" placeholder="e.g. BUY-WMC-001"></div>
+      <div class="field"><label>My SKU (own) — optional if a marketplace SKU is given</label><input id="mBuyerSku" placeholder="e.g. BUY-WMC-001"></div>
     </div>
     <div class="grid2">
       <div class="field"><label>Linked to</label><select id="mSeller" onchange="onMappingSellerChange()"><option value="__own__">Not linked (my own product)</option></select></div>
@@ -582,7 +582,10 @@ function renderMappings(){
   });
   document.getElementById('mappingsTable').innerHTML = rows.map(m => `
     <tr><td>${esc(m.productName)}</td>
-    <td>${m.buyerSku ? `<code>${esc(m.buyerSku)}</code>` : '<span class="badge" title="Edit to add your own SKU">No SKU</span>'}</td>
+    <td>${m.buyerSku ? `<code>${esc(m.buyerSku)}</code>`
+      : (m.amazonSku || m.meeshoSku || m.flipkartSku)
+        ? '<span style="color:var(--muted)" title="No own SKU — identified by its marketplace SKU(s)">— (uses marketplace SKU)</span>'
+        : '<span class="badge" title="Edit to add an SKU">No SKU</span>'}</td>
     <td>${isOwnProduct(m) ? '<span style="color:var(--muted)">Not linked</span>'
       : `${esc(m.sellerName||'')} — ${esc(m.sellerProductName || m.productName)}${m.sellerSku ? ` <span style="color:var(--muted)">(${esc(m.sellerSku)})</span>` : ''}`}</td>
     <td>${esc(m.amazonSku||'—')}</td><td>${esc(m.meeshoSku||'—')}</td><td>${esc(m.flipkartSku||'—')}</td>
@@ -614,8 +617,12 @@ async function saveMapping(){
   const editId = document.getElementById('mEditId').value;
 
   if(!name){ showMsg('mappingMsg', 'Enter a product name.', false); return; }
-  if(!buyerSku){ showMsg('mappingMsg', 'Enter your own SKU for this product.', false); return; }
-  const skuDupe = mappingsCache.find(m => m.id !== editId && m.status === 'ACTIVE' && (m.buyerSku||'').trim().toLowerCase() === buyerSku.toLowerCase());
+  // A marketplace SKU (Amazon / Meesho / Flipkart) already identifies the
+  // product, so My SKU is only required when none of those is given.
+  if(!buyerSku && !amazonSku && !meeshoSku && !flipkartSku){
+    showMsg('mappingMsg', 'Enter My SKU, or at least one Amazon / Meesho / Flipkart SKU.', false); return;
+  }
+  const skuDupe = buyerSku ? mappingsCache.find(m => m.id !== editId && m.status === 'ACTIVE' && (m.buyerSku||'').trim().toLowerCase() === buyerSku.toLowerCase()) : null;
   if(skuDupe){ showMsg('mappingMsg', `SKU "${buyerSku}" is already used by "${skuDupe.productName}".`, false); return; }
 
   let sellerId, sellerName, productId, sellerProductName = '', sellerSku = '';
