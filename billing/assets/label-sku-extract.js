@@ -193,3 +193,22 @@ function hashText(str){
   }
   return 'h' + (h >>> 0).toString(36);
 }
+
+/* ---------------- Multiple SKUs per marketplace field ----------------
+   A product's Amazon / Meesho / Flipkart SKU field can hold several SKUs
+   (one product listed under different codes — sizes, colours, relistings),
+   separated by commas, semicolons or new lines. Stored as one string
+   ("A, B, C") so older single-SKU products keep working unchanged. */
+function splitSkuList(v){
+  const seen = new Set();
+  return String(v == null ? '' : v).split(/[,;\n\r]+/).map(x => x.trim()).filter(x => {
+    const k = x.toLowerCase();
+    if(!x || seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+}
+function joinSkuList(v){ return splitSkuList(v).join(', '); }
+function skuListHas(v, sku){
+  const k = String(sku == null ? '' : sku).trim().toLowerCase();
+  return !!k && splitSkuList(v).some(x => x.toLowerCase() === k);
+}
