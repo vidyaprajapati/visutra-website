@@ -27,7 +27,6 @@ let stockAggregation = []; // {rawKey, displayKey, totalQty} built from stockUpl
 if(typeof pdfjsLib !== 'undefined'){
   pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js".replace('pdf.min.js', 'pdf.worker.min.js');
 }
-let sellerLabelPendingHits = []; // hits from the most recent upload that don't yet match a skuMappings entry, waiting on the person to pick a product
 
 /* Parse a date-only string ("YYYY-MM-DD", e.g. from <input type=date>) as a LOCAL
    date. new Date("YYYY-MM-DD") parses as UTC per spec, which for India (UTC+5:30)
@@ -881,8 +880,7 @@ async function processSellerLabelFiles(){
         const text = content.items.map(it => it.str).join(' ');
         const pageHits = extractAllMarketplaceItems(text);
         for(const hit of pageHits){
-          const pageHash = hashText(`${hit.marketplace}|${hit.sku}|${text.slice(0, 200)}`);
-          hits.push({ ...hit, pageHash });
+          hits.push({ ...hit, key: labelKey(hit.marketplace, hit.sku, text), packKey: packingKey(hit.marketplace, text) });
         }
       }
     }catch(err){
@@ -897,105 +895,75 @@ async function processSellerLabelFiles(){
   await handleSellerLabelHits(hits, files.length);
 }
 
+/* Same rules as Label Cropper (billing/assets/label-stock-core.js):
+   product once per product line per shipment; packing + one label sticker
+   once per shipment (this page doesn't print, so the sticker is counted the
+   first time the shipment is seen anywhere, same moment as packing).
+   Unmapped SKUs go to the shared Unmapped Label SKUs list. */
 async function handleSellerLabelHits(hits, fileCount){
-  let deducted = 0, skipped = 0;
-  sellerLabelPendingHits = [];
+  const uid = currentUser.uid;
+  const userRef = db.collection('users').doc(uid);
+  let deducted = 0, skipped = 0, packs = 0, stickers = 0;
+  const unmapped = [];
   const results = [];
-  const today = new Date().toISOString().slice(0,10);
+  const [pkgSnap, pszSnap, lszSnap] = await Promise.all([
+    userRef.collection('buyerProductPackaging').get(),
+    userRef.collection('buyerPackagingSizes').get(),
+    userRef.collection('buyerLabelSizes').get()
+  ]);
+  const pkgs = pkgSnap.docs.map(d => d.data()).filter(d => d.sellerUid === uid);
+  const sizeNames = {};
+  pszSnap.docs.concat(lszSnap.docs).forEach(d => { sizeNames[d.id] = d.data().name || ''; });
+  const packedThisRun = new Set();
 
   for(const hit of hits){
-    const already = await db.collection('users').doc(currentUser.uid).collection('processedSellerLabels').doc(hit.pageHash).get();
-    if(already.exists){ skipped++; continue; }
-
-    const mapping = skuMappingsCache.find(m => m.rawKey === hit.sku);
-    if(mapping){
-      const product = productsCache.find(p => p.id === mapping.productId);
-      if(product){
-        await addStockMovement('sale-out', mapping.productId, -hit.qty, today, `Label sold — ${hit.marketplace} ${hit.sku}`);
-        await db.collection('users').doc(currentUser.uid).collection('processedSellerLabels').doc(hit.pageHash)
-          .set({ marketplace: hit.marketplace, sku: hit.sku, qty: hit.qty, productId: mapping.productId, processedAt: firebase.firestore.FieldValue.serverTimestamp() });
-        deducted++;
-        results.push({ ...hit, productName: product.name, status: 'Deducted' });
-        continue;
+    const mapping = skuMappingsCache.find(m => String(m.rawKey||'').trim().toLowerCase() === hit.sku.trim().toLowerCase());
+    const product = mapping ? productsCache.find(p => p.id === mapping.productId) : null;
+    if(!product){
+      unmapped.push(hit);
+      results.push({ ...hit, productName: null, status: 'Unmapped' });
+      continue;
+    }
+    const r = await VLS.sellerProductOnce(uid, hit, { id: product.id, name: product.name }, 'sell-via-label');
+    if(r === 'already'){ skipped++; results.push({ ...hit, productName: product.name, status: 'Already' }); continue; }
+    deducted++;
+    results.push({ ...hit, productName: product.name, status: 'Deducted' });
+    const pkg = pkgs.find(x => x.productId === product.id);
+    if(pkg && !packedThisRun.has(hit.packKey)){
+      packedThisRun.add(hit.packKey);
+      const wasNew = !(await VLS.packingDone(uid, hit.packKey));
+      if(wasNew){
+        if(pkg.packagingSizeId && await VLS.packingOnce(uid, hit, pkg.packagingSizeId, sizeNames[pkg.packagingSizeId], `Sell via Label — ${hit.marketplace} ${hit.sku}`)) packs++;
+        if(pkg.labelSizeId && await VLS.adjustSize(uid, 'buyerLabelSizes', pkg.labelSizeId, -1, { sizeName: sizeNames[pkg.labelSizeId], type: 'sell-via-label', note: `${hit.marketplace} ${hit.sku}` })) stickers++;
       }
     }
-    sellerLabelPendingHits.push(hit);
-    results.push({ ...hit, productName: null, status: 'Unmapped' });
   }
+  if(unmapped.length) await VLS.queueUnmapped(uid, unmapped, false, 'sell-via-label');
 
   document.getElementById('sellerLabelResultsTable').innerHTML = results.map(r => `
     <tr><td>${esc(r.marketplace)}</td><td>${esc(r.sku)}</td><td>${r.productName ? esc(r.productName) : '<span class="badge">Unmapped</span>'}</td><td>${r.qty}</td>
-    <td>${r.status === 'Deducted' ? '<span style="color:#0E7C6B">Deducted</span>' : '<span style="color:var(--paprika-dark)">Needs mapping</span>'}</td></tr>
+    <td>${r.status === 'Deducted' ? '<span style="color:#0E7C6B">Deducted</span>' : r.status === 'Already' ? '<span style="color:var(--muted)">Already counted</span>' : '<span style="color:var(--paprika-dark)">Map it in Unmapped Label SKUs above</span>'}</td></tr>
   `).join('');
 
-  renderSellerLabelUnmapped();
+  await loadProducts();
+  await loadStockMovements();
+  await loadLabelSkuQueue();
   const parts = [];
   if(deducted) parts.push(`${deducted} item(s) deducted from stock`);
-  if(sellerLabelPendingHits.length) parts.push(`${sellerLabelPendingHits.length} need a product mapping below`);
-  if(skipped) parts.push(`${skipped} already processed before`);
+  if(packs) parts.push(`${packs} packing`);
+  if(stickers) parts.push(`${stickers} label(s)`);
+  if(unmapped.length) parts.push(`${unmapped.length} unmapped — added to Unmapped Label SKUs above`);
+  if(skipped) parts.push(`${skipped} already counted before`);
   showMsg('sellerLabelMsg', `Read ${fileCount} file(s) — ${parts.join(', ') || 'nothing new found'}.`, true);
-}
-
-function renderSellerLabelUnmapped(){
-  const card = document.getElementById('sellerLabelUnmappedCard');
-  if(!sellerLabelPendingHits.length){ card.classList.add('hidden'); return; }
-  card.classList.remove('hidden');
-  document.getElementById('sellerLabelUnmappedList').innerHTML = sellerLabelPendingHits.map((h, i) => `
-    <div class="box" style="margin-bottom:10px">
-      <p style="margin:0 0 8px;font-size:13px"><b>${esc(h.marketplace)}</b> — SKU <code>${esc(h.sku)}</code> — Qty ${h.qty}</p>
-      <select id="sellerLabelMap${i}">
-        <option value="">Skip — not a stock item</option>
-        ${productsCache.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}
-      </select>
-    </div>`).join('');
-}
-
-async function applySellerLabelMappings(){
-  let mapped = 0;
-  const today = new Date().toISOString().slice(0,10);
-  for(let i = 0; i < sellerLabelPendingHits.length; i++){
-    const hit = sellerLabelPendingHits[i];
-    const sel = document.getElementById('sellerLabelMap'+i);
-    const productId = sel ? sel.value : '';
-    if(!productId) continue;
-    const product = productsCache.find(p => p.id === productId);
-    if(!product) continue;
-
-    // Remembered here exactly like the CSV reconciliation above — the same
-    // skuMappings collection, so mapping a SKU once covers both features.
-    const existingMap = skuMappingsCache.find(m => m.rawKey === hit.sku);
-    if(existingMap){
-      if(existingMap.productId !== productId){
-        await db.collection('users').doc(currentUser.uid).collection('skuMappings').doc(existingMap.id)
-          .set({ rawKey: hit.sku, productId, productName: product.name });
-      }
-    } else {
-      await db.collection('users').doc(currentUser.uid).collection('skuMappings').add({
-        rawKey: hit.sku, productId, productName: product.name, createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-    }
-
-    await addStockMovement('sale-out', productId, -hit.qty, today, `Label sold — ${hit.marketplace} ${hit.sku}`);
-    await db.collection('users').doc(currentUser.uid).collection('processedSellerLabels').doc(hit.pageHash)
-      .set({ marketplace: hit.marketplace, sku: hit.sku, qty: hit.qty, productId, processedAt: firebase.firestore.FieldValue.serverTimestamp() });
-    mapped++;
-  }
-  await loadSkuMappings();
-  sellerLabelPendingHits = [];
-  document.getElementById('sellerLabelUnmappedCard').classList.add('hidden');
   document.getElementById('sellerLabelFiles').value = '';
-  showMsg('sellerLabelMsg', `Mapped and deducted stock for ${mapped} item(s).`, true);
 }
 
 /* ---------------- Unmapped Label SKUs (queued by Label Cropper, Seller mode) ----------------
-   tools/label-cropper.html writes one doc per unmapped SKU to
-   users/{uid}/sellerUnmappedLabelSkus, listing every label printed for it
-   under `pending` with the same two per-label dedup keys a normal print uses:
-     sellerHash -> processedSellerLabels  (product stock, once per label)
-     packHash   -> packagingConsumedLabels (packing, first print only)
-   plus labelDone (sticker already taken from printer-size label stock).
-   Settling here therefore behaves exactly like the label had been mapped when
-   printed, and can't double-count against Label Cropper or Sell via Label. */
+   Label Cropper (Seller) and Sell via Label write one doc per unmapped SKU
+   to users/{uid}/sellerUnmappedLabelSkus, listing every label under
+   `pending` with its shipment keys (key → product, packKey → packing) and
+   labelDone (sticker already counted). Settling uses the shared rules in
+   label-stock-core.js, so it can't double-count against either page. */
 let labelSkuQueueCache = [];
 async function loadLabelSkuQueue(){
   try{
@@ -1051,42 +1019,17 @@ async function mapQueuedLabelSku(docId){
       await userRef.collection('skuMappings').add({ rawKey: q.sku, productId, productName: product.name, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
     }
 
-    // 2) Re-read the queue doc (Label Cropper may have added labels since this page loaded).
-    const qRef = userRef.collection('sellerUnmappedLabelSkus').doc(docId);
-    const qSnap = await qRef.get();
-    const pending = qSnap.exists ? Object.values(qSnap.data().pending || {}) : [];
-
-    // Packing/label size assigned to this product in Buyer SKU Master (seller = "Myself").
-    const pkgSnap = await userRef.collection('buyerProductPackaging').get();
+    // 2) Deduct every label listed (shared rules — label-stock-core.js) and clear it.
+    const [pkgSnap, pszSnap, lszSnap] = await Promise.all([
+      userRef.collection('buyerProductPackaging').get(),
+      userRef.collection('buyerPackagingSizes').get(),
+      userRef.collection('buyerLabelSizes').get()
+    ]);
     const pkgDoc = pkgSnap.docs.map(d => d.data()).find(d => d.sellerUid === uid && d.productId === productId) || null;
-
-    const today = new Date().toISOString().slice(0,10);
-    let units = 0, labels = 0, skipped = 0, packing = 0, labelStickers = 0;
-    for(const it of pending){
-      // Product stock — once per label.
-      const markerRef = userRef.collection('processedSellerLabels').doc(it.sellerHash);
-      if((await markerRef.get()).exists){ skipped++; }
-      else {
-        await addStockMovement('sale-out', productId, -it.qty, today, `Label printed — ${it.marketplace} ${it.sku}`);
-        await markerRef.set({ marketplace: it.marketplace, sku: it.sku, qty: it.qty, productId, source: 'label-queue', processedAt: firebase.firestore.FieldValue.serverTimestamp() });
-        units += it.qty; labels++;
-      }
-      // Packing — first print only (same marker Label Cropper uses).
-      if(pkgDoc && pkgDoc.packagingSizeId && it.packHash){
-        const packRef = userRef.collection('packagingConsumedLabels').doc(it.packHash);
-        if(!(await packRef.get()).exists){
-          await packRef.set({ marketplace: it.marketplace, sku: it.sku, qty: it.qty, packagingSizeId: pkgDoc.packagingSizeId, consumedAt: firebase.firestore.FieldValue.serverTimestamp() });
-          packing += it.qty;
-        }
-      }
-      // Label — only if no sticker was taken from a printer-size stock at print time.
-      if(pkgDoc && pkgDoc.labelSizeId && !it.labelDone) labelStickers++;
-    }
-    if(packing) await userRef.collection('buyerPackagingSizes').doc(pkgDoc.packagingSizeId).update({ stock: firebase.firestore.FieldValue.increment(-packing) }).catch(e => console.error('Packing stock update failed:', e));
-    if(labelStickers) await userRef.collection('buyerLabelSizes').doc(pkgDoc.labelSizeId).update({ stock: firebase.firestore.FieldValue.increment(-labelStickers) }).catch(e => console.error('Label stock update failed:', e));
-
-    // 3) Clear it from the queue.
-    await qRef.delete();
+    const sizeNames = {};
+    pszSnap.docs.concat(lszSnap.docs).forEach(d => { sizeNames[d.id] = d.data().name || ''; });
+    const out = await VLS.settleQueued(uid, docId, { id: product.id, name: product.name }, pkgDoc, (col, id) => sizeNames[id] || '');
+    const units = out.units, labels = out.labels, skipped = out.already, packing = out.packing, labelStickers = out.stickers;
 
     await loadProducts();
     await loadSkuMappings();
@@ -1096,7 +1039,8 @@ async function mapQueuedLabelSku(docId){
     if(packing) bits.push(`${packing} packing`);
     if(labelStickers) bits.push(`${labelStickers} label sticker(s)`);
     if(skipped) bits.push(`${skipped} label(s) were already deducted`);
-    if(!pkgDoc) bits.push('no packing/label size assigned to this product in Buyer SKU Master, so none taken');
+    if(!pkgDoc) bits.push("no packing/label size picked for this product yet (Label Cropper → Seller Stock box), so none taken");
+    else if(!packing && labels) bits.push('packing already counted for these shipments');
     showMsg('labelSkuQueueMsg', `Mapped ${q.sku} → ${product.name}. ${bits.join('; ')}.`, true);
   }catch(err){
     console.error('Map & deduct failed:', err);

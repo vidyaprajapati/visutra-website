@@ -35,6 +35,11 @@ function mountUserMenu(mountId, user, opts) {
   // since none of those pages are usable without seller/business-side data
   // even when a buyer relationship is also involved.
   const isBuyerPage = window.location.pathname.includes('/buyer/');
+  // Section separation: inside the Buyer section nothing links into the
+  // Seller section and vice versa — the Buyer / Seller pills below are the
+  // one deliberate way to switch. Neutral pages (account, portal, free tools)
+  // show both.
+  const side = vtCurrentSide();
   const activePillStyle = `${pillBtnStyle};background:var(--ink,#1F1B16);color:#fff;border-color:var(--ink,#1F1B16)`;
 
   mount.innerHTML = `
@@ -53,7 +58,8 @@ function mountUserMenu(mountId, user, opts) {
         <div id="vtUserMenuDropdown" style="${dropdownStyle};left:auto;right:0">
           <div style="padding:10px 14px;font-size:11.5px;color:#6B6255;border-bottom:1px solid #E4D8BD;word-break:break-all">${escapeHtmlUM(user.email || '')}</div>
           <a href="${base}account.html" style="${itemStyle}">Profile (My Account)</a>
-          ${opts.showBillingLink ? `<a href="${base}app.html" style="${itemStyle}">My Billing Account</a>` : ''}
+          ${opts.showBillingLink && side === 'seller' ? `<a href="${base}app.html" style="${itemStyle}">My Billing Account</a>` : ''}
+          ${side === 'buyer' ? `<a href="${base}buyer/dashboard.html" style="${itemStyle}">Buyer Dashboard</a>` : ''}
           <a href="${base}portal.html" style="${itemStyle}">Business Portal (Buyer/Seller)</a>
           <a href="#" id="vtLogoutLinkUM" style="${itemStyle};color:#9E3608;border-top:1px solid #E4D8BD">Log out</a>
         </div>
@@ -299,7 +305,17 @@ function closeAllVtDropdowns() {
    the portal first. Skips silently (no error) on any page whose topbar
    doesn't use the standard .topbar/.brand markup, since a handful of free
    tool pages have their own header layout. */
+/* 'buyer' for billing/buyer/*, 'both' for neutral pages (account, portal,
+   login, the free tools), 'seller' for everything else under billing/. */
+function vtCurrentSide() {
+  const path = window.location.pathname;
+  if (path.includes('/buyer/')) return 'buyer';
+  if (path.includes('/tools/')) return 'both';
+  if (/\/(account|portal|login|complete-profile)\.html$/.test(path)) return 'both';
+  return 'seller';
+}
 function mountSiteDrawer(mount, base, siteRoot) {
+  const side = vtCurrentSide();
   if (document.getElementById('vtSiteDrawer')) return; // already mounted (e.g. re-render)
   const topbar = mount.closest('.topbar');
   if (!topbar) return;
@@ -332,15 +348,15 @@ function mountSiteDrawer(mount, base, siteRoot) {
         <a href="${base}account.html" style="${itemStyle}">Profile (My Account)</a>
         <a href="${base}portal.html" style="${itemStyle}">Business Portal</a>
 
-        <div style="${sectionStyle}">Buyer</div>
-        ${VT_BUYER_NAV.map(function (item) { return '<a href="' + base + item.href + '" style="' + itemStyle + '">' + item.label + '</a>'; }).join('')}
+        ${side !== 'seller' ? `<div style="${sectionStyle}">Buyer</div>
+        ${VT_BUYER_NAV.map(function (item) { return '<a href="' + base + item.href + '" style="' + itemStyle + '">' + item.label + '</a>'; }).join('')}` : ''}
 
-        <div style="${sectionStyle}">Seller</div>
+        ${side !== 'buyer' ? `<div style="${sectionStyle}">Seller</div>
         <a href="${base}app.html" style="${itemStyle}">GST Billing</a>
         <a href="${base}app.html?view=purchases" style="${itemStyle}">Purchase Entry</a>
         <a href="${base}app.html?view=stock" style="${itemStyle}">Stock Management</a>
         <a href="${base}app.html?view=gstr1" style="${itemStyle}">GSTR-1 Filing (Sales &amp; Purchases)</a>
-        <a href="${base}seller/order-receive.html" style="${itemStyle}">Order Receive</a>
+        <a href="${base}seller/order-receive.html" style="${itemStyle}">Order Receive</a>` : ''}
 
         <div style="${sectionStyle}">Site</div>
         <a href="${siteRoot}free-services.html" style="${itemStyle}">Free Services for Sellers</a>

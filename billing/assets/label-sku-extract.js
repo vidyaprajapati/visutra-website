@@ -107,23 +107,85 @@ function extractFlipkartSkuQty(text){
   return null;
 }
 
-/* Runs all three extractors against one page's text and returns every hit
-   found, each tagged with its marketplace. A single page normally yields at
-   most one hit, but this doesn't assume that — a page could legitimately
-   match more than once (e.g. an Amazon invoice with several line items). */
+/* Reads every SKU on one page, tagged with its marketplace. A marketplace
+   named in the page text is tried first, and the FIRST extractor that finds
+   something wins — so a Flipkart page can't also be mis-read by Meesho's
+   looser Order-No fallback and counted twice (that used to happen when all
+   three always ran). Amazon's strict pattern goes before Meesho's fallback.
+   Amazon can return several line items for one page. */
 function extractAllMarketplaceItems(text){
-  const results = [];
-  const flipkart = extractFlipkartSkuQty(text);
-  if(flipkart) results.push({ marketplace: 'FLIPKART', sku: flipkart.sku, qty: flipkart.qty });
-  const meesho = extractMeeshoSkuQty(text);
-  if(meesho && meesho.sku !== 'Unknown SKU') results.push({ marketplace: 'MEESHO', sku: meesho.sku, qty: meesho.qty });
-  extractAmazonItems(text).forEach(it => results.push({ marketplace: 'AMAZON', sku: it.sku, qty: it.qty }));
-  return results;
+  const lower = String(text || '').toLowerCase();
+  const hint = lower.includes('flipkart') ? 'FLIPKART' : lower.includes('meesho') ? 'MEESHO' : lower.includes('amazon') ? 'AMAZON' : null;
+  const tryers = {
+    FLIPKART: () => { const r = extractFlipkartSkuQty(text); return r ? [r] : []; },
+    MEESHO:   () => { const r = extractMeeshoSkuQty(text); return (r && r.sku !== 'Unknown SKU') ? [r] : []; },
+    AMAZON:   () => extractAmazonItems(text)
+  };
+  const order = hint ? [hint, ...['FLIPKART','AMAZON','MEESHO'].filter(x => x !== hint)] : ['FLIPKART','AMAZON','MEESHO'];
+  for(const mk of order){
+    const items = tryers[mk]();
+    if(items.length) return items.map(it => ({ marketplace: mk, sku: it.sku, qty: it.qty }));
+  }
+  return [];
 }
 
-/* Small, dependency-free hash for duplicate-label detection (Part 39 of the
-   spec) — not cryptographic, just enough to fingerprint "have I seen this
-   exact page's text before". */
+/* ---------------- Shipment identity (duplicate protection) ----------------
+   Every "has this label already been counted?" check across the app is keyed
+   on WHICH SHIPMENT a label is, not on a slice of its text. The old key used
+   the first 200 characters of the page, which on an Amazon invoice is the
+   same heading + seller block on every order — so two different orders of
+   the same SKU looked identical and the second was treated as a reprint.
+
+   Order IDs, by marketplace (as printed on the label / invoice):
+     Amazon   : 404-1234567-1234567
+     Flipkart : OD + 15–21 digits
+     Meesho   : sub-order no. 123456789012345_1
+   If none is found the WHOLE page text is hashed (never a slice). */
+function shipmentIdFromText(text, marketplace){
+  const t = String(text || '');
+  const pick = re => { const m = t.match(re); return m ? m[1] : null; };
+  const byMk = {
+    AMAZON:   () => pick(/\b(\d{3}-\d{7}-\d{7})\b/),
+    FLIPKART: () => pick(/\b(OD\d{15,21})\b/i),
+    MEESHO:   () => pick(/\b(\d{6,}_\d{1,3})\b/)
+  };
+  const first = marketplace && byMk[marketplace] ? byMk[marketplace]() : null;
+  if(first) return first;
+  for(const mk of ['AMAZON','FLIPKART','MEESHO']){ const v = byMk[mk](); if(v) return v; }
+  return null;
+}
+/* 53-bit string hash (cyrb53) — far fewer collisions than a 32-bit hash
+   over thousands of labels. Used only for the no-order-ID fallback. */
+function hash53(str){
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for(let i = 0; i < str.length; i++){
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+function safeDocId(s){
+  return String(s).replace(/[\/\\\s#?\[\]*`]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 400) || 'x';
+}
+function shipmentPart(marketplace, text){
+  const id = shipmentIdFromText(text, marketplace);
+  return id ? 'id-' + id : 'tx-' + hash53(String(text || ''));
+}
+/* One per PRODUCT LINE on a shipment: product stock deductions & returns. */
+function labelKey(marketplace, sku, text){
+  return safeDocId(`L_${marketplace}_${shipmentPart(marketplace, text)}_${String(sku).trim().toLowerCase()}`);
+}
+/* One per SHIPMENT (whatever it contains): packing — one packet per label. */
+function packingKey(marketplace, text){
+  return safeDocId(`P_${marketplace}_${shipmentPart(marketplace, text)}`);
+}
+
+/* Small, dependency-free 32-bit hash — kept for the older, non-stock uses
+   (order-draft page tracking, file signatures). Stock dedup uses the keys
+   above instead. */
 function hashText(str){
   let h = 0;
   for(let i = 0; i < str.length; i++){
