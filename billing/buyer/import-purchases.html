@@ -107,6 +107,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="../assets/label-sku-extract.js"></script>
 <script>
 let currentUser = null;
 let suppliersCache = [];
@@ -180,7 +181,8 @@ function hashKey(str){ let h = 0; for(let i = 0; i < str.length; i++){ h = (Math
 function autoMatch(name, sku){
   const s = norm(sku), n = norm(name);
   if(s){
-    const bySku = mySkuMappingsCache.find(m => ['buyerSku','sellerSku','amazonSku','meeshoSku','flipkartSku'].some(f => norm(m[f]) === s));
+    const bySku = mySkuMappingsCache.find(m => ['buyerSku','sellerSku'].some(f => norm(m[f]) === s)
+      || ['amazonSku','meeshoSku','flipkartSku'].some(f => skuListHas(m[f], s)));
     if(bySku) return { mapping: bySku, how: 'SKU' };
   }
   const mem = importItemMemory[itemKeyOf(name, sku)];

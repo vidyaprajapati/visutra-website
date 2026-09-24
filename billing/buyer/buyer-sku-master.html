@@ -36,7 +36,7 @@
 
   <div class="card" id="mappingFormCard">
     <h2 id="mappingFormTitle">Add Product</h2>
-    <p class="sub">Your own product list on the buyer side — each product has <b>your name</b> and <b>your own SKU</b>, and can optionally be <b>linked to a seller's product</b> (the one you buy it as). Linking is what lets orders and Label-Based Auto Order go to that seller, and an accepted order add to this product's stock. Leave it <b>Not linked</b> for something you don't buy through a linked seller. Marketplace SKUs let label files find this product.</p>
+    <p class="sub">Your own product list on the buyer side — each product has <b>your name</b> and <b>your own SKU</b>, and can optionally be <b>linked to a seller's product</b> (the one you buy it as). Linking is what lets orders and Label-Based Auto Order go to that seller, and an accepted order add to this product's stock. Leave it <b>Not linked</b> for something you don't buy through a linked seller. Marketplace SKUs let label files find this product — <b>one product can have several SKUs per marketplace</b> (separate them with commas); they all share this product's one stock.</p>
     <div class="grid2">
       <div class="field"><label>Product name *</label><input id="mName" placeholder="e.g. Top Load Washing Machine Cover — Grey 7kg"></div>
       <div class="field"><label>My SKU (own) — optional if a marketplace SKU is given</label><input id="mBuyerSku" placeholder="e.g. BUY-WMC-001"></div>
@@ -50,9 +50,9 @@
       <div class="field"><label>Seller's product name (read-only)</label><input id="mSellerProductName" readonly style="background:var(--ivory);color:var(--muted)"></div>
     </div>
     <div class="grid3">
-      <div class="field"><label>Amazon SKU</label><input id="mAmazonSku" placeholder="e.g. AMZ-WMC-001"></div>
-      <div class="field"><label>Meesho SKU</label><input id="mMeeshoSku" placeholder="e.g. MEE-WMC-001"></div>
-      <div class="field"><label>Flipkart SKU</label><input id="mFlipkartSku" placeholder="e.g. FLIP-WMC-001"></div>
+      <div class="field"><label>Amazon SKU(s)</label><input id="mAmazonSku" placeholder="e.g. AMZ-WMC-001, AMZ-WMC-002"></div>
+      <div class="field"><label>Meesho SKU(s)</label><input id="mMeeshoSku" placeholder="e.g. MEE-WMC-001, MEE-WMC-002"></div>
+      <div class="field"><label>Flipkart SKU(s)</label><input id="mFlipkartSku" placeholder="e.g. FLIP-WMC-001, FLIP-WMC-002"></div>
     </div>
     <input type="hidden" id="mEditId">
     <button class="btn primary" onclick="saveMapping()">Save Product</button>
@@ -155,6 +155,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="../assets/label-sku-extract.js"></script>
 <script src="../assets/label-stock-core.js"></script>
 <script>
 let currentUser = null;
@@ -588,7 +589,7 @@ function renderMappings(){
         : '<span class="badge" title="Edit to add an SKU">No SKU</span>'}</td>
     <td>${isOwnProduct(m) ? '<span style="color:var(--muted)">Not linked</span>'
       : `${esc(m.sellerName||'')} — ${esc(m.sellerProductName || m.productName)}${m.sellerSku ? ` <span style="color:var(--muted)">(${esc(m.sellerSku)})</span>` : ''}`}</td>
-    <td>${esc(m.amazonSku||'—')}</td><td>${esc(m.meeshoSku||'—')}</td><td>${esc(m.flipkartSku||'—')}</td>
+    <td>${skuCell(m.amazonSku)}</td><td>${skuCell(m.meeshoSku)}</td><td>${skuCell(m.flipkartSku)}</td>
     <td><span class="badge">${esc(m.status)}</span></td>
     <td class="row-actions">
       <button class="btn small" onclick="editMapping('${m.id}')">Edit</button>
@@ -611,9 +612,9 @@ async function saveMapping(){
   const isOwn = source === OWN_SOURCE;
   const name = document.getElementById('mName').value.trim();
   const buyerSku = document.getElementById('mBuyerSku').value.trim();
-  const amazonSku = document.getElementById('mAmazonSku').value.trim();
-  const meeshoSku = document.getElementById('mMeeshoSku').value.trim();
-  const flipkartSku = document.getElementById('mFlipkartSku').value.trim();
+  const amazonSku = joinSkuList(document.getElementById('mAmazonSku').value);
+  const meeshoSku = joinSkuList(document.getElementById('mMeeshoSku').value);
+  const flipkartSku = joinSkuList(document.getElementById('mFlipkartSku').value);
   const editId = document.getElementById('mEditId').value;
 
   if(!name){ showMsg('mappingMsg', 'Enter a product name.', false); return; }
@@ -624,6 +625,14 @@ async function saveMapping(){
   }
   const skuDupe = buyerSku ? mappingsCache.find(m => m.id !== editId && m.status === 'ACTIVE' && (m.buyerSku||'').trim().toLowerCase() === buyerSku.toLowerCase()) : null;
   if(skuDupe){ showMsg('mappingMsg', `SKU "${buyerSku}" is already used by "${skuDupe.productName}".`, false); return; }
+  // A marketplace SKU can belong to only ONE product — otherwise a label
+  // with that SKU wouldn't know which product's stock to change.
+  for(const [field, mk, list] of [['amazonSku','Amazon',amazonSku],['meeshoSku','Meesho',meeshoSku],['flipkartSku','Flipkart',flipkartSku]]){
+    for(const sku of splitSkuList(list)){
+      const other = mappingsCache.find(m => m.id !== editId && m.status === 'ACTIVE' && skuListHas(m[field], sku));
+      if(other){ showMsg('mappingMsg', `${mk} SKU "${sku}" is already on "${other.productName}". Remove it there first, or add your other SKUs to that product.`, false); return; }
+    }
+  }
 
   let sellerId, sellerName, productId, sellerProductName = '', sellerSku = '';
   const col = db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings');
@@ -645,8 +654,16 @@ async function saveMapping(){
     // off (sellerId, productId), so a second one would split that stock.
     const dupe = mappingsCache.find(m => m.id !== editId && m.sellerId === sellerId && m.productId === productId && m.status === 'ACTIVE');
     if(dupe){
-      showMsg('mappingMsg', `That seller product is already linked to "${dupe.productName}". Opened it for editing instead.`, false);
+      // Same seller product = same physical item = one stock count. Rather
+      // than a second product, add the SKUs just typed to the existing one.
+      const typed = { amazonSku, meeshoSku, flipkartSku, buyerSku };
       editMapping(dupe.id);
+      ['Amazon','Meesho','Flipkart'].forEach(mk => {
+        const el = document.getElementById('m' + mk + 'Sku');
+        el.value = joinSkuList([dupe[mk.toLowerCase() + 'Sku'] || '', typed[mk.toLowerCase() + 'Sku']].join(','));
+      });
+      if(!dupe.buyerSku && typed.buyerSku) document.getElementById('mBuyerSku').value = typed.buyerSku;
+      showMsg('mappingMsg', `That seller product already has a product here: "${dupe.productName}". Your SKU(s) have been added to it below — click Save Product to keep them (all its SKUs share one stock).`, true);
       return;
     }
   }
@@ -667,9 +684,9 @@ async function saveMapping(){
 
   // One save resolves every queued occurrence of the SKU(s) it just defined.
   await Promise.all([
-    resolveUnmappedIfMatching('AMAZON', amazonSku),
-    resolveUnmappedIfMatching('MEESHO', meeshoSku),
-    resolveUnmappedIfMatching('FLIPKART', flipkartSku)
+    ...splitSkuList(amazonSku).map(x => resolveUnmappedIfMatching('AMAZON', x)),
+    ...splitSkuList(meeshoSku).map(x => resolveUnmappedIfMatching('MEESHO', x)),
+    ...splitSkuList(flipkartSku).map(x => resolveUnmappedIfMatching('FLIPKART', x))
   ]);
 
   showMsg('mappingMsg', `Saved "${name}".`, true);
@@ -778,6 +795,10 @@ async function resolveUnmappedIfMatching(marketplace, sku){
   if(snap.exists) await ref.delete();
 }
 
+function skuCell(v){
+  const list = splitSkuList(v);
+  return list.length ? list.map(x => esc(x)).join('<br>') : '—';
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function showMsg(id, text, ok){
   const el = document.getElementById(id);
