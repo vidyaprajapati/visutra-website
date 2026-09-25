@@ -36,6 +36,17 @@
     <tbody id="stockTable"></tbody></table>
   </div>
 
+  <div class="card" id="buyerSalesReorderCard">
+        <h2>Reorder Suggestions — Sales Speed</h2>
+        <p class="sub">Based on how fast each product actually sells (sales + printed labels + reconciliation uploads in the period you pick): how many days your stock lasts, and how much to order to cover the next few weeks. <b>Order now</b> = under 7 days left, <b>Soon</b> = under 14.</p>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:8px">
+          <div class="field" style="margin:0"><label>Based on sales of the last</label><select id="buyerRoWindow" onchange="buyerRenderSalesReorder()"><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option></select></div>
+          <div class="field" style="margin:0"><label>Order enough for</label><select id="buyerRoCover" onchange="buyerRenderSalesReorder()"><option value="15">15 days</option><option value="30" selected>30 days</option><option value="45">45 days</option><option value="60">60 days</option></select></div>
+        </div>
+        <table><thead><tr><th>Product</th><th>Stock</th><th>Sold in period</th><th>Per day</th><th>Days left</th><th>Suggested order</th><th></th></tr></thead>
+        <tbody id="buyerRoTable"></tbody></table>
+      </div>
+
   <div class="card">
     <h2>Monthly Stock Report — Opening &amp; Closing</h2>
     <p class="sub">Opening and closing stock for each product for the month range you pick, reconstructed from every stock movement on record (manual edits, order acceptances, reconciliation uploads, imports) — not just what's on the page above. One row per product per month.</p>
@@ -93,7 +104,7 @@
     <div id="stockAggWrap" class="hidden" style="margin-top:18px">
       <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 2 — Match each product/SKU, then apply</h3>
       <p class="sub">For Meesho/Flipkart sheets, Sold and Returned are read from the status column automatically — Net is what actually changes stock (down for a sale, up for a cancellation/RTO/return).</p>
-      <table><thead><tr><th>From report</th><th>Sold</th><th>Returned</th><th>Net Stock Change</th><th>Matches to</th></tr></thead>
+      <table><thead><tr><th>From report</th><th>Sold</th><th>Returned</th><th title="Orders already counted by a printed label or an earlier upload — skipped so they aren't counted twice">Already counted (skipped)</th><th>Net Stock Change</th><th>Matches to</th></tr></thead>
       <tbody id="stockAggTable"></tbody></table>
       <button class="btn primary" style="margin-top:14px" onclick="applyStockUpload()">Apply &amp; Update Stock</button>
     </div>
@@ -107,6 +118,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="../assets/label-sku-extract.js"></script>
+<script src="../assets/label-stock-core.js"></script>
 <script>
 let currentUser = null;
 // This buyer's ACTIVE Buyer SKU Master mappings — THIS is the buyer-side
@@ -145,6 +158,7 @@ auth.onAuthStateChanged(async user => {
 
   await loadStock();
   await loadReconciliationMap();
+  buyerRenderSalesReorder();
 
   const thisMonth = new Date().toISOString().slice(0,7);
   document.getElementById('stockReportFromMonth').value = thisMonth;
@@ -153,6 +167,19 @@ auth.onAuthStateChanged(async user => {
   await renderMonthlyStockReport();
   addManualSrRow();
 });
+
+/* ---------------- Reorder suggestions from sales speed (shared: label-stock-core.js) ---------------- */
+async function buyerRenderSalesReorder(){
+  const el = document.getElementById('buyerRoTable');
+  if(!el || !currentUser) return;
+  const days = parseInt(document.getElementById('buyerRoWindow').value, 10) || 30;
+  const cover = parseInt(document.getElementById('buyerRoCover').value, 10) || 30;
+  try{
+    const used = await VLS.usagePerItem(currentUser.uid, 'buyerStockMovements', 'mappingId', days);
+    const rows = VLS.reorderRows(mySkuMappingsCache.map(m => ({ id: m.id, name: m.productName, stock: m.stock || 0 })), used, days, cover);
+    el.innerHTML = VLS.reorderTableHtml(rows, esc, cover);
+  }catch(err){ console.error('Reorder suggestions failed:', err); el.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">Could not load sales history.</td></tr>'; }
+}
 
 /* ---------------- Buyer Stock table (from Buyer SKU Master) ---------------- */
 async function loadStock(){
@@ -442,11 +469,16 @@ const RETURN_STATUS_PATTERN = /cancel|rto|return/i;
 function detectSheetFormat(headers){
   const lower = headers.map(h => String(h||'').trim().toLowerCase());
   const idx = name => lower.indexOf(name);
+  // Order-ID column (if present) — matches each row to the exact shipment a
+  // printed label already counted (see label-stock-core.js → linkReconRows).
+  const findHdr = test => lower.findIndex(test);
   if(idx('reason for credit entry') !== -1 && idx('sku') !== -1 && idx('quantity') !== -1){
-    return { format: 'meesho', reasonIdx: idx('reason for credit entry'), skuIdx: idx('sku'), qtyIdx: idx('quantity') };
+    return { format: 'meesho', reasonIdx: idx('reason for credit entry'), skuIdx: idx('sku'), qtyIdx: idx('quantity'),
+      orderIdx: findHdr(h => h.includes('sub order') || h.includes('suborder')) };
   }
   if(idx('order date') !== -1 && idx('sku name') !== -1 && idx('order status') !== -1 && idx('gross units') !== -1){
-    return { format: 'flipkart-pnl', skuIdx: idx('sku name'), statusIdx: idx('order status'), qtyIdx: idx('gross units') };
+    return { format: 'flipkart-pnl', skuIdx: idx('sku name'), statusIdx: idx('order status'), qtyIdx: idx('gross units'),
+      orderIdx: findHdr(h => h === 'order id' || h === 'order_id' || h.includes('order id')) };
   }
   return null;
 }
@@ -507,35 +539,42 @@ function renderStockColumnMapUI(){
     document.getElementById('stockColQty'+i).value = qtyGuess === -1 ? 0 : qtyGuess;
   });
 }
-function aggregateStockUpload(){
+async function aggregateStockUpload(){
   const agg = new Map();
   function bump(raw, qty, isReturn){
     if(!raw) return;
     const key = raw.toLowerCase();
-    if(!agg.has(key)) agg.set(key, { displayKey: raw, soldQty: 0, returnedQty: 0 });
+    if(!agg.has(key)) agg.set(key, { displayKey: raw, soldQty: 0, returnedQty: 0, alreadyQty: 0, linkedRows: [] });
     const entry = agg.get(key);
     if(isReturn) entry.returnedQty += qty; else entry.soldQty += qty;
   }
+  const held = [];
+  function hold(mk, raw, qty, isReturn, orderId){
+    if(orderId) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn });
+    else bump(raw, qty, isReturn);
+  }
   stockUploadSheets.forEach((s, i) => {
     if(s.detected && s.detected.format === 'meesho'){
-      const { reasonIdx, skuIdx, qtyIdx } = s.detected;
+      const { reasonIdx, skuIdx, qtyIdx, orderIdx } = s.detected;
       s.rows.forEach(row => {
         const sku = String(row[skuIdx] ?? '').trim();
         if(!sku) return;
         const qty = parseFloat(row[qtyIdx]) || 0;
         const reason = String(row[reasonIdx] ?? '').trim();
-        if(RETURN_STATUS_PATTERN.test(reason)) bump(sku, qty, true);
-        else if(/delivered/i.test(reason)) bump(sku, qty, false);
+        const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
+        if(RETURN_STATUS_PATTERN.test(reason)) hold('MEESHO', sku, qty, true, orderId);
+        else if(/delivered/i.test(reason)) hold('MEESHO', sku, qty, false, orderId);
       });
     } else if(s.detected && s.detected.format === 'flipkart-pnl'){
-      const { skuIdx, statusIdx, qtyIdx } = s.detected;
+      const { skuIdx, statusIdx, qtyIdx, orderIdx } = s.detected;
       s.rows.forEach(row => {
         const sku = String(row[skuIdx] ?? '').trim();
         if(!sku) return;
         const qty = parseFloat(row[qtyIdx]) || 0;
         const status = String(row[statusIdx] ?? '').trim();
-        if(RETURN_STATUS_PATTERN.test(status)) bump(sku, qty, true);
-        else if(/delivered/i.test(status)) bump(sku, qty, false);
+        const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
+        if(RETURN_STATUS_PATTERN.test(status)) hold('FLIPKART', sku, qty, true, orderId);
+        else if(/delivered/i.test(status)) hold('FLIPKART', sku, qty, false, orderId);
       });
     } else {
       const prodIdx = parseInt(document.getElementById('stockColProd'+i).value, 10);
@@ -547,9 +586,21 @@ function aggregateStockUpload(){
       });
     }
   });
+  if(held.length){
+    await VLS.linkReconRows(currentUser.uid, 'buyer', held);
+    held.forEach(r => {
+      if(!r.key || r.status === 'new'){
+        bump(r.sku, r.qty, r.isReturn);
+        if(r.key) agg.get(r.sku.toLowerCase()).linkedRows.push(r);
+      } else {
+        bump(r.sku, 0, false);
+        agg.get(r.sku.toLowerCase()).alreadyQty += r.qty;
+      }
+    });
+  }
   stockAggregation = Array.from(agg.entries())
-    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, soldQty: v.soldQty, returnedQty: v.returnedQty, netChange: v.returnedQty - v.soldQty }))
-    .filter(r => r.soldQty !== 0 || r.returnedQty !== 0)
+    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, soldQty: v.soldQty, returnedQty: v.returnedQty, netChange: v.returnedQty - v.soldQty, alreadyQty: v.alreadyQty, linkedRows: v.linkedRows }))
+    .filter(r => r.soldQty !== 0 || r.returnedQty !== 0 || r.alreadyQty !== 0)
     .sort((a,b) => Math.abs(b.netChange) - Math.abs(a.netChange));
   renderStockAggregationTable();
 }
@@ -570,6 +621,7 @@ function renderStockAggregationTable(){
       <td>${esc(r.displayKey)}${known ? '' : ' <span class="badge" title="No saved mapping yet — pick a product on the right">Unmapped</span>'}</td>
       <td>${r.soldQty || 0}</td>
       <td>${r.returnedQty || 0}</td>
+      <td style="color:var(--muted)">${r.alreadyQty || 0}</td>
       <td style="${netStyle}">${r.netChange > 0 ? '+' : ''}${r.netChange}</td>
       <td><select id="stockAggMap${i}">${options.join('')}</select></td>
     </tr>`;
@@ -607,12 +659,15 @@ async function applyStockUpload(){
 
     if(row.soldQty) await addStockMovement('sale-out', mappingId, -row.soldQty, dateVal, `${periodLabel} — ${row.displayKey} (sold)`);
     if(row.returnedQty) await addStockMovement('return-in', mappingId, row.returnedQty, dateVal, `${periodLabel} — ${row.displayKey} (cancelled/RTO/returned)`);
+    try{ await VLS.markReconRows(currentUser.uid, 'buyer', row.linkedRows || [], mappingId, 'reconciliation'); }
+    catch(err){ console.error('Could not mark reconciled orders:', err); }
     applied++;
   }
 
   allMovementsCache = null; // stale after these writes — refetched next time the report renders
   await loadStock();
   await loadReconciliationMap();
+  buyerRenderSalesReorder();
   await renderMonthlyStockReport();
 
   document.getElementById('stockColumnMapWrap').classList.add('hidden');
@@ -636,5 +691,6 @@ function showStockMsg(text, ok){
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 </script>
+<script src="../assets/android-download.js"></script>
 </body>
 </html>

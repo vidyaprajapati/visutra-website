@@ -34,6 +34,12 @@
     <tbody id="orderConfirmTable"></tbody></table>
   </div>
 
+  <div class="card" id="unmappedSkuCard" style="display:none;background:#FFF7ED;border:1.5px solid #E8A32C">
+    <h2 style="color:#9E3608">⚠ <span id="unmappedSkuCount"></span></h2>
+    <p class="sub" id="unmappedSkuDetail"></p>
+    <a class="btn small primary" href="buyer-sku-master.html">Map them in Buyer SKU Master</a>
+  </div>
+
   <div class="card" id="deleteRequestsCard" style="display:none;background:#FFF7ED;border:1.5px solid #E8A32C">
     <h2>Invoice Deletion Requests</h2>
     <p class="sub">A seller wants to delete an invoice from an order you accepted from them. Accepting removes your matching purchase record and reverses the stock it added — this can't be undone once accepted.</p>
@@ -98,10 +104,34 @@ auth.onAuthStateChanged(async user => {
   const data = snap.data() || {};
   document.getElementById('notBuyerCard').style.display = (data.roles && data.roles.buyer) ? 'none' : 'block';
 
+  await loadUnmappedSkuAlert();
   await loadDeleteRequests();
   await loadOrdersToConfirm();
   await loadDashboard();
 });
+
+/* ---------------- "SKUs need mapping" alert (#6) ----------------
+   Two sources: SKUs reported unmapped (Buyer SKU Master's Unmapped SKUs
+   list) and labels printed in Label Cropper (Buyer) before their SKU was
+   mapped — those have no stock deducted until mapped. */
+async function loadUnmappedSkuAlert(){
+  try{
+    const ref = db.collection('users').doc(currentUser.uid);
+    const [a, b] = await Promise.all([
+      ref.collection('unmappedSkus').where('status', '==', 'UNMAPPED').get(),
+      ref.collection('buyerUnmappedLabelSkus').where('status', '==', 'UNMAPPED').get()
+    ]);
+    const skus = new Set([...a.docs.map(d => String(d.data().sku || '').toLowerCase()), ...b.docs.map(d => String(d.data().sku || '').toLowerCase())]);
+    skus.delete('');
+    const labels = b.docs.reduce((n, d) => n + (d.data().labelCount || 0), 0);
+    if(!skus.size){ document.getElementById('unmappedSkuCard').style.display = 'none'; return; }
+    document.getElementById('unmappedSkuCount').textContent = `${skus.size} SKU${skus.size === 1 ? ' needs' : 's need'} mapping`;
+    document.getElementById('unmappedSkuDetail').textContent = labels
+      ? `${labels} printed label${labels === 1 ? '' : 's'} are waiting — their stock is deducted as soon as the SKU is added to one of your products.`
+      : 'Add these SKUs to your products so labels and orders can find them.';
+    document.getElementById('unmappedSkuCard').style.display = 'block';
+  }catch(err){ console.error('Unmapped SKU alert failed:', err); }
+}
 
 /* ---------------- Orders to Confirm (seller-recorded, off-platform sales) ----------------
    Approving just flips status to ACCEPTED — the exact same status a normal

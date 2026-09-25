@@ -45,6 +45,21 @@
     <button class="btn primary" id="pSaveBtn" onclick="saveCatalogProduct()">Add Product</button>
     <button class="btn small" onclick="resetCatalogForm()">Clear</button>
     <p class="msg" id="productMsg"></p>
+    <div class="box" style="margin-top:16px;padding:14px 16px;border:1.5px dashed var(--line,#E4D8BD);border-radius:10px">
+      <b>Bulk — Excel</b>
+      <p class="sub" style="margin:4px 0 10px">Export all products with their SKUs, or add many at once from Excel. Columns: <b>Product Name</b> (required), My SKU, Amazon SKU(s), Meesho SKU(s), Flipkart SKU(s). Several SKUs in one cell (commas) <i>or</i> one row per SKU — rows with the same product name are combined. Import only <b>adds</b>: new products are created, new SKUs are added to existing products (matched by name or My SKU); nothing is removed. You see a preview before anything is saved.</p>
+      <button class="btn small" onclick="exportProductsXlsx()">⬇ Export products (Excel)</button>
+      <button class="btn small" onclick="downloadProductsTemplate()">⬇ Blank template</button>
+      <input type="file" id="bulkFile" accept=".xlsx,.xls,.csv" style="margin-left:8px">
+      <button class="btn small primary" onclick="previewBulkImport()">Preview import</button>
+      <div id="bulkPreview" style="display:none;margin-top:12px">
+        <p class="sub" id="bulkSummary" style="margin:0 0 8px"></p>
+        <table><thead><tr><th>Product</th><th>Action</th><th>My SKU</th><th>SKUs to add</th><th>Skipped / notes</th></tr></thead><tbody id="bulkTable"></tbody></table>
+        <button class="btn primary" id="bulkApplyBtn" onclick="applyBulkImport()" style="margin-top:10px">Apply import</button>
+        <button class="btn small" onclick="cancelBulkImport()">Cancel</button>
+      </div>
+      <p class="msg" id="bulkMsg"></p>
+    </div>
     <div class="field" style="max-width:340px;margin-top:14px"><label>Search</label><input id="pSearch" placeholder="Product name or My SKU…" oninput="renderProductCatalog()"></div>
     <table><thead><tr><th>Product</th><th>My SKU</th><th>Linked seller product</th><th>Marketplace SKUs</th><th>Stock</th><th>Status</th><th></th></tr></thead>
     <tbody id="productCatalogTable"></tbody></table>
@@ -180,6 +195,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="../assets/label-sku-extract.js"></script>
 <script src="../assets/label-stock-core.js"></script>
 <script>
@@ -796,6 +812,166 @@ function resetMappingForm(){
   document.getElementById('mSellerSkuRow').style.display = 'none';
 }
 
+/* ---------------- Bulk Excel import / export ----------------
+   Import only ADDS: creates products that don't exist yet and appends new
+   marketplace SKUs to existing ones (matched by name, else My SKU). A SKU
+   already on a different product is skipped and reported — never moved. */
+const BULK_HEADERS = ['Product Name', 'My SKU', 'Amazon SKU(s)', 'Meesho SKU(s)', 'Flipkart SKU(s)'];
+function downloadProductsTemplate(){
+  const ws = XLSX.utils.aoa_to_sheet([BULK_HEADERS, ['Washing Machine Cover 7kg', '', '', 'VST-WFAT-7-8.5-FA34, VST-WFAT-7-8.5-FA32', '']]);
+  ws['!cols'] = BULK_HEADERS.map(() => ({ wch: 32 }));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Products');
+  XLSX.writeFile(wb, 'VISUTRA-products-template.xlsx');
+}
+function exportProductsXlsx(){
+  const rows = mappingsCache.slice().sort((a,b) => String(a.productName||'').localeCompare(String(b.productName||''))).map(m => ({
+    'Product Name': m.productName || '', 'My SKU': m.buyerSku || '',
+    'Amazon SKU(s)': joinSkuList(m.amazonSku), 'Meesho SKU(s)': joinSkuList(m.meeshoSku), 'Flipkart SKU(s)': joinSkuList(m.flipkartSku),
+    'Inactive SKUs': (m.inactiveSkus || []).join(', '),
+    'Linked Seller': isOwnProduct(m) ? '' : (m.sellerName || ''), 'Seller Product': m.sellerProductName || '',
+    'Stock': m.stock || 0, 'Status': m.status || ''
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 'Product Name': '' }]);
+  ws['!cols'] = [32,16,34,40,34,30,18,28,8,10].map(w => ({ wch: w }));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Products');
+  XLSX.writeFile(wb, `VISUTRA-products-${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+let bulkPlan = [];
+function bulkColIndex(headers){
+  const h = headers.map(x => String(x || '').trim().toLowerCase());
+  const find = test => h.findIndex(test);
+  return {
+    name: find(x => x.includes('product') || x === 'name'),
+    my: find(x => x.includes('my sku') || x.includes('own')),
+    amazon: find(x => x.includes('amazon')),
+    meesho: find(x => x.includes('meesho')),
+    flipkart: find(x => x.includes('flipkart'))
+  };
+}
+async function previewBulkImport(){
+  const f = document.getElementById('bulkFile').files[0];
+  document.getElementById('bulkPreview').style.display = 'none';
+  if(!f){ showMsg('bulkMsg', 'Choose an Excel file first.', false); return; }
+  let rows;
+  try{
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+  }catch(err){ showMsg('bulkMsg', 'Could not read that file: ' + err.message, false); return; }
+  if(rows.length < 2){ showMsg('bulkMsg', 'The file has no data rows.', false); return; }
+  const col = bulkColIndex(rows[0]);
+  if(col.name < 0){ showMsg('bulkMsg', 'No "Product Name" column found in the first row.', false); return; }
+
+  // 1) Combine rows by product name.
+  const groups = new Map();
+  rows.slice(1).forEach(r => {
+    const name = String(r[col.name] || '').trim();
+    if(!name) return;
+    const k = name.toLowerCase();
+    if(!groups.has(k)) groups.set(k, { name, my: '', skus: { amazonSku: [], meeshoSku: [], flipkartSku: [] } });
+    const g = groups.get(k);
+    if(col.my >= 0 && String(r[col.my]).trim() && !g.my) g.my = String(r[col.my]).trim();
+    [['amazon','amazonSku'],['meesho','meeshoSku'],['flipkart','flipkartSku']].forEach(([c, field]) => {
+      if(col[c] >= 0) g.skus[field].push(...splitSkuList(r[col[c]]));
+    });
+  });
+
+  // 2) Plan each product: create/update, SKUs to add, conflicts.
+  const claimed = {}; // `${field}|sku` -> product name within this file
+  const LABEL = { amazonSku: 'Amazon', meeshoSku: 'Meesho', flipkartSku: 'Flipkart' };
+  bulkPlan = [];
+  for(const g of groups.values()){
+    const existing = mappingsCache.find(m => String(m.productName||'').trim().toLowerCase() === g.name.toLowerCase())
+      || (g.my ? mappingsCache.find(m => String(m.buyerSku||'').trim().toLowerCase() === g.my.toLowerCase()) : null);
+    const plan = { name: existing ? existing.productName : g.name, existing, setMy: '', add: { amazonSku: [], meeshoSku: [], flipkartSku: [] }, notes: [] };
+    if(g.my){
+      const myOwner = mappingsCache.find(m => String(m.buyerSku||'').trim().toLowerCase() === g.my.toLowerCase());
+      if(myOwner && (!existing || myOwner.id !== existing.id)) plan.notes.push(`My SKU ${g.my} is already on "${myOwner.productName}"`);
+      else if(existing && existing.buyerSku && existing.buyerSku.toLowerCase() !== g.my.toLowerCase()) plan.notes.push(`keeps existing My SKU ${existing.buyerSku}`);
+      else if(!existing || !existing.buyerSku) plan.setMy = g.my;
+    }
+    for(const field of ['amazonSku','meeshoSku','flipkartSku']){
+      for(const sku of splitSkuList(g.skus[field].join(','))){
+        const ck = field + '|' + sku.toLowerCase();
+        if(existing && skuListHas(existing[field], sku)) continue; // already there
+        const owner = mappingsCache.find(m => skuListHas(m[field], sku) && (!existing || m.id !== existing.id));
+        if(owner){ plan.notes.push(`${LABEL[field]} ${sku} is on "${owner.productName}"`); continue; }
+        if(claimed[ck] && claimed[ck] !== g.name){ plan.notes.push(`${LABEL[field]} ${sku} also listed for "${claimed[ck]}"`); continue; }
+        claimed[ck] = g.name;
+        plan.add[field].push(sku);
+      }
+    }
+    plan.addCount = plan.add.amazonSku.length + plan.add.meeshoSku.length + plan.add.flipkartSku.length;
+    plan.action = existing ? ((plan.addCount || plan.setMy) ? 'Update' : 'No change') : 'Create';
+    bulkPlan.push(plan);
+  }
+  const creates = bulkPlan.filter(p => p.action === 'Create').length;
+  const updates = bulkPlan.filter(p => p.action === 'Update').length;
+  const skuAdds = bulkPlan.reduce((a, p) => a + p.addCount, 0);
+  const skipped = bulkPlan.reduce((a, p) => a + p.notes.length, 0);
+  document.getElementById('bulkSummary').innerHTML = `<b>${creates}</b> new product(s), <b>${updates}</b> updated, <b>${skuAdds}</b> SKU(s) to add` + (skipped ? `, <b style="color:#9E3608">${skipped}</b> skipped (see notes)` : '') + '.';
+  document.getElementById('bulkTable').innerHTML = bulkPlan.map(p => `<tr>
+    <td><b>${esc(p.name)}</b></td>
+    <td><span class="badge${p.action === 'No change' ? ' off' : ' on'}">${p.action}</span></td>
+    <td>${p.setMy ? `<code>${esc(p.setMy)}</code>` : '—'}</td>
+    <td style="font-size:12.5px">${['amazonSku','meeshoSku','flipkartSku'].filter(f => p.add[f].length).map(f => `${LABEL[f]}: ${p.add[f].map(esc).join(', ')}`).join('<br>') || '—'}</td>
+    <td style="font-size:12.5px;color:#9E3608">${p.notes.map(esc).join('<br>')}</td></tr>`).join('');
+  document.getElementById('bulkApplyBtn').disabled = !(creates || updates);
+  document.getElementById('bulkPreview').style.display = 'block';
+  showMsg('bulkMsg', '', true);
+}
+async function applyBulkImport(){
+  const btn = document.getElementById('bulkApplyBtn');
+  btn.disabled = true;
+  showMsg('bulkMsg', 'Saving…', true);
+  const col = db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings');
+  let created = 0, updated = 0, lateLabels = 0;
+  try{
+    for(const p of bulkPlan){
+      if(p.action === 'No change') continue;
+      let mapping;
+      if(p.existing){
+        const upd = { updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+        if(p.setMy) upd.buyerSku = p.setMy;
+        ['amazonSku','meeshoSku','flipkartSku'].forEach(f => { if(p.add[f].length) upd[f] = joinSkuList([p.existing[f] || '', ...p.add[f]].join(',')); });
+        await col.doc(p.existing.id).set(upd, { merge: true });
+        mapping = { ...p.existing, ...upd };
+        updated++;
+      } else {
+        const ref = col.doc();
+        mapping = {
+          linkType: 'OWN', sellerId: currentUser.uid, sellerName: OWN_SELLER_NAME, productId: 'own_' + ref.id,
+          productName: p.name, buyerSku: p.setMy || '', sellerProductName: '', sellerSku: '',
+          amazonSku: joinSkuList(p.add.amazonSku.join(',')), meeshoSku: joinSkuList(p.add.meeshoSku.join(',')), flipkartSku: joinSkuList(p.add.flipkartSku.join(',')),
+          inactiveSkus: [], status: 'ACTIVE', stock: 0, reorderLevel: 0,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+        await ref.set(mapping);
+        mapping = { id: ref.id, ...mapping };
+        created++;
+      }
+      // Clear matching Unmapped SKUs and deduct labels already printed with them.
+      const pairs = [['AMAZON','amazonSku'],['MEESHO','meeshoSku'],['FLIPKART','flipkartSku']].flatMap(([mk, f]) => p.add[f].map(x => [mk, x]));
+      await Promise.all(pairs.map(([mk, x]) => resolveUnmappedIfMatching(mk, x)));
+      const late = await settleBuyerQueueFor(mapping, pairs.map(([, x]) => x));
+      if(late) lateLabels++;
+    }
+    showMsg('bulkMsg', `Done — ${created} product(s) created, ${updated} updated.` + (lateLabels ? ' Labels already printed with the new SKUs were deducted.' : ''), true);
+    cancelBulkImport(true);
+    await loadMappings();
+    await loadUnmapped();
+  }catch(err){
+    console.error('Bulk import failed:', err);
+    showMsg('bulkMsg', `Stopped after ${created} created / ${updated} updated: ` + (err.code || err.message), false);
+    btn.disabled = false;
+  }
+}
+function cancelBulkImport(keepMsg){
+  bulkPlan = [];
+  document.getElementById('bulkPreview').style.display = 'none';
+  document.getElementById('bulkFile').value = '';
+  if(!keepMsg) showMsg('bulkMsg', '', true);
+}
+
 /* ---------------- Step 1 — My Products (catalog) ---------------- */
 function fillProductSelect(keepId){
   const sel = document.getElementById('mProductSel');
@@ -949,5 +1125,6 @@ function showMsg(id, text, ok){
   el.className = 'msg ' + (ok ? 'ok' : 'error');
 }
 </script>
+<script src="../assets/android-download.js"></script>
 </body>
 </html>

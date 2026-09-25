@@ -111,8 +111,9 @@ async function loadSellerEmails(){
 function findMapping(marketplace, sku){
   const field = { AMAZON: 'amazonSku', MEESHO: 'meeshoSku', FLIPKART: 'flipkartSku' }[marketplace];
   if(!field) return null;
-  // A field can hold several SKUs ("A, B, C") — see splitSkuList().
-  return mappingsCache.find(m => skuListHas(m[field], sku)) || null;
+  // A field can hold several SKUs ("A, B, C"); SKUs switched off in Buyer
+  // SKU Master are skipped (see mappingMatchesSku()).
+  return mappingsCache.find(m => mappingMatchesSku(m, marketplace, sku)) || null;
 }
 
 /* Picks up SKUs detected on the free Label Cropper tool (sessionStorage,

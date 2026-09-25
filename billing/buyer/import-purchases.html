@@ -182,7 +182,7 @@ function autoMatch(name, sku){
   const s = norm(sku), n = norm(name);
   if(s){
     const bySku = mySkuMappingsCache.find(m => ['buyerSku','sellerSku'].some(f => norm(m[f]) === s)
-      || ['amazonSku','meeshoSku','flipkartSku'].some(f => skuListHas(m[f], s)));
+      || ['AMAZON','MEESHO','FLIPKART'].some(mk => mappingMatchesSku(m, mk, s)));
     if(bySku) return { mapping: bySku, how: 'SKU' };
   }
   const mem = importItemMemory[itemKeyOf(name, sku)];
@@ -526,5 +526,6 @@ function showMsg(id, text, ok){
   el.className = 'msg ' + (ok ? 'ok' : 'error');
 }
 </script>
+<script src="../assets/android-download.js"></script>
 </body>
 </html>
