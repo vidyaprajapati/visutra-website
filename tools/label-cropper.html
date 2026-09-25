@@ -214,7 +214,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     <p style="font-size:12px;color:var(--ink-soft,#6B6255);margin:14px 0 0">Active sizes only. Add stock, define packing sizes and switch sizes on/off in <b>Label &amp; Packing Settings</b> below; assign them to products <span id="vlcAssignWhere">in <a href="../billing/buyer/buyer-sku-master.html" target="_blank" rel="noopener">Buyer SKU Master</a></span>.</p>
   </div>
 
-  <details class="vlc-settings" id="vlcSizeSettings" ontoggle="if(this.open) loadSizeHistory()">
+  <details class="vlc-settings" id="vlcSizeSettings" ontoggle="if(this.open){ loadSizeHistory(); renderSizeReorder(); }">
     <summary><span>⚙ Label &amp; Packing Settings</span><span id="vlcSettingsSummary" style="text-transform:none;letter-spacing:0;font-family:var(--font-body);font-size:12px;color:var(--ink-soft);margin-left:auto"></span></summary>
     <div class="vlc-settings-body">
       <div>
@@ -242,6 +242,16 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         </div>
       </div>
       <p id="vlcSettingsMsg" style="grid-column:1/-1;font-size:12.5px;margin:0;min-height:16px"></p>
+      <div style="grid-column:1/-1">
+        <h3>Reorder suggestions — labels &amp; packing</h3>
+        <p class="sub">How fast each label size and packing size is being used (prints, reprints, Sell via Label), how many days it lasts, and how much to order. <b>Order now</b> = under 7 days left.</p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:12.5px">
+          Usage over the last <select id="vlcRoWindow" onchange="renderSizeReorder()" style="padding:5px"><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option></select>
+          · order enough for <select id="vlcRoCover" onchange="renderSizeReorder()" style="padding:5px"><option value="15">15 days</option><option value="30" selected>30 days</option><option value="45">45 days</option></select>
+        </div>
+        <div class="vlc-tbl-wrap"><table class="vlc-tbl"><thead><tr><th>Size</th><th>Stock</th><th>Used in period</th><th>Per day</th><th>Days left</th><th>Suggested order</th><th></th></tr></thead>
+        <tbody id="vlcRoTable"></tbody></table></div>
+      </div>
       <div style="grid-column:1/-1">
         <h3>Stock history</h3>
         <p class="sub">Every change to label and packing stock — stock added, printed, reprinted, caught up after mapping, returned, or edited in Buyer SKU Master. Latest 150.</p>
@@ -381,6 +391,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         <p id="vlcSendGateNote" style="display:none;font-size:12px;color:#9E3608;margin:8px 0 0;font-weight:600">⚠ New file — send it above first. The button below unlocks right after (or automatically, if this exact file was already sent before).</p>
       </div>
       <button class="vlc-btn accent" id="vlcProcessBtn" onclick="processPdf()" disabled>Crop &amp; download PDF</button>
+      <button class="vlc-btn" id="vlcUndoBtn" onclick="undoLastPrint()" style="display:none" title="">↶ Undo last print</button>
       <div class="vlc-status" id="vlcStatus"></div>
 
       <div id="vlcCourierPanel" style="display:none;margin-top:16px;"></div>
@@ -529,6 +540,7 @@ firebase.auth().onAuthStateChanged(async user => {
     updateLabelStockHint();
     await loadSellerEmails();
     await loadTodayDrafts();
+    await loadLastPrint();
     // A file dropped before sign-in finished: draw the Buyer Stock box now.
     if(getRole() !== 'seller' && lastDetectedRows.length) renderStockPanel(lastDetectedRows);
   }catch(err){
@@ -731,7 +743,7 @@ function updateLabelStockHint(){
 async function afterSizeChange(msg){
   await Promise.all([loadPackagingSizes(), loadLabelSizes()]);
   refreshSizeViews();
-  if(document.getElementById('vlcSizeSettings').open) loadSizeHistory();
+  if(document.getElementById('vlcSizeSettings').open){ loadSizeHistory(); renderSizeReorder(); }
   if(msg) settingsMsg(msg, true);
 }
 function sizeCol(col){ return db.collection('users').doc(cropperUser.uid).collection(col); }
@@ -831,6 +843,22 @@ async function deletePackingSize(id){
     await afterSizeChange('Deleted.');
   }catch(err){ settingsMsg('Could not delete: ' + (err.code || err.message), false); }
 }
+/* ---------------- Reorder suggestions for label & packing sizes ---------------- */
+async function renderSizeReorder(){
+  const el = document.getElementById('vlcRoTable');
+  if(!el || !cropperUser) return;
+  const days = parseInt(document.getElementById('vlcRoWindow').value, 10) || 30;
+  const cover = parseInt(document.getElementById('vlcRoCover').value, 10) || 30;
+  try{
+    const used = await VLS.usagePerItem(cropperUser.uid, 'sizeStockMovements', 'sizeId', days);
+    const items = [
+      ...labelSizesCache.filter(isSizeActive).map(z => ({ id: z.id, name: 'Label — ' + z.name, stock: z.stock || 0 })),
+      ...packagingSizesCache.filter(isSizeActive).map(z => ({ id: z.id, name: 'Packing — ' + z.name, stock: z.stock || 0 }))
+    ];
+    el.innerHTML = VLS.reorderTableHtml(VLS.reorderRows(items, used, days, cover), escapeHtml, cover);
+  }catch(err){ console.error('Size reorder suggestions failed:', err); }
+}
+
 /* ---------------- Size stock history ---------------- */
 let sizeHistoryCache = [];
 const HIST_TYPE_LABEL = { 'stock-add':'Stock added', 'correction':'Correction', 'print':'Printed', 'reprint':'Reprint', 'catch-up':'Catch-up after mapping', 'return':'Return', 'stock-set':'Edited (SKU Master)', 'sell-via-label':'Sell via Label' };
@@ -927,8 +955,9 @@ async function loadSellerEmails(){
 function findMapping(marketplace, sku){
   const field = { AMAZON: 'amazonSku', MEESHO: 'meeshoSku', FLIPKART: 'flipkartSku' }[marketplace];
   if(!field) return null;
-  // A field can hold several SKUs ("A, B, C") — see splitSkuList().
-  return mappingsCache.find(m => skuListHas(m[field], sku)) || null;
+  // A field can hold several SKUs ("A, B, C"); SKUs switched off in Buyer
+  // SKU Master are skipped (see mappingMatchesSku()).
+  return mappingsCache.find(m => mappingMatchesSku(m, marketplace, sku)) || null;
 }
 async function isAlreadyProcessed(pageHash){
   try{
@@ -1142,6 +1171,7 @@ function saveRole(role){
 function onRoleChange(role){
   saveRole(role);
   applyRoleUi();
+  renderUndoButton();
   // Re-render every role-dependent panel against what's already detected.
   if(pdfBytes) renderSkuSummary(); else applyDownloadGate();
 }
@@ -1793,11 +1823,14 @@ function renderStockPanel(rows){
     : 'All SKUs in this file are mapped to your buyer products.';
   const active = mappingsCache.filter(m => m.status === 'ACTIVE')
     .slice().sort((a,b) => String(a.productName||'').localeCompare(String(b.productName||'')));
-  const productOptions = active.map(m =>
-    `<option value="${escapeHtml(m.id)}">${escapeHtml(m.productName)}${m.buyerSku ? ' — ' + escapeHtml(m.buyerSku) : ''} (stock ${m.stock||0})</option>`).join('');
+  // Smart suggestion: the product whose existing SKUs look most like this one.
+  const buyerCandidates = active.map(m => ({ id: m.id, skus: [...splitSkuList(m.amazonSku), ...splitSkuList(m.meeshoSku), ...splitSkuList(m.flipkartSku)] }));
+  const productOptionsFor = selId => active.map(m =>
+    `<option value="${escapeHtml(m.id)}"${m.id === selId ? ' selected' : ''}>${m.id === selId ? '★ ' : ''}${escapeHtml(m.productName)}${m.buyerSku ? ' — ' + escapeHtml(m.buyerSku) : ''} (stock ${m.stock||0})</option>`).join('');
 
   document.getElementById('vlcStockTable').innerHTML = rows.map((r, i) => {
     const m = findMapping(r.marketplace, r.sku);
+    const sug = m ? null : suggestBySku(r.sku, buyerCandidates);
     if(!m){
       return `<tr class="vlc-unmapped-row">
         <td>${escapeHtml(r.marketplace)}</td>
@@ -1808,8 +1841,8 @@ function renderStockPanel(rows){
             <span class="vlc-pill" style="background:#F6D9A8;color:#6B4308">Not mapped</span>
             <select id="vlcBuyerMapSel-${i}">
               <option value="">Select your product…</option>
-              <option value="${NEW_BUYER_PRODUCT}">＋ New product with this SKU…</option>${productOptions}
-            </select>
+              <option value="${NEW_BUYER_PRODUCT}">＋ New product with this SKU…</option>${productOptionsFor(sug ? sug.id : '')}
+            </select>${sug ? '<span class="vlc-pill" title="Pre-selected because its existing SKUs look like this one — check it, then click Map">★ suggested</span>' : ''}
             <button class="vlc-map-btn" id="vlcBuyerMapBtn-${i}" onclick="saveBuyerMapping(${i})">Map</button>
           </div>
         </td>
@@ -1857,7 +1890,12 @@ async function saveBuyerMapping(i){
   const col = db.collection('users').doc(uid).collection('buyerSkuMappings');
   // Never let one SKU sit on two products — a label couldn't pick which stock.
   const clash = mappingsCache.find(m => m.status === 'ACTIVE' && skuListHas(m[field], r.sku));
-  if(clash){ buyerMsg(`${r.sku} is already on "${clash.productName}".`, false); return; }
+  if(clash){
+    buyerMsg(isSkuInactive(clash, r.marketplace, r.sku)
+      ? `${r.sku} is on "${clash.productName}" but switched off there — switch it on (or remove it) in Buyer SKU Master → My Products → Manage SKUs.`
+      : `${r.sku} is already on "${clash.productName}".`, false);
+    return;
+  }
   btn.disabled = true;
   buyerMsg('Saving…', true);
   try{
@@ -1949,11 +1987,14 @@ function renderSellerStockPanel(rows){
       ? `<b style="color:#9E3608">${unmappedCount} SKU${unmappedCount===1?'':'s'} not mapped yet</b> — pick the product each one is and click Map. One mapping covers every future label with that SKU. Unmapped SKUs still print; once printed they're listed in <a href="../billing/app.html?view=stock" target="_blank" rel="noopener">Billing → Stock Management</a> and deducted as soon as they're mapped (here or there).`
       : 'All SKUs in this file are mapped — stock will be deducted when you crop &amp; download.';
 
-  const productOptions = sellerProductsCache.map(p =>
-    `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}${p.sku ? ' — ' + escapeHtml(p.sku) : ''} (stock ${p.stock||0})</option>`).join('');
+  // Smart suggestion from the SKUs already mapped to each product.
+  const sellerCandidates = sellerProductsCache.map(p => ({ id: p.id, skus: sellerSkuMappingsCache.filter(m => m.productId === p.id).map(m => m.rawKey) }));
+  const productOptionsFor = selId => sellerProductsCache.map(p =>
+    `<option value="${escapeHtml(p.id)}"${p.id === selId ? ' selected' : ''}>${p.id === selId ? '★ ' : ''}${escapeHtml(p.name)}${p.sku ? ' — ' + escapeHtml(p.sku) : ''} (stock ${p.stock||0})</option>`).join('');
 
   document.getElementById('vlcSellerStockTable').innerHTML = rows.map((r, i) => {
     const res = resolveSellerProduct(r.marketplace, r.sku);
+    const sug = res ? null : suggestBySku(r.sku, sellerCandidates);
     if(!res){
       return `<tr class="vlc-unmapped-row">
         <td>${escapeHtml(r.marketplace)}</td>
@@ -1963,8 +2004,8 @@ function renderSellerStockPanel(rows){
           <div class="vlc-map-row">
             <span class="vlc-pill" style="background:#F6D9A8;color:#6B4308">Not mapped</span>
             <select id="vlcSellerMapSel-${i}" ${sellerProductsCache.length ? '' : 'disabled'}>
-              <option value="">Select your product…</option>${productOptions}
-            </select>
+              <option value="">Select your product…</option>${productOptionsFor(sug ? sug.id : '')}
+            </select>${sug ? '<span class="vlc-pill" title="Pre-selected because its existing SKUs look like this one — check it, then click Map">★ suggested</span>' : ''}
             <button class="vlc-map-btn" id="vlcSellerMapBtn-${i}" onclick="saveSellerMapping(${i})" ${sellerProductsCache.length ? '' : 'disabled'}>Map</button>
           </div>
         </td>
@@ -2245,29 +2286,32 @@ function groupByLabel(items){
   items.forEach(it => { const k = it.packKey || it.key; if(!byLabel.has(k)) byLabel.set(k, []); byLabel.get(k).push(it); });
   return byLabel;
 }
-/* opts: { outSizeKey, labelsPrinted, labelsPerPage, fileName } */
+/* opts: { outSizeKey, labelsPrinted, labelsPerPage, fileName }
+   Returns what it changed (for Undo last print) plus summary counts. */
 async function consumeStockForExport(pageIndexOrder, courierFilter, opts){
-  const result = { labelSize: null, labelCount: 0, labelFallback: 0, packingUnits: 0, packingSkipped: 0, labelFromPaper: false };
+  const result = { labelSize: null, labelCount: 0, labelFallback: 0, packingUnits: 0, packingSkipped: 0, labelFromPaper: false, rec: { packing: [], labels: [] } };
   if(!cropperUser) return result;
   const uid = cropperUser.uid;
   const role = getRole();
   const items = collectExportItems(pageIndexOrder);
   const byLabel = groupByLabel(items);
+  const labelKeys = [...byLabel.keys()];
 
   // Was every label in this export already packed before? Then it's a reprint.
-  let anyNew = false;
   const doneBefore = {};
-  for(const k of byLabel.keys()){
+  await VLS.mapLimit(labelKeys, 12, async k => {
     try{ doneBefore[k] = await VLS.packingDone(uid, k); }catch(err){ doneBefore[k] = true; }
-    if(!doneBefore[k]) anyNew = true;
-  }
+  });
+  const anyNew = labelKeys.some(k => !doneBefore[k]);
   const printType = (byLabel.size && !anyNew) ? 'reprint' : 'print';
   const note = `${opts.fileName || 'labels'}${courierFilter ? ' — ' + courierFilter : ''}`;
 
   // ---- LABEL (every print)
   const paperLabel = activeLabelForPaper(opts.outSizeKey);
   if(paperLabel && opts.labelsPrinted > 0){
-    await VLS.adjustSize(uid, 'buyerLabelSizes', paperLabel.id, -opts.labelsPrinted, { sizeName: paperLabel.name, type: printType, note });
+    if(await VLS.adjustSize(uid, 'buyerLabelSizes', paperLabel.id, -opts.labelsPrinted, { sizeName: paperLabel.name, type: printType, note })){
+      result.rec.labels.push({ sizeId: paperLabel.id, sizeName: paperLabel.name, qty: opts.labelsPrinted });
+    }
     result.labelSize = paperLabel; result.labelCount = opts.labelsPrinted; result.labelFromPaper = true;
   } else {
     // Fallback: each printed label uses its product's assigned label size.
@@ -2279,54 +2323,72 @@ async function consumeStockForExport(pageIndexOrder, courierFilter, opts){
       if(pkg) labelBySize[pkg.labelSizeId] = (labelBySize[pkg.labelSizeId] || 0) + (opts.labelsPerPage || 1);
     });
     for(const id of Object.keys(labelBySize)){
-      await VLS.adjustSize(uid, 'buyerLabelSizes', id, -labelBySize[id], { sizeName: sizeNameOf('buyerLabelSizes', id), type: printType, note });
+      const nm = sizeNameOf('buyerLabelSizes', id);
+      if(await VLS.adjustSize(uid, 'buyerLabelSizes', id, -labelBySize[id], { sizeName: nm, type: printType, note })){
+        result.rec.labels.push({ sizeId: id, sizeName: nm, qty: labelBySize[id] });
+      }
     }
     result.labelFallback = Object.values(labelBySize).reduce((a,b)=>a+b,0);
   }
 
-  // ---- PACKING (one per shipment label, first print only)
-  for(const [k, list] of byLabel){
-    if(doneBefore[k]){ result.packingSkipped++; continue; }
+  // ---- PACKING (one per shipment label, first print only) — in parallel
+  await VLS.mapLimit([...byLabel.entries()], 10, async ([k, list]) => {
+    if(doneBefore[k]){ result.packingSkipped++; return; }
     const withPkg = list.map(it => ({ it, pkg: packagingForItem(it, role) })).find(x => x.pkg && x.pkg.packagingSizeId);
-    if(!withPkg) continue; // unmapped / no packing size yet — Seller mode catches up when mapped
+    if(!withPkg) return; // unmapped / no packing size yet — caught up when mapped
     try{
-      if(await VLS.packingOnce(uid, withPkg.it, withPkg.pkg.packagingSizeId, sizeNameOf('buyerPackagingSizes', withPkg.pkg.packagingSizeId), note)) result.packingUnits++;
+      const sizeId = withPkg.pkg.packagingSizeId, sizeName = sizeNameOf('buyerPackagingSizes', sizeId);
+      if(await VLS.packingOnce(uid, withPkg.it, sizeId, sizeName, note)){
+        result.packingUnits++;
+        result.rec.packing.push({ packKey: withPkg.it.packKey, sizeId, sizeName });
+      }
     }catch(err){ console.error('Packing deduction failed:', err); }
-  }
+  });
 
   await Promise.all([loadPackagingSizes(), loadLabelSizes()]);
   refreshSizeViews();
   return result;
 }
 /* Product stock, once per item. Seller → Billing product; Buyer → buyer
-   product (linked or your own). Returns { role, deductedUnits, alreadyDone, unmapped }. */
+   product (linked or your own). Runs 10 at a time (each is its own
+   once-only transaction). Returns { role, deductedUnits, alreadyDone,
+   unmapped, rec } — rec = what was deducted, for Undo last print. */
 async function consumeProductStockForExport(pageIndexOrder){
-  const res = { role: getRole(), deductedUnits: 0, alreadyDone: 0, unmapped: [] };
+  const res = { role: getRole(), deductedUnits: 0, alreadyDone: 0, unmapped: [], rec: [] };
   if(!cropperUser) return res;
   const uid = cropperUser.uid;
   if(res.role === 'seller' && !sellerDataLoaded) await loadSellerData();
   const items = collectExportItems(pageIndexOrder);
+  // Resolve first (no network), report unmapped SKUs once each.
+  const work = [];
   const reportedUnmapped = new Set();
   for(const it of items){
-    try{
-      let r;
-      if(res.role === 'seller'){
-        const p = resolveSellerProduct(it.marketplace, it.sku);
-        if(!p){ res.unmapped.push(it); continue; }
-        r = await VLS.sellerProductOnce(uid, it, { id: p.productId, name: p.productName }, 'label-cropper');
-      } else {
-        const m = findMapping(it.marketplace, it.sku);
-        if(!m){
-          res.unmapped.push(it);
-          const k = it.marketplace + '|' + it.sku;
-          if(!reportedUnmapped.has(k)){ reportedUnmapped.add(k); await reportUnmappedSku(it.marketplace, it.sku); }
-          continue;
-        }
-        r = await VLS.buyerProductOnce(uid, it, m, 'label-cropper');
+    if(res.role === 'seller'){
+      const p = resolveSellerProduct(it.marketplace, it.sku);
+      if(!p){ res.unmapped.push(it); continue; }
+      work.push({ it, target: { id: p.productId, name: p.productName } });
+    } else {
+      const m = findMapping(it.marketplace, it.sku);
+      if(!m){
+        res.unmapped.push(it);
+        const k = it.marketplace + '|' + it.sku;
+        if(!reportedUnmapped.has(k)){ reportedUnmapped.add(k); try{ await reportUnmappedSku(it.marketplace, it.sku); }catch(e){} }
+        continue;
       }
-      if(r === 'deducted') res.deductedUnits += it.qty; else res.alreadyDone++;
-    }catch(err){ console.error(`Product stock deduction failed for ${it.marketplace} ${it.sku}:`, err); }
+      work.push({ it, target: m });
+    }
   }
+  await VLS.mapLimit(work, 10, async ({ it, target }) => {
+    try{
+      const r = res.role === 'seller'
+        ? await VLS.sellerProductOnce(uid, it, target, 'label-cropper')
+        : await VLS.buyerProductOnce(uid, it, target, 'label-cropper');
+      if(r === 'deducted'){
+        res.deductedUnits += it.qty;
+        res.rec.push({ side: res.role, key: it.key, id: target.id, name: target.name || target.productName, qty: it.qty });
+      } else res.alreadyDone++;
+    }catch(err){ console.error(`Product stock deduction failed for ${it.marketplace} ${it.sku}:`, err); }
+  });
   if(res.role === 'seller'){ await reloadSellerProducts(); renderSellerStockPanel(lastDetectedRows); }
   else { await loadMappings(); renderStockPanel(lastDetectedRows); }
   return res;
@@ -2336,6 +2398,47 @@ async function consumeProductStockForExport(pageIndexOrder){
 async function settleQueuedSku(sku, product){
   const pkg = findPackaging(cropperUser.uid, product.id);
   return VLS.settleQueued(cropperUser.uid, VLS.queueDocId(sku), { id: product.id, name: product.name }, pkg, sizeNameOf);
+}
+
+/* ---------------- Undo last print (#8) ----------------
+   Reverses the product, packing and label stock the last print took, and
+   removes its "already counted" markers, so printing the correct file
+   afterwards counts normally. Only the most recent print, and only once. */
+let lastPrint = null;
+async function loadLastPrint(){
+  if(!cropperUser) return;
+  try{ lastPrint = await VLS.lastPrintRecord(cropperUser.uid); }catch(err){ lastPrint = null; }
+  renderUndoButton();
+}
+function renderUndoButton(){
+  const btn = document.getElementById('vlcUndoBtn');
+  if(!btn) return;
+  const show = lastPrint && !lastPrint.undone && lastPrint.role === getRole();
+  btn.style.display = show ? '' : 'none';
+  btn.title = show ? 'Last print — ' + (lastPrint.summary || lastPrint.fileName || '') : '';
+}
+async function undoLastPrint(){
+  if(!lastPrint || lastPrint.undone) return;
+  if(!confirm(`Undo the last print?\n\n${lastPrint.summary || lastPrint.fileName || ''}\n\nAll product, packing and label stock it took is added back. (The PDF you downloaded isn't affected.)`)) return;
+  const status = document.getElementById('vlcStatus');
+  const btn = document.getElementById('vlcUndoBtn');
+  btn.disabled = true;
+  status.textContent = 'Undoing last print…';
+  try{
+    const out = await VLS.undoPrint(cropperUser.uid, lastPrint.id);
+    lastPrint.undone = true;
+    renderUndoButton();
+    status.textContent = out
+      ? `Undone — added back ${out.units} product unit(s), ${out.packing} packing, ${out.labels} label(s).`
+      : 'That print was already undone.';
+    if(getRole() === 'seller') await reloadSellerProducts(); else await loadMappings();
+    await Promise.all([loadPackagingSizes(), loadLabelSizes()]);
+    refreshSizeViews();
+    if(pdfBytes) renderSkuSummary();
+  }catch(err){
+    console.error('Undo failed:', err);
+    status.textContent = 'Undo failed: ' + (err.code || err.message);
+  }finally{ btn.disabled = false; }
 }
 
 /* ---------------- Pre-print stock check ----------------
@@ -2354,13 +2457,13 @@ async function checkStockBeforePrint(pageIndexOrder, opts){
   }
   // Packing (new labels only)
   const needPack = {};
-  for(const [k, list] of groupByLabel(items)){
+  await VLS.mapLimit([...groupByLabel(items).entries()], 12, async ([k, list]) => {
     const pkg = list.map(it => packagingForItem(it, role)).find(p => p && p.packagingSizeId);
-    if(!pkg) continue;
+    if(!pkg) return;
     let done = true;
     try{ done = await VLS.packingDone(uid, k); }catch(e){}
     if(!done) needPack[pkg.packagingSizeId] = (needPack[pkg.packagingSizeId] || 0) + 1;
-  }
+  });
   Object.keys(needPack).forEach(id => {
     const d = packagingSizesCache.find(x => x.id === id);
     if(d && (d.stock || 0) < needPack[id]) warnings.push(`Packing "${d.name}": ${d.stock || 0} in stock, needs ${needPack[id]}.`);
@@ -2368,13 +2471,13 @@ async function checkStockBeforePrint(pageIndexOrder, opts){
   // Seller product stock (new labels only)
   if(role === 'seller'){
     const needProd = {};
-    for(const it of items){
+    await VLS.mapLimit(items, 12, async it => {
       const p = resolveSellerProduct(it.marketplace, it.sku);
-      if(!p) continue;
+      if(!p) return;
       let done = true;
       try{ done = (await db.collection('users').doc(uid).collection('processedSellerLabels').doc(it.key).get()).exists; }catch(e){}
       if(!done) needProd[p.productId] = (needProd[p.productId] || 0) + it.qty;
-    }
+    });
     Object.keys(needProd).forEach(id => {
       const prod = sellerProductsCache.find(x => x.id === id);
       if(prod && (prod.stock || 0) < needProd[id]) warnings.push(`${prod.name}: ${prod.stock || 0} in stock, this print needs ${needProd[id]}.`);
@@ -2561,12 +2664,30 @@ async function processPdf(courierFilter){
     // Seller: unmapped labels just printed go to the Unmapped Label SKUs list
     // (Billing → Stock Management). If their sticker already came off the
     // printer-size stock, settling them later won't take another.
+    const queuedRec = [];
     if(prodRes && prodRes.unmapped.length){
+      const qcol = prodRes.role === 'seller' ? VLS.SELLER_Q : VLS.BUYER_Q;
       try{
-        await VLS.queueUnmapped(cropperUser.uid, prodRes.unmapped, !!(stockRes && stockRes.labelFromPaper), 'label-cropper',
-          prodRes.role === 'seller' ? VLS.SELLER_Q : VLS.BUYER_Q);
+        await VLS.queueUnmapped(cropperUser.uid, prodRes.unmapped, !!(stockRes && stockRes.labelFromPaper), 'label-cropper', qcol);
+        prodRes.unmapped.forEach(it => queuedRec.push({ col: qcol, sku: it.sku, key: it.key }));
       }catch(err){ console.error('Queueing unmapped SKUs failed:', err); }
     }
+    // Remember exactly what this print changed, for "Undo last print".
+    try{
+      const rec = {
+        fileName: pdfFile ? pdfFile.name : '', courier: courierFilter || null, role: getRole(),
+        product: prodRes ? prodRes.rec : [], packing: stockRes ? stockRes.rec.packing : [],
+        labels: stockRes ? stockRes.rec.labels : [], queued: queuedRec
+      };
+      if(rec.product.length || rec.packing.length || rec.labels.length || rec.queued.length){
+        rec.summary = `${rec.fileName}${rec.courier ? ' (' + rec.courier + ')' : ''}: ` +
+          [rec.product.length ? `${rec.product.reduce((a,x)=>a+x.qty,0)} product unit(s)` : '',
+           rec.packing.length ? `${rec.packing.length} packing` : '',
+           rec.labels.length ? `${rec.labels.reduce((a,x)=>a+x.qty,0)} label(s)` : ''].filter(Boolean).join(', ');
+        lastPrint = { id: await VLS.savePrintRecord(cropperUser.uid, rec), ...rec, undone: false };
+        renderUndoButton();
+      }
+    }catch(err){ console.error('Saving print record failed (Undo unavailable for this print):', err); }
     const parts = [];
     if(prodRes){
       const where = prodRes.role === 'seller' ? 'product stock' : 'your buyer product stock';
@@ -2602,5 +2723,6 @@ applyPreset('amazon');
 document.getElementById('vlcAmazonSkuField').style.display = currentPlatform === 'amazon' ? 'block' : 'none';
 updateAmazonSkuUiState();
 </script>
+<script src="../billing/assets/android-download.js"></script>
 </body>
 </html>
