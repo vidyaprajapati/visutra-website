@@ -212,3 +212,50 @@ function skuListHas(v, sku){
   const k = String(sku == null ? '' : sku).trim().toLowerCase();
   return !!k && splitSkuList(v).some(x => x.toLowerCase() === k);
 }
+
+/* ---------------- Per-SKU Active / Inactive ----------------
+   A buyer product can switch individual marketplace SKUs off without
+   removing them: mapping.inactiveSkus = ['MEESHO:vst-a', ...]. An inactive
+   SKU is ignored by label matching (the label shows as unmapped) but stays
+   reserved to that product. */
+var SKU_FIELD_BY_MARKETPLACE = { AMAZON: 'amazonSku', MEESHO: 'meeshoSku', FLIPKART: 'flipkartSku' };
+function skuStateKey(marketplace, sku){ return String(marketplace).toUpperCase() + ':' + String(sku).trim().toLowerCase(); }
+function isSkuInactive(m, marketplace, sku){
+  return !!(m && Array.isArray(m.inactiveSkus) && m.inactiveSkus.includes(skuStateKey(marketplace, sku)));
+}
+function mappingMatchesSku(m, marketplace, sku){
+  const field = SKU_FIELD_BY_MARKETPLACE[marketplace];
+  return !!field && skuListHas(m[field], sku) && !isSkuInactive(m, marketplace, sku);
+}
+
+/* ---------------- Smart product suggestion for a new SKU ----------------
+   Marketplace SKUs for one product usually share a pattern — e.g.
+   VST-WFAT-222338-7-8.5-FA34 / -FA38 / -FA43, or vis-FA6___11 / ___27.
+   Scores a new SKU against every SKU each product already has:
+     prefix  = shared leading characters ÷ longer SKU's length
+     tokens  = shared parts (split on - _ space etc.) ÷ all parts
+   and takes the better of the two. Suggests the best product only when it
+   scores ≥ 0.6 AND clearly beats the runner-up — otherwise suggests
+   nothing rather than guess. It only PRE-SELECTS the dropdown; you still
+   click Map yourself.
+   candidates: [{ id, skus: [...] }]  →  { id, score } | null */
+function skuSimilarity(a, b){
+  a = String(a || '').trim().toLowerCase(); b = String(b || '').trim().toLowerCase();
+  if(!a || !b) return 0;
+  if(a === b) return 1;
+  let i = 0; while(i < a.length && i < b.length && a[i] === b[i]) i++;
+  const prefix = i / Math.max(a.length, b.length);
+  const ta = new Set(a.split(/[^a-z0-9.]+/).filter(Boolean)), tb = new Set(b.split(/[^a-z0-9.]+/).filter(Boolean));
+  let inter = 0; ta.forEach(t => { if(tb.has(t)) inter++; });
+  const union = new Set([...ta, ...tb]).size || 1;
+  return Math.max(prefix, inter / union);
+}
+function suggestBySku(sku, candidates){
+  const scored = (candidates || []).map(c => ({
+    id: c.id,
+    score: (c.skus || []).reduce((best, s) => Math.max(best, skuSimilarity(sku, s)), 0)
+  })).filter(c => c.score > 0).sort((x, y) => y.score - x.score);
+  if(!scored.length || scored[0].score < 0.6) return null;
+  if(scored[1] && scored[0].score - scored[1].score < 0.05) return null; // too close to call
+  return scored[0];
+}

@@ -548,6 +548,7 @@ async function loadStockMovements(){
   // a no-op before the month input exists yet (very first load, handled
   // explicitly right after this call returns).
   if(document.getElementById('stockReportMonth')) await renderMonthlyStockReport();
+  sellerRenderSalesReorder();
 }
 
 /* ---------------- Monthly Stock Report (Opening / Closing + daily movement) ----------------
@@ -661,11 +662,16 @@ const RETURN_STATUS_PATTERN = /cancel|rto|return/i;
 function detectSheetFormat(headers){
   const lower = headers.map(h => String(h||'').trim().toLowerCase());
   const idx = name => lower.indexOf(name);
+  // Order-ID column (if the report has one) — lets each row be matched to
+  // the exact shipment a printed label / Returns box already counted.
+  const findHdr = test => lower.findIndex(test);
   if(idx('reason for credit entry') !== -1 && idx('sku') !== -1 && idx('quantity') !== -1){
-    return { format: 'meesho', reasonIdx: idx('reason for credit entry'), skuIdx: idx('sku'), qtyIdx: idx('quantity'), nameIdx: idx('product name') };
+    return { format: 'meesho', reasonIdx: idx('reason for credit entry'), skuIdx: idx('sku'), qtyIdx: idx('quantity'), nameIdx: idx('product name'),
+      orderIdx: findHdr(h => h.includes('sub order') || h.includes('suborder')) };
   }
   if(idx('order date') !== -1 && idx('sku name') !== -1 && idx('order status') !== -1 && idx('gross units') !== -1){
-    return { format: 'flipkart-pnl', skuIdx: idx('sku name'), statusIdx: idx('order status'), qtyIdx: idx('gross units') };
+    return { format: 'flipkart-pnl', skuIdx: idx('sku name'), statusIdx: idx('order status'), qtyIdx: idx('gross units'),
+      orderIdx: findHdr(h => h === 'order id' || h === 'order_id' || h.includes('order id')) };
   }
   return null;
 }
@@ -732,40 +738,50 @@ function renderStockColumnMapUI(){
     document.getElementById('stockColQty'+i).value = qtyGuess === -1 ? 0 : qtyGuess;
   });
 }
-function aggregateStockUpload(){
+async function aggregateStockUpload(){
   // normalized SKU/text -> {displayKey, soldQty, returnedQty, skippedQty, skippedStatuses}
   const agg = new Map();
   function bump(raw, qty, isReturn){
     if(!raw) return;
     const key = raw.toLowerCase();
-    if(!agg.has(key)) agg.set(key, { displayKey: raw, soldQty: 0, returnedQty: 0, skippedQty: 0, skippedStatuses: new Set() });
+    if(!agg.has(key)) agg.set(key, { displayKey: raw, soldQty: 0, returnedQty: 0, skippedQty: 0, skippedStatuses: new Set(), alreadyQty: 0, linkedRows: [] });
     const entry = agg.get(key);
     if(isReturn) entry.returnedQty += qty; else entry.soldQty += qty;
+  }
+  // Rows from Meesho/Flipkart reports that carry an order ID are held back
+  // and checked against labels already printed / returns already added
+  // (label-stock-core.js → linkReconRows) before they're counted.
+  const held = [];
+  function hold(mk, raw, qty, isReturn, orderId){
+    if(orderId) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn });
+    else bump(raw, qty, isReturn);
   }
 
   stockUploadSheets.forEach((s, i) => {
     if(s.detected && s.detected.format === 'meesho'){
-      const { reasonIdx, skuIdx, qtyIdx } = s.detected;
+      const { reasonIdx, skuIdx, qtyIdx, orderIdx } = s.detected;
       s.rows.forEach(row => {
         const sku = String(row[skuIdx] ?? '').trim();
         if(!sku) return;
         const qty = parseFloat(row[qtyIdx]) || 0;
         const reason = String(row[reasonIdx] ?? '').trim();
-        if(RETURN_STATUS_PATTERN.test(reason)) bump(sku, qty, true);
-        else if(/delivered/i.test(reason)) bump(sku, qty, false);
+        const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
+        if(RETURN_STATUS_PATTERN.test(reason)) hold('MEESHO', sku, qty, true, orderId);
+        else if(/delivered/i.test(reason)) hold('MEESHO', sku, qty, false, orderId);
         // Anything else (DOOR_STEP_EXCHANGED, LOST, unrecognised) is left
         // untouched deliberately — neither a clean sale nor a stock return,
         // and guessing wrong in either direction would misstate inventory.
       });
     } else if(s.detected && s.detected.format === 'flipkart-pnl'){
-      const { skuIdx, statusIdx, qtyIdx } = s.detected;
+      const { skuIdx, statusIdx, qtyIdx, orderIdx } = s.detected;
       s.rows.forEach(row => {
         const sku = String(row[skuIdx] ?? '').trim();
         if(!sku) return;
         const qty = parseFloat(row[qtyIdx]) || 0;
         const status = String(row[statusIdx] ?? '').trim();
-        if(RETURN_STATUS_PATTERN.test(status)) bump(sku, qty, true);
-        else if(/delivered/i.test(status)) bump(sku, qty, false);
+        const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
+        if(RETURN_STATUS_PATTERN.test(status)) hold('FLIPKART', sku, qty, true, orderId);
+        else if(/delivered/i.test(status)) hold('FLIPKART', sku, qty, false, orderId);
       });
     } else {
       // Unrecognised format — same behaviour as before this change: every
@@ -781,9 +797,25 @@ function aggregateStockUpload(){
     }
   });
 
+  if(held.length){
+    await VLS.linkReconRows(currentUser.uid, 'seller', held);
+    held.forEach(r => {
+      if(!r.key || r.status === 'new'){
+        bump(r.sku, r.qty, r.isReturn);
+        if(r.key) agg.get(r.sku.toLowerCase()).linkedRows.push(r);
+      } else {
+        // 'already' = that label/return was counted before; 'never-sold' =
+        // a return for something that was never deducted (e.g. cancelled
+        // before printing) — neither changes stock now.
+        bump(r.sku, 0, false);
+        agg.get(r.sku.toLowerCase()).alreadyQty += r.qty;
+      }
+    });
+  }
+
   stockAggregation = Array.from(agg.entries())
-    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, soldQty: v.soldQty, returnedQty: v.returnedQty, netChange: v.returnedQty - v.soldQty }))
-    .filter(r => r.soldQty !== 0 || r.returnedQty !== 0)
+    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, soldQty: v.soldQty, returnedQty: v.returnedQty, netChange: v.returnedQty - v.soldQty, alreadyQty: v.alreadyQty, linkedRows: v.linkedRows }))
+    .filter(r => r.soldQty !== 0 || r.returnedQty !== 0 || r.alreadyQty !== 0)
     .sort((a,b) => Math.abs(b.netChange) - Math.abs(a.netChange));
   renderStockAggregationTable();
 }
@@ -804,6 +836,7 @@ function renderStockAggregationTable(){
       <td>${esc(r.displayKey)}${known ? '' : ' <span class="badge" title="No saved mapping yet — pick a product on the right">Unmapped</span>'}</td>
       <td>${r.soldQty || 0}</td>
       <td>${r.returnedQty || 0}</td>
+      <td style="color:var(--muted)">${r.alreadyQty || 0}</td>
       <td style="${netStyle}">${r.netChange > 0 ? '+' : ''}${r.netChange}</td>
       <td><select id="stockAggMap${i}">${options.join('')}</select></td>
     </tr>`;
@@ -837,6 +870,10 @@ async function applyStockUpload(){
 
     if(row.soldQty) await addStockMovement('sale-out', productId, -row.soldQty, dateVal, `${period} — ${row.displayKey} (sold)`);
     if(row.returnedQty) await addStockMovement('return-in', productId, row.returnedQty, dateVal, `${period} — ${row.displayKey} (cancelled/RTO/returned)`);
+    // Mark the linked rows so labels, the Returns box and a re-upload of
+    // this report all see them as already counted.
+    try{ await VLS.markReconRows(currentUser.uid, 'seller', row.linkedRows || [], productId, 'reconciliation'); }
+    catch(err){ console.error('Could not mark reconciled orders:', err); }
     applied++;
   }
 
@@ -850,6 +887,19 @@ async function applyStockUpload(){
   stockUploadSheets = [];
   stockAggregation = [];
   showMsg('stockUploadMsg', `Stock updated for ${applied} product(s).`, true);
+}
+
+/* ---------------- Reorder suggestions from sales speed (shared: label-stock-core.js) ---------------- */
+async function sellerRenderSalesReorder(){
+  const el = document.getElementById('sellerRoTable');
+  if(!el || !currentUser) return;
+  const days = parseInt(document.getElementById('sellerRoWindow').value, 10) || 30;
+  const cover = parseInt(document.getElementById('sellerRoCover').value, 10) || 30;
+  try{
+    const used = await VLS.usagePerItem(currentUser.uid, 'stockMovements', 'productId', days);
+    const rows = VLS.reorderRows(productsCache.map(p => ({ id: p.id, name: p.name, stock: p.stock || 0 })), used, days, cover);
+    el.innerHTML = VLS.reorderTableHtml(rows, esc, cover);
+  }catch(err){ console.error('Reorder suggestions failed:', err); el.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">Could not load sales history.</td></tr>'; }
 }
 
 /* ---------------- Sell via Label (direct e-commerce sale → stock deduction) ----------------
@@ -980,17 +1030,28 @@ async function loadLabelSkuQueue(){
 function renderLabelSkuQueue(){
   const card = document.getElementById('labelSkuQueueCard');
   if(!card) return;
+  // Alert banner at the top of every Billing page (#6).
+  const banner = document.getElementById('sellerUnmappedBanner');
+  if(banner){
+    const n = labelSkuQueueCache.length;
+    const labels = labelSkuQueueCache.reduce((a, q) => a + (q.labelCount || 0), 0);
+    banner.classList.toggle('hidden', !n);
+    document.getElementById('sellerUnmappedBannerCount').textContent = n ? `${n} SKU${n===1?' needs':'s need'} mapping (${labels} label${labels===1?'':'s'})` : '';
+  }
   card.classList.toggle('hidden', !labelSkuQueueCache.length);
   document.getElementById('labelSkuQueueCount').textContent = labelSkuQueueCache.length || '';
   document.getElementById('labelSkuQueueTable').innerHTML = labelSkuQueueCache.map(q => {
     const known = skuMappingsCache.find(m => String(m.rawKey||'').trim().toLowerCase() === String(q.sku||'').trim().toLowerCase());
-    const options = productsCache.map(p => `<option value="${p.id}"${known && known.productId === p.id ? ' selected' : ''}>${esc(p.name)} (stock ${p.stock||0})</option>`).join('');
+    // No mapping yet → pre-select the product whose SKUs look most like this one (shared suggestBySku()).
+    const sug = known ? null : suggestBySku(q.sku, productsCache.map(p => ({ id: p.id, skus: skuMappingsCache.filter(m => m.productId === p.id).map(m => m.rawKey) })));
+    const selId = known ? known.productId : (sug ? sug.id : '');
+    const options = productsCache.map(p => `<option value="${p.id}"${p.id === selId ? ' selected' : ''}>${sug && p.id === selId ? '★ ' : ''}${esc(p.name)} (stock ${p.stock||0})</option>`).join('');
     return `<tr>
       <td>${esc((q.marketplaces || [q.marketplace]).join(', '))}</td>
       <td><code>${esc(q.sku)}</code></td>
       <td>${q.labelCount || 0}</td><td>${q.unitCount || 0}</td>
       <td style="white-space:nowrap">${esc(q.firstSeen||'')}${q.lastSeen && q.lastSeen !== q.firstSeen ? ' → ' + esc(q.lastSeen) : ''}</td>
-      <td><select id="lsq-${q.id}"><option value="">Select product…</option>${options}</select></td>
+      <td><select id="lsq-${q.id}"><option value="">Select product…</option>${options}</select>${sug ? ' <span class="badge" title="Pre-selected because its SKUs look like this one — check it, then Map & Deduct">★ suggested</span>' : ''}</td>
       <td class="row-actions">
         <button class="btn small primary" id="lsqBtn-${q.id}" onclick="mapQueuedLabelSku('${q.id}')">Map &amp; Deduct</button>
         <button class="btn small" onclick="dismissQueuedLabelSku('${q.id}')">Not a stock item</button>
