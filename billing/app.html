@@ -56,6 +56,13 @@
 
   <div class="main">
 
+    <!-- Unmapped label SKUs alert (shows on every page while there are any) -->
+    <div id="sellerUnmappedBanner" class="card hidden" style="background:#FFF7ED;border:1.5px solid #E8A32C;padding:14px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <b style="color:#9E3608">⚠ <span id="sellerUnmappedBannerCount"></span></b>
+      <span style="font-size:13px;color:var(--muted)">printed labels whose SKU isn't linked to a product yet — no stock was deducted for them.</span>
+      <button class="btn small primary" onclick="activateView('stock'); setTimeout(() => document.getElementById('labelSkuQueueCard').scrollIntoView({behavior:'smooth'}), 50)">Map them now</button>
+    </div>
+
     <!-- BUSINESS PROFILE -->
     <div id="view-profile" class="view">
       <div class="card">
@@ -153,6 +160,17 @@
         <tbody id="reorderTable"></tbody></table>
       </div>
 
+      <div class="card" id="sellerSalesReorderCard">
+        <h2>Reorder Suggestions — Sales Speed</h2>
+        <p class="sub">Based on how fast each product actually sells (sales + printed labels in the period you pick): how many days your stock lasts, and how much to order to cover the next few weeks. <b>Order now</b> = under 7 days left, <b>Soon</b> = under 14.</p>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:8px">
+          <div class="field" style="margin:0"><label>Based on sales of the last</label><select id="sellerRoWindow" onchange="sellerRenderSalesReorder()"><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option></select></div>
+          <div class="field" style="margin:0"><label>Order enough for</label><select id="sellerRoCover" onchange="sellerRenderSalesReorder()"><option value="15">15 days</option><option value="30" selected>30 days</option><option value="45">45 days</option><option value="60">60 days</option></select></div>
+        </div>
+        <table><thead><tr><th>Product</th><th>Stock</th><th>Sold in period</th><th>Per day</th><th>Days left</th><th>Suggested order</th><th></th></tr></thead>
+        <tbody id="sellerRoTable"></tbody></table>
+      </div>
+
       <div class="card">
         <h2>Current Stock</h2>
         <p class="sub">Stock goes up automatically when you record a purchase of a linked purchase product, and down when you apply a monthly marketplace sales upload below. Use "Adjust Stock" for an opening balance or a correction.</p>
@@ -241,8 +259,8 @@
 
         <div id="stockAggWrap" class="hidden" style="margin-top:18px">
           <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 2 — Match each product/SKU, then apply</h3>
-          <p class="sub">For Meesho/Flipkart sheets, Sold and Returned are read from the status column automatically — Net is what actually changes stock (down for a sale, up for a cancellation/RTO/return).</p>
-          <table><thead><tr><th>From report</th><th>Sold</th><th>Returned</th><th>Net Stock Change</th><th>Matches to</th></tr></thead>
+          <p class="sub">For Meesho/Flipkart sheets, Sold and Returned are read from the status column automatically — Net is what actually changes stock (down for a sale, up for a cancellation/RTO/return). When the report has an order-ID column, each order is matched to your printed labels and Returns box: anything <b>already counted</b> there is skipped instead of counted twice, and uploading the same report again changes nothing.</p>
+          <table><thead><tr><th>From report</th><th>Sold</th><th>Returned</th><th title="Orders already counted by a printed label, the Returns box or an earlier upload — skipped so they aren't counted twice">Already counted (skipped)</th><th>Net Stock Change</th><th>Matches to</th></tr></thead>
           <tbody id="stockAggTable"></tbody></table>
           <button class="btn primary" style="margin-top:14px" onclick="applyStockUpload()">Apply &amp; Update Stock</button>
         </div>
@@ -794,5 +812,6 @@
 <script src="assets/label-sku-extract.js"></script>
 <script src="assets/label-stock-core.js"></script>
 <script src="assets/billing-app.js"></script>
+<script src="assets/android-download.js"></script>
 </body>
 </html>
