@@ -1,0 +1,157 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{sellerUid} {
+      allow read, write: if request.auth != null && request.auth.uid == sellerUid;
+
+      match /products/{productId} {
+        allow read: if request.auth != null && (
+          request.auth.uid == sellerUid ||
+          (
+            resource.data.active == true &&
+            resource.data.buyerVisibility == true &&
+            exists(/databases/$(database)/documents/sellerLinks/$(sellerUid + '_' + request.auth.uid)) &&
+            get(/databases/$(database)/documents/sellerLinks/$(sellerUid + '_' + request.auth.uid)).data.status == 'ACTIVE'
+          )
+        );
+        allow write: if request.auth != null && request.auth.uid == sellerUid;
+      }
+
+      match /{subcollection}/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == sellerUid;
+      }
+    }
+
+    match /sellerLinks/{linkId} {
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.sellerUid || request.auth.uid == resource.data.buyerUid);
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.sellerUid;
+
+      // Sellers can update anything on their own link. Buyers get ONE narrow
+      // allowance: flipping status to REMOVED_BY_BUYER (plus removedAt).
+      allow update: if request.auth != null && (
+        request.auth.uid == resource.data.sellerUid ||
+        (request.auth.uid == resource.data.buyerUid &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'removedAt']) &&
+         request.resource.data.status == 'REMOVED_BY_BUYER')
+      );
+      allow delete: if false;
+    }
+
+    // CHANGED: was "allow read: if true", which let ANYONE list the whole
+    // collection = every registered buyer's email. The app only ever looks
+    // up one email at a time (seller linking a buyer), so: signed-in users
+    // may fetch a single entry by email; nobody can list them.
+    match /buyerDirectory/{email} {
+      allow get: if request.auth != null;
+      allow list: if false;
+      allow create, update: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
+    match /marketplaceOrders/{orderId} {
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.buyerUid || request.auth.uid == resource.data.sellerUid);
+
+      allow create: if request.auth != null && (
+        // Normal flow: buyer places an order through Place Order.
+        (request.auth.uid == request.resource.data.buyerUid &&
+         request.resource.data.status == 'PENDING' &&
+         exists(/databases/$(database)/documents/sellerLinks/$(request.resource.data.sellerUid + '_' + request.auth.uid)) &&
+         get(/databases/$(database)/documents/sellerLinks/$(request.resource.data.sellerUid + '_' + request.auth.uid)).data.status == 'ACTIVE')
+        ||
+        // Off-platform flow: seller records a sale to a linked buyer and
+        // proposes it as PENDING_BUYER_CONFIRMATION.
+        (request.auth.uid == request.resource.data.sellerUid &&
+         request.resource.data.status == 'PENDING_BUYER_CONFIRMATION' &&
+         exists(/databases/$(database)/documents/sellerLinks/$(request.auth.uid + '_' + request.resource.data.buyerUid)) &&
+         get(/databases/$(database)/documents/sellerLinks/$(request.auth.uid + '_' + request.resource.data.buyerUid)).data.status == 'ACTIVE')
+      );
+
+      allow update: if request.auth != null && (
+        (request.auth.uid == resource.data.sellerUid &&
+         resource.data.status == 'PENDING' &&
+         request.resource.data.status in ['ACCEPTED', 'REJECTED']) ||
+        (request.auth.uid == resource.data.buyerUid &&
+         resource.data.status == 'ACCEPTED' &&
+         !('buyerPurchaseId' in resource.data) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['buyerPurchaseId', 'buyerPurchaseCreatedAt'])) ||
+        (request.auth.uid == resource.data.buyerUid &&
+         resource.data.status == 'PENDING_BUYER_CONFIRMATION' &&
+         request.resource.data.status in ['ACCEPTED', 'REJECTED'] &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt', 'respondedAt', 'rejectionReason'])) ||
+        (request.auth.uid == resource.data.sellerUid &&
+         resource.data.status == 'REJECTED' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stockReversed']) &&
+         request.resource.data.stockReversed == true)
+      );
+      allow delete: if false;
+    }
+
+    match /invoiceDeleteRequests/{requestId} {
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.sellerUid || request.auth.uid == resource.data.buyerUid);
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.sellerUid &&
+        request.resource.data.status == 'PENDING';
+      allow update: if request.auth != null && (
+        (request.auth.uid == resource.data.sellerUid &&
+         resource.data.status == 'ACCEPTED' &&
+         request.resource.data.status == 'COMPLETED' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'completedAt'])) ||
+        (request.auth.uid == resource.data.buyerUid &&
+         resource.data.status == 'PENDING' &&
+         request.resource.data.status in ['ACCEPTED', 'REJECTED'] &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt']))
+      );
+      allow delete: if false;
+    }
+
+    match /paymentConfirmations/{confirmId} {
+      allow read: if request.auth != null &&
+        (request.auth.uid == resource.data.buyerUid || request.auth.uid == resource.data.sellerUid);
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.buyerUid &&
+        request.resource.data.status == 'PENDING' &&
+        exists(/databases/$(database)/documents/sellerLinks/$(request.resource.data.sellerUid + '_' + request.auth.uid)) &&
+        get(/databases/$(database)/documents/sellerLinks/$(request.resource.data.sellerUid + '_' + request.auth.uid)).data.status == 'ACTIVE';
+      allow update: if request.auth != null &&
+        request.auth.uid == resource.data.sellerUid &&
+        resource.data.status == 'PENDING' &&
+        request.resource.data.status in ['APPROVED', 'REJECTED'] &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt']);
+      allow delete: if false;
+    }
+
+    // CHANGED: was "allow read: if true", which let anyone LIST every invoice
+    // (customer names, amounts, GSTINs). The invoice link opens exactly one
+    // invoice by its id, so single-document get stays public; listing is off.
+    match /public_invoices/{invoiceId} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if request.auth != null && request.resource.data.sellerUid == request.auth.uid;
+      allow update: if request.auth != null
+        && resource.data.sellerUid == request.auth.uid
+        && request.resource.data.sellerUid == resource.data.sellerUid;
+      allow delete: if false;
+    }
+
+    match /orders/{orderId} {
+      allow read: if request.auth != null && (request.auth.uid == resource.data.buyerUid || request.auth.token.email == resource.data.supplierEmail);
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.buyerUid;
+      allow update: if request.auth != null && (request.auth.uid == resource.data.buyerUid || request.auth.token.email == resource.data.supplierEmail);
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+
+    // CHANGED: was "allow read: if true" (listable). Login-by-username looks
+    // up ONE username before sign-in, so get stays public; listing all
+    // usernames (and their emails) is off.
+    match /usernames/{username} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}
