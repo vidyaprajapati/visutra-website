@@ -6,9 +6,8 @@
 <title>Admin | VISUTRA</title>
 <meta name="robots" content="noindex, nofollow">
 <link rel="icon" href="favicon.svg">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.bunny.net">
+<link href="https://fonts.bunny.net/css2?family=Bricolage+Grotesque:wght@400;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <style>
   .admin-wrap{max-width:900px;margin:0 auto;padding:48px 6vw 80px}
@@ -46,6 +45,10 @@
   #msg.ok{color:#1F7A4D}
   .hidden{display:none !important}
 </style>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+<link rel="apple-touch-icon" href="/assets/app-icons/apple-touch-icon.png">
+<script src="/pwa.js" defer></script>
 </head>
 <body>
 <header>
@@ -61,9 +64,14 @@
 <div id="loginScreen" class="admin-card">
 <div class="eyebrow" style="justify-content:center">ADMIN</div>
 <h1 style="margin:14px 0 18px;font-size:26px">VISUTRA Product Admin</h1>
+<p style="font-size:14px;margin:0 0 14px">Sign in with your VISUTRA account. Only emails listed as shop admins in Supabase can edit products.</p>
+<div class="field">
+<label for="adminEmail">Email</label>
+<input type="text" id="adminEmail" placeholder="you@visutra.in" autocomplete="username">
+</div>
 <div class="field">
 <label for="pw">Password</label>
-<input type="password" id="pw" placeholder="Enter admin password" autocomplete="current-password">
+<input type="password" id="pw" placeholder="Your VISUTRA password" autocomplete="current-password">
 </div>
 <button class="btn navy block" id="loginBtn">Log In</button>
 <p id="loginMsg" style="font-family:var(--mono);font-size:13px;color:var(--paprika-dark);margin-top:12px;min-height:18px"></p>
@@ -134,81 +142,58 @@
 </div>
 
 <script src="assets/config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 (function(){
-  var API = window.VISUTRA_API_URL;
-  var token = sessionStorage.getItem('visutra_admin_token') || '';
+  // Shop admin on Supabase: sign in with your VISUTRA account; the database
+  // only lets emails listed in store_admins change products.
+  var sb = window.supabase.createClient(window.VISUTRA_SUPABASE_URL, window.VISUTRA_SUPABASE_KEY);
   var products = [];
-
   var loginScreen = document.getElementById('loginScreen');
   var dashboard = document.getElementById('dashboard');
   var loginMsg = document.getElementById('loginMsg');
   var msg = document.getElementById('msg');
-
-  function checkConfig(){
-    if (!API || API.indexOf('PASTE_YOUR') === 0) {
-      loginMsg.textContent = 'Admin panel not connected yet — paste the Apps Script Web App URL into assets/config.js.';
-      document.getElementById('loginBtn').disabled = true;
-      return false;
-    }
-    return true;
-  }
-
-  function api(action, payload){
-    payload = payload || {};
-    payload.action = action;
-    if (token) payload.token = token;
-    return fetch(API, { method: 'POST', body: JSON.stringify(payload) }).then(function(r){ return r.json(); });
-  }
-
+  function checkConfig(){ return !!(window.VISUTRA_SUPABASE_URL && window.VISUTRA_SUPABASE_KEY); }
   function showMsg(el, text, ok){
     el.textContent = text;
     el.className = ok ? 'ok' : 'error';
   }
 
-  document.getElementById('loginBtn').addEventListener('click', function(){
+  document.getElementById('loginBtn').addEventListener('click', async function(){
+    var email = document.getElementById('adminEmail').value.trim();
     var pw = document.getElementById('pw').value;
-    if (!pw) return;
+    if (!email || !pw) { loginMsg.textContent = 'Enter your email and password.'; return; }
     loginMsg.textContent = 'Checking...';
-    api('login', { password: pw }).then(function(res){
-      if (res.ok) {
-        token = res.token;
-        sessionStorage.setItem('visutra_admin_token', token);
-        enterDashboard();
-      } else {
-        loginMsg.textContent = res.error || 'Login failed.';
-      }
-    }).catch(function(){ loginMsg.textContent = 'Could not reach the server.'; });
+    var r = await sb.auth.signInWithPassword({ email: email, password: pw });
+    if (r.error) { loginMsg.textContent = /invalid/i.test(r.error.message) ? 'Wrong email or password.' : r.error.message; return; }
+    checkAdminAndEnter();
   });
-
-  document.getElementById('logoutBtn').addEventListener('click', function(){
-    api('logout', {}).finally(function(){
-      sessionStorage.removeItem('visutra_admin_token');
-      token = '';
-      dashboard.classList.add('hidden');
-      loginScreen.classList.remove('hidden');
-    });
+  document.getElementById('logoutBtn').addEventListener('click', async function(){
+    await sb.auth.signOut();
+    dashboard.classList.add('hidden');
+    loginScreen.classList.remove('hidden');
   });
-
+  async function checkAdminAndEnter(){
+    var r = await sb.rpc('vt_is_store_admin');
+    if (r.error || !r.data) {
+      loginMsg.textContent = 'This account is not a shop admin. Add its email to store_admins in Supabase (see SUPABASE-SETUP.md).';
+      await sb.auth.signOut();
+      return;
+    }
+    enterDashboard();
+  }
   function enterDashboard(){
     loginScreen.classList.add('hidden');
     dashboard.classList.remove('hidden');
     loadProducts();
   }
-
   function loadProducts(){ fetchAll(); }
-
-  function fetchAll(){
-    fetch(API + '?action=listAll&token=' + encodeURIComponent(token))
-      .then(function(r){ return r.json(); })
-      .then(function(res){
-        if (!res.ok) { showMsg(msg, res.error || 'Session expired, please log in again.', false); return; }
-        products = res.products;
-        renderList();
-      })
-      .catch(function(){ showMsg(msg, 'Could not load products.', false); });
+  async function fetchAll(){
+    var r = await sb.from('store_products').select('*').order('featured', { ascending: false }).order('sort').order('name');
+    if (r.error) { showMsg(msg, 'Could not load products: ' + r.error.message, false); return; }
+    products = r.data || [];
+    renderList();
   }
-
   function renderList(){
     var list = document.getElementById('plist');
     var empty = document.getElementById('emptyMsg');
@@ -297,30 +282,28 @@
       active: document.getElementById('pActive').checked
     };
 
-    var action = id ? 'updateProduct' : 'addProduct';
+    delete product.id;
+    product.updated_at = new Date().toISOString();
     showMsg(msg, 'Saving...', true);
-    api(action, { product: product }).then(function(res){
-      if (res.ok) {
-        showMsg(msg, 'Saved.', true);
-        resetForm();
-        fetchAll();
-      } else {
-        showMsg(msg, res.error || 'Could not save product.', false);
-      }
-    }).catch(function(){ showMsg(msg, 'Could not reach the server.', false); });
+    var q = id ? sb.from('store_products').update(product).eq('id', id) : sb.from('store_products').insert(product);
+    q.then(function(res){
+      if (res.error) { showMsg(msg, 'Could not save: ' + res.error.message, false); return; }
+      showMsg(msg, 'Saved.', true);
+      resetForm();
+      fetchAll();
+    });
   });
 
   function deleteProduct(id){
     if (!confirm('Delete this product? This cannot be undone.')) return;
-    api('deleteProduct', { id: id }).then(function(res){
-      if (res.ok) fetchAll();
-      else showMsg(msg, res.error || 'Could not delete product.', false);
+    sb.from('store_products').delete().eq('id', id).then(function(res){
+      if (res.error) showMsg(msg, 'Could not delete product: ' + res.error.message, false);
+      else fetchAll();
     });
   }
 
-  if (checkConfig() && token) {
-    enterDashboard();
-  }
+  // Already signed in (e.g. from Billing)? Go straight in if admin.
+  sb.auth.getSession().then(function(r){ if (r.data && r.data.session) checkAdminAndEnter(); });
 })();
 </script>
 </body>

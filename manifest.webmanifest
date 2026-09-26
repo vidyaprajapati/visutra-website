@@ -1,0 +1,25 @@
+{
+  "name": "VISUTRA — Billing, Stock & Label Tools",
+  "short_name": "VISUTRA",
+  "description": "GST billing, buyer & seller stock, SKU mapping and marketplace label cropping for VISUTRA sellers.",
+  "id": "/billing/portal.html",
+  "start_url": "/billing/portal.html?source=app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#FFFFFF",
+  "theme_color": "#FF5A00",
+  "lang": "en-IN",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "shopping"],
+  "icons": [
+    { "src": "/assets/app-icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/app-icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/app-icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Label Cropper", "url": "/tools/label-cropper.html", "icons": [{ "src": "/assets/app-icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Billing", "url": "/billing/app.html", "icons": [{ "src": "/assets/app-icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Buyer Dashboard", "url": "/billing/buyer/dashboard.html", "icons": [{ "src": "/assets/app-icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

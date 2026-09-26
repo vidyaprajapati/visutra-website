@@ -1,5 +1,5 @@
 // VISUTRA — dynamic product loading
-// Fetches live products from the Apps Script API (see assets/config.js).
+// Fetches live products from the Supabase shop table (see assets/config.js).
 // If the API isn't configured yet or the request fails, the static
 // fallback cards already in the HTML stay visible — the site never breaks.
 (function () {
@@ -32,16 +32,18 @@
   // opts: { featuredOnly: bool, limit: number }
   window.VISUTRA_loadProducts = function (containerId, staticId, opts) {
     opts = opts || {};
-    var apiUrl = window.VISUTRA_API_URL;
+    var base = window.VISUTRA_SUPABASE_URL, key = window.VISUTRA_SUPABASE_KEY;
     var container = document.getElementById(containerId);
     var staticEl = staticId ? document.getElementById(staticId) : null;
-    if (!container || !apiUrl || apiUrl.indexOf('PASTE_YOUR') === 0) return;
-
-    fetch(apiUrl + '?action=list')
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        if (!data.ok || !data.products || !data.products.length) return;
-        var products = data.products;
+    if (!container || !base || !key) return;
+    // Active products from the Supabase shop table (visitors can only read
+    // active ones — enforced by the database).
+    fetch(base + '/rest/v1/store_products?select=*&active=eq.true&order=featured.desc,sort.asc,name.asc', {
+      headers: { apikey: key, Accept: 'application/json' }
+    })
+      .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+      .then(function (products) {
+        if (!Array.isArray(products) || !products.length) return;
         if (opts.featuredOnly) {
           var featured = products.filter(function (p) { return p.featured; });
           if (featured.length) products = featured;

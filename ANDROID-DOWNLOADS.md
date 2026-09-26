@@ -1,5 +1,9 @@
 # Downloads inside the VISUTRA Android app
 
+> **Using the new TWA app (ANDROID-APP-GUIDE.md)? You don't need this file** —
+> the TWA runs real Chrome, so downloads already work. This is only for an
+> older **WebView**-based app.
+
 ## Why files don't download in the app
 Every page saves files the browser way — Label Cropper's cropped PDF, invoice
 PDFs, every Excel export. The browser creates a temporary `blob:` link and
