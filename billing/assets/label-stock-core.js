@@ -352,10 +352,17 @@
     const linked = rows.filter(r => r.key);
     const soldKeys = [...new Set(linked.map(r => r.key))];
     const soldExists = {}, retExists = {};
-    await mapLimit(soldKeys, 12, async k => {
-      soldExists[k] = (await u(uid).collection(cols.sold).doc(k).get()).exists;
-      retExists[k] = (await u(uid).collection(cols.ret).doc(k).get()).exists;
-    });
+    if(typeof db.getAll === 'function'){
+      // Bulk read — a few requests for thousands of orders.
+      const soldSnaps = await db.getAll(soldKeys.map(k => u(uid).collection(cols.sold).doc(k)));
+      const retSnaps = await db.getAll(soldKeys.map(k => u(uid).collection(cols.ret).doc(k)));
+      soldKeys.forEach((k, i) => { soldExists[k] = soldSnaps[i].exists; retExists[k] = retSnaps[i].exists; });
+    } else {
+      await mapLimit(soldKeys, 12, async k => {
+        soldExists[k] = (await u(uid).collection(cols.sold).doc(k).get()).exists;
+        retExists[k] = (await u(uid).collection(cols.ret).doc(k).get()).exists;
+      });
+    }
     // A return no longer needs its sale to be on record: most returns in a
     // month's report are for orders sold before that record existed, and
     // requiring it wrongly skipped them. Cancellations — the case that rule
