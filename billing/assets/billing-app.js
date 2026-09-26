@@ -658,13 +658,19 @@ function guessStockColumn(headers, candidates){
 }
 // Rows whose status/reason contains any of these mean the item came back to
 // you (cancelled before dispatch counts too — it's stock that never left).
-const RETURN_STATUS_PATTERN = /cancel|rto|return/i;
 function detectSheetFormat(headers){
   const lower = headers.map(h => String(h||'').trim().toLowerCase());
   const idx = name => lower.indexOf(name);
   // Order-ID column (if the report has one) — lets each row be matched to
   // the exact shipment a printed label / Returns box already counted.
   const findHdr = test => lower.findIndex(test);
+  // Meesho payment file ("Order Payments" sheet): Sub Order No (A),
+  // Supplier SKU (E), Live Order Status (H), Quantity (K).
+  const skuCol = idx('supplier sku') !== -1 ? idx('supplier sku') : idx('sku');
+  if(idx('sub order no') !== -1 && idx('live order status') !== -1 && idx('quantity') !== -1 && skuCol !== -1){
+    return { format: 'meesho', variant: 'payment', reasonIdx: idx('live order status'), skuIdx: skuCol, qtyIdx: idx('quantity'),
+      nameIdx: idx('product name'), orderIdx: idx('sub order no') };
+  }
   if(idx('reason for credit entry') !== -1 && idx('sku') !== -1 && idx('quantity') !== -1){
     return { format: 'meesho', reasonIdx: idx('reason for credit entry'), skuIdx: idx('sku'), qtyIdx: idx('quantity'), nameIdx: idx('product name'),
       orderIdx: findHdr(h => h.includes('sub order') || h.includes('suborder')) };
@@ -686,10 +692,17 @@ async function parseStockFiles(){
     wb.SheetNames.forEach(sheetName => {
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {header:1, raw:true, defval:''});
       if(!rows.length) return;
-      const headers = rows[0].map(h => String(h||'').trim());
-      const dataRows = rows.slice(1).filter(r => r.some(c => c !== '' && c !== undefined && c !== null));
+      // The header row isn't always row 1 — Meesho's payment file has group
+      // titles on row 1 ("Order Related Details"…), the real headers on row 2
+      // and notes on row 3. Use the first of the top rows that's recognised.
+      let hdrRow = 0, detected = null;
+      for(let r = 0; r < Math.min(rows.length, 8); r++){
+        const d = detectSheetFormat(rows[r].map(h => String(h||'').trim()));
+        if(d){ hdrRow = r; detected = d; break; }
+      }
+      const headers = rows[hdrRow].map(h => String(h||'').trim());
+      const dataRows = rows.slice(hdrRow + 1).filter(r => r.some(c => c !== '' && c !== undefined && c !== null));
       if(!headers.length || !dataRows.length) return;
-      const detected = detectSheetFormat(headers);
       // For anything not auto-detected (Amazon, a different report layout,
       // or a same-file secondary sheet like Flipkart's own summary tabs),
       // only keep it if it plausibly has BOTH a product-like and a
@@ -715,7 +728,7 @@ function renderStockColumnMapUI(){
   document.getElementById('stockAggWrap').classList.add('hidden');
   document.getElementById('stockColumnMapList').innerHTML = stockUploadSheets.map((s, i) => {
     if(s.detected){
-      const label = s.detected.format === 'meesho' ? 'Meesho' : 'Flipkart Orders P&L';
+      const label = s.detected.format === 'meesho' ? (s.detected.variant === 'payment' ? 'Meesho payment file (Order Payments)' : 'Meesho') : 'Flipkart Orders P&L';
       return `<div class="box" style="margin-bottom:10px">
         <p style="margin:0;font-size:13px"><span class="badge">${label} — detected automatically</span></p>
         <p style="margin:6px 0 0;font-size:13px;color:var(--muted)">${esc(s.fileName)} — ${esc(s.sheetName)} (${s.rows.length} rows). Status/reason column read automatically — no columns to pick.</p>
@@ -744,7 +757,7 @@ async function aggregateStockUpload(){
   function bump(raw, qty, isReturn){
     if(!raw) return;
     const key = raw.toLowerCase();
-    if(!agg.has(key)) agg.set(key, { displayKey: raw, soldQty: 0, returnedQty: 0, skippedQty: 0, skippedStatuses: new Set(), alreadyQty: 0, linkedRows: [] });
+    if(!agg.has(key)) agg.set(key, { displayKey: raw, soldQty: 0, returnedQty: 0, skippedQty: 0, skippedStatuses: new Set(), alreadyQty: 0, cancelledQty: 0, linkedRows: [] });
     const entry = agg.get(key);
     if(isReturn) entry.returnedQty += qty; else entry.soldQty += qty;
   }
@@ -752,6 +765,11 @@ async function aggregateStockUpload(){
   // and checked against labels already printed / returns already added
   // (label-stock-core.js → linkReconRows) before they're counted.
   const held = [];
+  // Cancelled rows: shown in their own column, never change stock.
+  function addCancelled(raw, qty){
+    bump(raw, 0, false);
+    agg.get(raw.toLowerCase()).cancelledQty += qty;
+  }
   function hold(mk, raw, qty, isReturn, orderId){
     if(orderId) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn });
     else bump(raw, qty, isReturn);
@@ -760,17 +778,20 @@ async function aggregateStockUpload(){
   stockUploadSheets.forEach((s, i) => {
     if(s.detected && s.detected.format === 'meesho'){
       const { reasonIdx, skuIdx, qtyIdx, orderIdx } = s.detected;
-      s.rows.forEach(row => {
+      // One row per order: Meesho lists some orders twice (payment + later
+      // adjustment); keep the most final status (label-stock-core.js).
+      VLS.collapseReconRows(s.rows, orderIdx, reasonIdx, skuIdx).forEach(row => {
         const sku = String(row[skuIdx] ?? '').trim();
         if(!sku) return;
         const qty = parseFloat(row[qtyIdx]) || 0;
         const reason = String(row[reasonIdx] ?? '').trim();
         const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
-        if(RETURN_STATUS_PATTERN.test(reason)) hold('MEESHO', sku, qty, true, orderId);
-        else if(/delivered/i.test(reason)) hold('MEESHO', sku, qty, false, orderId);
-        // Anything else (DOOR_STEP_EXCHANGED, LOST, unrecognised) is left
-        // untouched deliberately — neither a clean sale nor a stock return,
-        // and guessing wrong in either direction would misstate inventory.
+        // DELIVERED / EXCHANGED = sold, CANCELLED = 0, anything else = returned
+        // (shared rule: label-stock-core.js → reconStatusKind).
+        const kind = VLS.reconStatusKind(reason);
+        if(kind === 'sold') hold('MEESHO', sku, qty, false, orderId);
+        else if(kind === 'return') hold('MEESHO', sku, qty, true, orderId);
+        else if(kind === 'cancel') addCancelled(sku, qty);
       });
     } else if(s.detected && s.detected.format === 'flipkart-pnl'){
       const { skuIdx, statusIdx, qtyIdx, orderIdx } = s.detected;
@@ -780,8 +801,10 @@ async function aggregateStockUpload(){
         const qty = parseFloat(row[qtyIdx]) || 0;
         const status = String(row[statusIdx] ?? '').trim();
         const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
-        if(RETURN_STATUS_PATTERN.test(status)) hold('FLIPKART', sku, qty, true, orderId);
-        else if(/delivered/i.test(status)) hold('FLIPKART', sku, qty, false, orderId);
+        const kind = VLS.reconStatusKind(status);
+        if(kind === 'sold') hold('FLIPKART', sku, qty, false, orderId);
+        else if(kind === 'return') hold('FLIPKART', sku, qty, true, orderId);
+        else if(kind === 'cancel') addCancelled(sku, qty);
       });
     } else {
       // Unrecognised format — same behaviour as before this change: every
@@ -804,9 +827,8 @@ async function aggregateStockUpload(){
         bump(r.sku, r.qty, r.isReturn);
         if(r.key) agg.get(r.sku.toLowerCase()).linkedRows.push(r);
       } else {
-        // 'already' = that label/return was counted before; 'never-sold' =
-        // a return for something that was never deducted (e.g. cancelled
-        // before printing) — neither changes stock now.
+        // 'already' = that sale/return was counted before (printed label,
+        // Returns box or an earlier upload) — doesn't change stock again.
         bump(r.sku, 0, false);
         agg.get(r.sku.toLowerCase()).alreadyQty += r.qty;
       }
@@ -814,8 +836,8 @@ async function aggregateStockUpload(){
   }
 
   stockAggregation = Array.from(agg.entries())
-    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, soldQty: v.soldQty, returnedQty: v.returnedQty, netChange: v.returnedQty - v.soldQty, alreadyQty: v.alreadyQty, linkedRows: v.linkedRows }))
-    .filter(r => r.soldQty !== 0 || r.returnedQty !== 0 || r.alreadyQty !== 0)
+    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, soldQty: v.soldQty, returnedQty: v.returnedQty, netChange: v.returnedQty - v.soldQty, alreadyQty: v.alreadyQty, cancelledQty: v.cancelledQty, linkedRows: v.linkedRows }))
+    .filter(r => r.soldQty !== 0 || r.returnedQty !== 0 || r.alreadyQty !== 0 || r.cancelledQty !== 0)
     .sort((a,b) => Math.abs(b.netChange) - Math.abs(a.netChange));
   renderStockAggregationTable();
 }
@@ -837,6 +859,7 @@ function renderStockAggregationTable(){
       <td>${r.soldQty || 0}</td>
       <td>${r.returnedQty || 0}</td>
       <td style="color:var(--muted)">${r.alreadyQty || 0}</td>
+      <td style="color:var(--muted)">${r.cancelledQty || 0}</td>
       <td style="${netStyle}">${r.netChange > 0 ? '+' : ''}${r.netChange}</td>
       <td><select id="stockAggMap${i}">${options.join('')}</select></td>
     </tr>`;

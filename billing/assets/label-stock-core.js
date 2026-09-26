@@ -290,14 +290,54 @@
      shipment key a printed label gets (labelKey). Then:
        delivered row → skipped if that shipment was already deducted
                        (label printed / earlier upload); else deducted + marked.
-       return row    → skipped if already added back (Returns box / earlier
-                       upload) or if the sale was never deducted at all
-                       (e.g. cancelled before it was ever printed);
-                       else added back + marked.
+       return row    → skipped only if that return was already added back
+                       (Returns box / earlier upload); else added back + marked.
      Re-uploading the same report therefore changes nothing the second time.
      rows: [{ marketplace, sku, orderId, qty, isReturn }]  side: 'seller'|'buyer'
      Adds to each row: key (null = no order ID → old behaviour) and
-     status: 'new' | 'already' | 'never-sold'. */
+     status: 'new' | 'already'. */
+  /* How a marketplace report status counts (Meesho "Reason for Credit
+     Entry", Flipkart "Order Status"):
+       CANCELLED                        → 'cancel' (counts 0)
+       anything with RTO / RETURN       → 'return' (e.g. RTO_DELIVERED is a return,
+                                           even though it says "delivered")
+       DELIVERED / EXCHANGED            → 'sold'   (e.g. DOOR_STEP_EXCHANGED)
+       any other non-empty status       → 'return' (LOST, RTO_LOCKED …)
+       empty                            → null     (row ignored) */
+  function reconStatusKind(status){
+    const s = String(status == null ? '' : status).trim().toUpperCase();
+    if(!s) return null;
+    if(/CANCEL/.test(s)) return 'cancel';
+    if(/RTO|RETURN/.test(s)) return 'return';
+    if(/DELIVER|EXCHANGE/.test(s)) return 'sold';
+    return 'return';
+  }
+  /* One order can appear on several rows of a Meesho payment file (e.g. an
+     advance "Shipped" payment row and a later "Return" adjustment row, or a
+     "Return" row plus a blank-status row). Counting each row would count
+     one parcel twice — so rows are collapsed to ONE per (order ID + SKU),
+     keeping the most final status:
+       RTO / RETURN  >  CANCELLED  >  DELIVERED / EXCHANGED  >  other  >  blank */
+  function reconStatusRank(status){
+    const s = String(status == null ? '' : status).trim().toUpperCase();
+    if(!s) return 0;
+    if(/RTO|RETURN/.test(s)) return 5;
+    if(/CANCEL/.test(s)) return 4;
+    if(/DELIVER|EXCHANGE/.test(s)) return 3;
+    return 2;
+  }
+  function collapseReconRows(rows, orderIdx, statusIdx, skuIdx){
+    if(orderIdx == null || orderIdx < 0) return rows;
+    const best = new Map(), out = [];
+    rows.forEach(row => {
+      const id = String(row[orderIdx] ?? '').trim();
+      if(!id){ out.push(row); return; }
+      const k = id + '|' + String(row[skuIdx] ?? '').trim().toLowerCase();
+      const cur = best.get(k);
+      if(!cur || reconStatusRank(row[statusIdx]) > reconStatusRank(cur[statusIdx])) best.set(k, row);
+    });
+    return out.concat([...best.values()]);
+  }
   function reconCols(side){
     return side === 'buyer'
       ? { sold: 'buyerProcessedLabels', ret: 'buyerReturnedLabels' }
@@ -316,15 +356,16 @@
       soldExists[k] = (await u(uid).collection(cols.sold).doc(k).get()).exists;
       retExists[k] = (await u(uid).collection(cols.ret).doc(k).get()).exists;
     });
-    const soldInThisUpload = new Set();
-    linked.filter(r => !r.isReturn).forEach(r => {
-      if(soldExists[r.key]) r.status = 'already';
-      else { r.status = 'new'; soldInThisUpload.add(r.key); }
-    });
-    linked.filter(r => r.isReturn).forEach(r => {
-      if(retExists[r.key]) r.status = 'already';
-      else if(soldExists[r.key] || soldInThisUpload.has(r.key)) r.status = 'new';
-      else r.status = 'never-sold';
+    // A return no longer needs its sale to be on record: most returns in a
+    // month's report are for orders sold before that record existed, and
+    // requiring it wrongly skipped them. Cancellations — the case that rule
+    // was guarding — now count 0 anyway (reconStatusKind).
+    const seen = new Set();
+    linked.forEach(r => {
+      const done = r.isReturn ? retExists[r.key] : soldExists[r.key];
+      const dupKey = (r.isReturn ? 'R|' : 'S|') + r.key;
+      if(done || seen.has(dupKey)) r.status = 'already';   // counted before, or listed twice in this upload
+      else { r.status = 'new'; seen.add(dupKey); }
     });
     return rows;
   }
@@ -391,5 +432,5 @@
       <td>${badge(r.status)}</td></tr>`).join('');
   }
 
-  global.VLS = { SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce };
+  global.VLS = { reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce };
 })(window);
