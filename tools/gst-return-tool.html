@@ -1,9 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../billing/assets/vt-firebase-compat.js"></script>
 <script src="../billing/assets/firebase-config.js"></script>
 <script src="../billing/assets/user-menu.js"></script>
 <script src="assets/auth-guard.js"></script>
@@ -14,7 +13,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GST Return Ready File Generator — Amazon, Flipkart & Meesho | Visutra</title>
 <meta name="description" content="Free tool to convert your Amazon, Flipkart and Meesho sales reports into a GSTR-1 ready Excel file — B2B, B2CL, B2CS and HSN summary tables, generated entirely in your browser.">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.bunny.net/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -198,6 +197,10 @@
   footer a{color:#c7d0dc;}
   @media (prefers-reduced-motion: reduce){ *{scroll-behavior:auto!important;} }
 </style>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+<link rel="apple-touch-icon" href="/assets/app-icons/apple-touch-icon.png">
+<script src="/pwa.js" defer></script>
 </head>
 <body>
 
