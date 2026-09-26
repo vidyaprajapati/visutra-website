@@ -6,8 +6,12 @@
 <title>My Account | VISUTRA Billing</title>
 <meta name="robots" content="noindex, nofollow">
 <link rel="icon" href="../favicon.svg">
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.bunny.net/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/billing.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+<link rel="apple-touch-icon" href="/assets/app-icons/apple-touch-icon.png">
+<script src="/pwa.js" defer></script>
 </head>
 <body>
 
@@ -65,6 +69,13 @@
   </div>
 
   <div class="card">
+    <h2>Backup — Export All My Data</h2>
+    <p class="sub">Downloads everything stored under your account (products, invoices, stock, buyer data, settings) as one file. The free Supabase plan has no automatic backups, so do this regularly — e.g. once a week — and keep the file safe.</p>
+    <button class="btn" onclick="exportMyData()">Download backup (.json)</button>
+    <p class="msg" id="exportMsg"></p>
+  </div>
+
+  <div class="card">
     <h2>Buyer Features</h2>
     <p class="sub">Turn this on if you want to order from other VISUTRA sellers (like VISUTRA itself, or another supplier who's set up their own account here). Once enabled, give a seller your login email below and ask them to "Link" it from their Customers page — you'll then be able to see the products they've marked visible to you from <a href="buyer/my-sellers.html">My Sellers</a>.</p>
     <p>Status: <b id="buyerStatusText">Checking…</b></p>
@@ -76,9 +87,8 @@
 
 </div>
 
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="assets/vt-firebase-compat.js"></script>
 <script src="assets/firebase-config.js"></script>
 <script src="assets/user-menu.js"></script>
 <script>
@@ -224,6 +234,21 @@ async function linkPasswordCredential(password){
   await currentUser.linkWithCredential(cred);
 }
 
+async function exportMyData(){
+  showMsg('exportMsg', 'Preparing your backup…', true);
+  try{
+    const { data, error } = await firebase.supabase().rpc('vt_export_mine');
+    if(error) throw new Error(error.message);
+    const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), account: currentUser.email, records: data }, null, 1)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `visutra-backup-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    showMsg('exportMsg', `Backup downloaded — ${(data || []).length} records.`, true);
+  }catch(err){ showMsg('exportMsg', 'Could not create the backup: ' + err.message, false); }
+}
+
 async function changeEmail(){
   const newEmail = document.getElementById('newEmail').value.trim();
   const pw = document.getElementById('emailChangePw').value;
@@ -263,5 +288,6 @@ async function changePassword(){
   }
 }
 </script>
+<script src="assets/android-download.js"></script>
 </body>
 </html>

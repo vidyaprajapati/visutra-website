@@ -8,9 +8,8 @@
 <title>Sign in | VISUTRA GST Billing</title>
 <meta name="robots" content="noindex, nofollow">
 <link rel="icon" href="../favicon.svg">
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.bunny.net/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/billing.css">
-<script src="https://www.google.com/recaptcha/api.js" async defer></script>
 <style>
   .wrap{max-width:460px;margin:50px auto;padding:0 20px}
   .logo-row{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:26px}
@@ -26,6 +25,10 @@
   .verify-box{text-align:center;padding:20px 0}
   .g-recaptcha{margin:14px 0}
 </style>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+<link rel="apple-touch-icon" href="/assets/app-icons/apple-touch-icon.png">
+<script src="/pwa.js" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -37,11 +40,6 @@
       <button id="tabSignup" onclick="setMode('signup')">Sign Up</button>
     </div>
 
-    <button class="google-btn" onclick="googleAuth()">
-      <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84c-.21 1.13-.84 2.09-1.8 2.73v2.27h2.91c1.7-1.57 2.69-3.88 2.69-6.64z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.91-2.27c-.81.54-1.84.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33C2.44 15.98 5.48 18 9 18z"/><path fill="#FBBC05" d="M3.96 10.7c-.18-.54-.28-1.11-.28-1.7s.1-1.16.28-1.7V4.97H.96A8.99 8.99 0 000 9c0 1.45.35 2.83.96 4.03l3-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0 5.48 0 2.44 2.02.96 4.97l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/></svg>
-      Continue with Google
-    </button>
-    <div class="divider">or with email</div>
 
     <!-- SIGN IN fields -->
     <div id="signinFields">
@@ -74,7 +72,6 @@
       <div class="field"><label for="suPwConfirm">Confirm password</label><input type="password" id="suPwConfirm"></div>
     </div>
 
-    <div class="g-recaptcha" id="recaptchaBox" data-sitekey=""></div>
 
     <button class="btn primary" style="width:100%" id="submitBtn" onclick="submitAuth()">Sign In</button>
     <p style="text-align:center;margin-top:12px"><a href="#" id="forgotLink" onclick="forgotPassword();return false" style="font-size:13px">Forgot password?</a></p>
@@ -91,9 +88,8 @@
   </div>
 </div>
 
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="assets/vt-firebase-compat.js"></script>
 <script src="assets/firebase-config.js"></script>
 <script>
 let mode = 'signin';
@@ -104,21 +100,9 @@ function postLoginTarget(){
   return r ? decodeURIComponent(r) : 'app.html';
 }
 
-// Fill in the reCAPTCHA site key from config (kept out of the HTML so the
-// same placeholder pattern as the rest of the site config applies).
-document.addEventListener('DOMContentLoaded', () => {
-  const box = document.getElementById('recaptchaBox');
-  if(typeof RECAPTCHA_SITE_KEY !== 'undefined' && RECAPTCHA_SITE_KEY && RECAPTCHA_SITE_KEY.indexOf('PASTE_YOUR') !== 0){
-    box.setAttribute('data-sitekey', RECAPTCHA_SITE_KEY);
-  } else {
-    box.style.display = 'none'; // not configured yet — don't block the site owner during setup
-  }
-});
-function recaptchaOk(){
-  const box = document.getElementById('recaptchaBox');
-  if(box.style.display === 'none') return true; // not configured yet, fail open
-  return typeof grecaptcha !== 'undefined' && grecaptcha.getResponse() !== '';
-}
+// reCAPTCHA (a Google service) has been removed — Supabase Auth rate-limits
+// sign-in and sign-up attempts against bots.
+function recaptchaOk(){ return true; }
 
 function setMode(m){
   mode = m;
@@ -168,15 +152,6 @@ async function resolveEmailForSignin(identifier){
   return doc.data().email;
 }
 
-async function googleAuth(){
-  const provider = new firebase.auth.GoogleAuthProvider();
-  try{
-    const result = await auth.signInWithPopup(provider);
-    const complete = await ensureUserDoc(result.user);
-    window.location.href = complete ? postLoginTarget() : 'complete-profile.html?redirect=' + encodeURIComponent(postLoginTarget());
-  }catch(err){ showMsg(err.message, false); }
-}
-
 async function submitAuth(){
   if(!recaptchaOk()){ showMsg('Please confirm the "I\'m not a robot" checkbox.', false); return; }
 
@@ -200,8 +175,19 @@ async function submitAuth(){
 
     try{
       showMsg('Creating your account…', true);
-      const cred = await auth.createUserWithEmailAndPassword(email, pw);
       const location = await captureLocation();
+      // The details are kept with the account; the profile + username are
+      // saved at the first sign-in after the email is confirmed (Supabase
+      // doesn't sign the account in until then). If email confirmation is
+      // switched off in Supabase, it's signed in now and saved straight away.
+      const signupData = { fullName: name, businessType, mobileNumber: mobile, username, location: location || null };
+      const cred = await auth.createUserWithEmailAndPassword(email, pw, signupData);
+      if(!auth.currentUser){
+        document.getElementById('verifyEmail').textContent = email;
+        document.getElementById('authCard').classList.add('hidden');
+        document.getElementById('verifyCard').classList.remove('hidden');
+        return;
+      }
 
       await db.collection('users').doc(cred.user.uid).set({
         email, fullName: name, businessType, mobileNumber: mobile, username,
@@ -238,7 +224,17 @@ async function submitAuth(){
     if(!identifier || !pw){ showMsg('Enter your username/email and password.', false); return; }
     try{
       const email = await resolveEmailForSignin(identifier);
-      const cred = await auth.signInWithEmailAndPassword(email, pw);
+      let cred;
+      try{ cred = await auth.signInWithEmailAndPassword(email, pw); }
+      catch(err){
+        if(err.code === 'auth/email-not-verified'){
+          document.getElementById('verifyEmail').textContent = email;
+          document.getElementById('authCard').classList.add('hidden');
+          document.getElementById('verifyCard').classList.remove('hidden');
+          return;
+        }
+        throw err;
+      }
       if(!cred.user.emailVerified && cred.user.providerData.some(p=>p.providerId==='password')){
         await auth.signOut();
         document.getElementById('verifyEmail').textContent = email;
@@ -264,38 +260,14 @@ async function forgotPassword(){
 
 async function resendVerification(){
   const email = document.getElementById('verifyEmail').textContent;
-  const pw = document.getElementById('suPw').value || document.getElementById('siPw').value;
   const msgEl = document.getElementById('verifyMsg');
-  if(!pw){
-    msgEl.textContent = 'Enter your password in the sign-in form above, then try again — it\'s needed to confirm it\'s you before resending.';
-    msgEl.className = 'msg error';
-    return;
-  }
-  let cred = null;
   try{
-    cred = await auth.signInWithEmailAndPassword(email, pw);
-  }catch(err){
-    msgEl.textContent = `Could not sign in to resend (${err.message}). Double-check the password above.`;
-    msgEl.className = 'msg error';
-    return;
-  }
-  // Signing in above is only a means to get a fresh, sendable user object —
-  // this must never leave the browser authenticated if what follows fails,
-  // or a resend attempt would silently turn into an unverified active
-  // session instead of just an error message.
-  try{
-    await cred.user.sendEmailVerification();
+    await auth.resendVerificationEmail(email);
     msgEl.textContent = 'Verification email re-sent — check spam/junk if it doesn\'t arrive in a few minutes.';
     msgEl.className = 'msg ok';
   }catch(err){
-    // Surfaced verbatim rather than a generic message — "auth/too-many-requests"
-    // (Firebase's own cooldown between verification sends) is the single most
-    // common real cause when someone reports "the email never arrives," and a
-    // generic message would hide exactly that.
     msgEl.textContent = `Could not resend: ${err.message}`;
     msgEl.className = 'msg error';
-  }finally{
-    await auth.signOut();
   }
 }
 
@@ -305,24 +277,36 @@ async function ensureUserDoc(user){
   const ref = db.collection('users').doc(user.uid);
   const snap = await ref.get();
   if(!snap.exists){
+    // First sign-in after confirming the email: create the profile from the
+    // details typed on the sign-up form, and claim the username.
+    const su = user.signupData || {};
+    let username = su.username || '';
+    if(username){
+      try{
+        const taken = await db.collection('usernames').doc(username).get();
+        if(taken.exists) username = '';
+        else await db.collection('usernames').doc(username).set({ uid: user.uid, email: user.email });
+      }catch(e){ username = ''; }
+    }
+    const complete = !!(su.fullName && su.businessType && su.mobileNumber && username);
     await ref.set({
       email: user.email,
-      fullName: user.displayName || '',
-      businessName: '', gstin: '', address: '', state: '', stateCode: '', phone: '', signature: '',
-      businessType: '', mobileNumber: '', username: '', location: null,
-      profileComplete: false,
+      fullName: su.fullName || user.displayName || '',
+      businessName: '', gstin: '', address: '', state: '', stateCode: '', phone: su.mobileNumber || '', signature: '',
+      businessType: su.businessType || '', mobileNumber: su.mobileNumber || '', username, location: su.location || null,
+      profileComplete: complete,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    return false;
+    return complete;
   }
   return !!snap.data().profileComplete;
 }
 
 // If already signed in and verified, skip straight to the app (or profile completion).
 auth.onAuthStateChanged(async user => {
-  if(user && (user.emailVerified || user.providerData.some(p=>p.providerId==='google.com'))){
-    const snap = await db.collection('users').doc(user.uid).get();
-    const complete = snap.exists && snap.data().profileComplete;
+  if(user && user.emailVerified){
+    // Also runs when arriving from the email confirmation link.
+    const complete = await ensureUserDoc(user);
     window.location.href = complete ? postLoginTarget() : 'complete-profile.html?redirect=' + encodeURIComponent(postLoginTarget());
   }
 });
