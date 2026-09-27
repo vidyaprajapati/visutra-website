@@ -40,6 +40,16 @@
     <tbody id="stockTable"></tbody></table>
   </div>
 
+  <div class="card" id="buyerAnalysisCard">
+    <h2>📊 Stock Analysis</h2>
+    <p class="sub">How your buyer stock is moving: sales trend (printed labels + reconciliation), best sellers, days of stock left and what needs reordering.</p>
+    <div class="vt-analysis-bar">
+      <label style="font-size:13px;color:var(--muted)">Period</label>
+      <select id="buyerAnalysisDays" onchange="buyerRenderStockAnalysis()"><option value="30">Last 30 days</option><option value="60">Last 60 days</option><option value="90">Last 90 days</option></select>
+    </div>
+    <div id="buyerAnalysisBox"><p class="sub">Loading…</p></div>
+  </div>
+
   <div class="card" id="buyerSalesReorderCard">
         <h2>Reorder Suggestions — Sales Speed</h2>
         <p class="sub">Based on how fast each product actually sells (sales + printed labels + reconciliation uploads in the period you pick): how many days your stock lasts, and how much to order to cover the next few weeks. <b>Order now</b> = under 7 days left, <b>Soon</b> = under 14.</p>
@@ -123,6 +133,7 @@
 <script src="../assets/user-menu.js"></script>
 <script src="../assets/label-sku-extract.js"></script>
 <script src="../assets/label-stock-core.js"></script>
+<script src="../assets/stock-charts.js"></script>
 <script>
 let currentUser = null;
 // This buyer's ACTIVE Buyer SKU Master mappings — THIS is the buyer-side
@@ -162,6 +173,7 @@ auth.onAuthStateChanged(async user => {
   await loadStock();
   await loadReconciliationMap();
   buyerRenderSalesReorder();
+  buyerRenderStockAnalysis();
 
   const thisMonth = new Date().toISOString().slice(0,7);
   document.getElementById('stockReportFromMonth').value = thisMonth;
@@ -172,6 +184,23 @@ auth.onAuthStateChanged(async user => {
 });
 
 /* ---------------- Reorder suggestions from sales speed (shared: label-stock-core.js) ---------------- */
+/* ---------------- Stock Analysis charts (shared: stock-charts.js) ---------------- */
+async function buyerRenderStockAnalysis(){
+  const box = document.getElementById('buyerAnalysisBox');
+  if(!box || !currentUser || typeof VTStockCharts === 'undefined') return;
+  const days = parseInt(document.getElementById('buyerAnalysisDays').value, 10) || 30;
+  try{
+    const from = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+    const snap = await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').where('date', '>=', from).get();
+    const movements = snap.docs.map(d => { const m = d.data(); return { id: m.mappingId, type: m.type, qty: m.qty, date: m.date }; });
+    await VTStockCharts.render(box, {
+      days,
+      items: mySkuMappingsCache.filter(m => m.status !== 'INACTIVE').map(m => ({ id: m.id, name: m.productName, stock: m.stock || 0, reorderLevel: m.reorderLevel || 0 })),
+      movements
+    });
+  }catch(err){ console.error('Stock analysis failed:', err); box.innerHTML = '<p class="sub">Could not load the analysis: ' + esc(err.message) + '</p>'; }
+}
+
 async function buyerRenderSalesReorder(){
   const el = document.getElementById('buyerRoTable');
   if(!el || !currentUser) return;
@@ -698,6 +727,7 @@ async function applyStockUpload(){
   await loadStock();
   await loadReconciliationMap();
   buyerRenderSalesReorder();
+  buyerRenderStockAnalysis();
   await renderMonthlyStockReport();
 
   document.getElementById('stockColumnMapWrap').classList.add('hidden');
@@ -722,5 +752,6 @@ function showStockMsg(text, ok){
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 </script>
 <script src="../assets/android-download.js"></script>
+<script src="../assets/vt-excel.js"></script>
 </body>
 </html>
