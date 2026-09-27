@@ -1,5 +1,3 @@
-> **Outdated:** the shop admin no longer uses Google Apps Script — see SUPABASE-SETUP.md (step 4) and admin.html.
-
 # VISUTRA Admin Product Panel — Setup Guide
 
 This adds a password-protected admin page (`admin.html`) where you can add,
