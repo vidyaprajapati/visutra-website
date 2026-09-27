@@ -549,6 +549,7 @@ async function loadStockMovements(){
   // explicitly right after this call returns).
   if(document.getElementById('stockReportMonth')) await renderMonthlyStockReport();
   sellerRenderSalesReorder();
+  sellerRenderStockAnalysis();
 }
 
 /* ---------------- Monthly Stock Report (Opening / Closing + daily movement) ----------------
@@ -913,6 +914,23 @@ async function applyStockUpload(){
 }
 
 /* ---------------- Reorder suggestions from sales speed (shared: label-stock-core.js) ---------------- */
+/* ---------------- Stock Analysis charts (shared: stock-charts.js) ---------------- */
+async function sellerRenderStockAnalysis(){
+  const box = document.getElementById('sellerAnalysisBox');
+  if(!box || !currentUser || typeof VTStockCharts === 'undefined') return;
+  const days = parseInt(document.getElementById('sellerAnalysisDays').value, 10) || 30;
+  try{
+    const from = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+    const snap = await db.collection('users').doc(currentUser.uid).collection('stockMovements').where('date', '>=', from).get();
+    const movements = snap.docs.map(d => { const m = d.data(); return { id: m.productId, type: m.type, qty: m.qty, date: m.date }; });
+    await VTStockCharts.render(box, {
+      days, valueLabel: 'Stock value',
+      items: productsCache.map(p => ({ id: p.id, name: p.name, stock: p.stock || 0, reorderLevel: p.reorderLevel || 0, price: Number(p.price) || 0 })),
+      movements
+    });
+  }catch(err){ console.error('Stock analysis failed:', err); box.innerHTML = '<p class="sub">Could not load the analysis: ' + esc(err.message) + '</p>'; }
+}
+
 async function sellerRenderSalesReorder(){
   const el = document.getElementById('sellerRoTable');
   if(!el || !currentUser) return;
