@@ -157,6 +157,15 @@
 
     <!-- STOCK MANAGEMENT -->
     <div id="view-stock" class="view hidden">
+      <div class="card" id="sellerAnalysisCard">
+        <h2>📊 Stock Analysis</h2>
+        <p class="sub">How your stock is moving: sales trend, best sellers, days of stock left and what needs reordering. Updates whenever stock changes.</p>
+        <div class="vt-analysis-bar">
+          <label style="font-size:13px;color:var(--muted)">Period</label>
+          <select id="sellerAnalysisDays" onchange="sellerRenderStockAnalysis()"><option value="30">Last 30 days</option><option value="60">Last 60 days</option><option value="90">Last 90 days</option></select>
+        </div>
+        <div id="sellerAnalysisBox"><p class="sub">Loading…</p></div>
+      </div>
       <div class="card" id="reorderCard">
         <h2>Needs Reorder</h2>
         <p class="sub">Products at or below the reorder level you set in the Product Master, so this shows nothing until you set a level on at least one product.</p>
@@ -814,7 +823,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="assets/label-sku-extract.js"></script>
 <script src="assets/label-stock-core.js"></script>
+<script src="assets/stock-charts.js"></script>
 <script src="assets/billing-app.js"></script>
 <script src="assets/android-download.js"></script>
+<script src="assets/vt-excel.js"></script>
 </body>
 </html>
