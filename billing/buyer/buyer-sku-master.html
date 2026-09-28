@@ -51,7 +51,7 @@
     <p class="msg" id="productMsg"></p>
     <div class="box" style="margin-top:16px;padding:14px 16px;border:1.5px dashed var(--line,#E4D8BD);border-radius:10px">
       <b>Bulk — Excel</b>
-      <p class="sub" style="margin:4px 0 10px">Export all products with their SKUs, or add many at once from Excel. Columns: <b>Product Name</b> (required), My SKU, Amazon SKU(s), Meesho SKU(s), Flipkart SKU(s). Several SKUs in one cell (commas) <i>or</i> one row per SKU — rows with the same product name are combined. Import only <b>adds</b>: new products are created, new SKUs are added to existing products (matched by name or My SKU); nothing is removed. You see a preview before anything is saved.</p>
+      <p class="sub" style="margin:4px 0 10px">Export all products with their SKUs, or add many at once from Excel. Columns: <b>Product Name</b> (required), My SKU, Amazon SKU(s), Meesho SKU(s), Flipkart SKU(s), All-platform SKU(s). Several SKUs in one cell (commas) <i>or</i> one row per SKU — rows with the same product name are combined. Import only <b>adds</b>: new products are created, new SKUs are added to existing products (matched by name or My SKU); nothing is removed. You see a preview before anything is saved.</p>
       <button class="btn small" onclick="exportProductsXlsx()">⬇ Export products (Excel)</button>
       <button class="btn small" onclick="downloadProductsTemplate()">⬇ Blank template</button>
       <input type="file" id="bulkFile" accept=".xlsx,.xls,.csv" style="margin-left:8px">
@@ -89,6 +89,7 @@
       <div class="field"><label>Add Meesho SKU(s)</label><input id="mMeeshoSku" placeholder="New SKU(s) to add — e.g. MEE-WMC-001"></div>
       <div class="field"><label>Add Flipkart SKU(s)</label><input id="mFlipkartSku" placeholder="New SKU(s) to add — e.g. FLIP-WMC-001"></div>
     </div>
+    <div class="field"><label>Add SKU(s) for ALL platforms <span style="text-transform:none;color:var(--muted)">— same code on Amazon, Meesho and Flipkart</span></label><input id="mAllSku" placeholder="e.g. VST-WMC-7KG — matches labels and reports from every platform"></div>
     <div id="mExistingSkus" style="display:none;margin:4px 0 14px;padding:10px 12px;background:var(--ivory,#FBF6EC);border-radius:8px;font-size:13px"></div>
     <input type="hidden" id="mEditId">
     <button class="btn primary" onclick="saveMapping()">Save / Add SKUs</button>
@@ -616,7 +617,7 @@ async function loadMappings(){
    it's mapped to (name, My SKU, linked seller product). Product status and
    Edit / Deactivate / Delete sit on the product's first row. Each SKU can be switched Active/Inactive — inactive = kept on the
    product but ignored when reading labels. */
-const MK_LIST = [['AMAZON','Amazon','amazonSku'],['MEESHO','Meesho','meeshoSku'],['FLIPKART','Flipkart','flipkartSku']];
+const MK_LIST = [['ALL','All platforms','allSku'],['AMAZON','Amazon','amazonSku'],['MEESHO','Meesho','meeshoSku'],['FLIPKART','Flipkart','flipkartSku']];
 function skuRowsOf(m){
   const out = [];
   MK_LIST.forEach(([mk, label, field]) => splitSkuList(m[field]).forEach(sku => out.push({ mk, label, sku, off: isSkuInactive(m, mk, sku) })));
@@ -630,7 +631,7 @@ function renderMappings(){
     if(fSeller && sourceOf(m) !== fSeller) return false;
     if(fStatus && m.status !== fStatus) return false;
     if(search){
-      const hay = [m.sellerName, m.productName, m.sellerProductName, m.sellerSku, m.buyerSku, m.amazonSku, m.meeshoSku, m.flipkartSku].map(x => (x||'').toLowerCase()).join(' ');
+      const hay = [m.sellerName, m.productName, m.sellerProductName, m.sellerSku, m.buyerSku, m.amazonSku, m.meeshoSku, m.flipkartSku, m.allSku].map(x => (x||'').toLowerCase()).join(' ');
       if(!hay.includes(search)) return false;
     }
     return true;
@@ -718,17 +719,19 @@ async function saveMapping(){
   const typed = {
     amazonSku: splitSkuList(document.getElementById('mAmazonSku').value),
     meeshoSku: splitSkuList(document.getElementById('mMeeshoSku').value),
-    flipkartSku: splitSkuList(document.getElementById('mFlipkartSku').value)
+    flipkartSku: splitSkuList(document.getElementById('mFlipkartSku').value),
+    allSku: splitSkuList(document.getElementById('mAllSku').value)
   };
   // Only SKUs not already on this product are "new".
-  const added = { amazonSku: [], meeshoSku: [], flipkartSku: [] };
-  const LABEL = { amazonSku: 'Amazon', meeshoSku: 'Meesho', flipkartSku: 'Flipkart' };
-  for(const field of ['amazonSku','meeshoSku','flipkartSku']){
+  const added = { amazonSku: [], meeshoSku: [], flipkartSku: [], allSku: [] };
+  const LABEL = { amazonSku: 'Amazon', meeshoSku: 'Meesho', flipkartSku: 'Flipkart', allSku: 'All-platform' };
+  for(const field of SKU_FIELDS){
     for(const sku of typed[field]){
       if(skuListHas(prevDoc[field], sku)) continue; // already on this product
-      // A marketplace SKU can belong to only ONE product.
-      const other = mappingsCache.find(m => m.id !== editId && m.status === 'ACTIVE' && skuListHas(m[field], sku));
-      if(other){ showMsg('mappingMsg', `${LABEL[field]} SKU "${sku}" is already on "${other.productName}". Remove it there first.`, false); return; }
+      // A SKU can point to only ONE product on a given platform (an
+      // All-platform SKU counts for every platform).
+      const other = skuClashes(mappingsCache.filter(m => m.status === 'ACTIVE'), field, sku, editId)[0];
+      if(other){ showMsg('mappingMsg', `${LABEL[field]} SKU "${sku}" is already used by "${other.productName}"${field === 'allSku' ? ' (on at least one platform)' : ''}. Remove it there first.`, false); return; }
       added[field].push(sku);
     }
   }
@@ -761,24 +764,27 @@ async function saveMapping(){
     sellerId, sellerName, productId, sellerProductName, sellerSku,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  ['amazonSku','meeshoSku','flipkartSku'].forEach(f => {
+  SKU_FIELDS.forEach(f => {
     if(added[f].length) data[f] = joinSkuList([prevDoc[f] || '', ...added[f]].join(','));
   });
   await ref.set(data, {merge: true});
 
-  const newPairs = [['AMAZON','amazonSku'],['MEESHO','meeshoSku'],['FLIPKART','flipkartSku']].flatMap(([mk, f]) => added[f].map(x => [mk, x]));
+  const newPairs = [['AMAZON','amazonSku'],['MEESHO','meeshoSku'],['FLIPKART','flipkartSku']].flatMap(([mk, f]) => added[f].map(x => [mk, x]))
+    .concat(added.allSku.flatMap(x => [['AMAZON', x], ['MEESHO', x], ['FLIPKART', x]]));
   // One save resolves every queued occurrence of the SKU(s) it just added.
   await Promise.all(newPairs.map(([mk, x]) => resolveUnmappedIfMatching(mk, x)));
+  const addedList = SKU_FIELDS.flatMap(f => added[f].map(x => f === 'allSku' ? `${x} (all platforms)` : x));
+  const addedSkus = [...new Set(SKU_FIELDS.flatMap(f => added[f]))];
   // Labels printed in Label Cropper (Buyer) before these SKUs were mapped.
-  const late = await settleBuyerQueueFor({ ...prevDoc, ...data, id: editId, productName: name }, newPairs.map(([, x]) => x));
+  const late = await settleBuyerQueueFor({ ...prevDoc, ...data, id: editId, productName: name }, addedSkus);
 
-  const n = newPairs.length;
+  const n = addedList.length, typedAll = SKU_FIELDS.flatMap(f => typed[f]);
   showMsg('mappingMsg', n
-    ? `Added ${n} SKU${n === 1 ? '' : 's'} to "${name}": ${newPairs.map(([, x]) => x).join(', ')}.${late}`
-    : (typed.amazonSku.length + typed.meeshoSku.length + typed.flipkartSku.length)
-      ? `Nothing new — ${[...typed.amazonSku, ...typed.meeshoSku, ...typed.flipkartSku].join(', ')} ${typed.amazonSku.length + typed.meeshoSku.length + typed.flipkartSku.length === 1 ? 'is' : 'are'} already on "${name}". Link saved.`
+    ? `Added ${n} SKU${n === 1 ? '' : 's'} to "${name}": ${addedList.join(', ')}.${late}`
+    : typedAll.length
+      ? `Nothing new — ${typedAll.join(', ')} ${typedAll.length === 1 ? 'is' : 'are'} already on "${name}". Link saved.`
       : `Saved "${name}" (link updated — no SKUs typed).`, true);
-  ['mAmazonSku','mMeeshoSku','mFlipkartSku'].forEach(f => document.getElementById(f).value = '');
+  ['mAmazonSku','mMeeshoSku','mFlipkartSku','mAllSku'].forEach(f => document.getElementById(f).value = '');
   await loadMappings();
   await loadUnmapped();
   renderExistingSkus(editId); // keep the product selected, show its updated list
@@ -788,7 +794,7 @@ function renderExistingSkus(id){
   const box = document.getElementById('mExistingSkus');
   const m = mappingsCache.find(x => x.id === id);
   if(!m){ box.style.display = 'none'; box.innerHTML = ''; return; }
-  const groups = [['AMAZON','Amazon','amazonSku'],['MEESHO','Meesho','meeshoSku'],['FLIPKART','Flipkart','flipkartSku']]
+  const groups = [['ALL','All platforms','allSku'],['AMAZON','Amazon','amazonSku'],['MEESHO','Meesho','meeshoSku'],['FLIPKART','Flipkart','flipkartSku']]
     .map(([mk, label, f]) => {
       const list = splitSkuList(m[f]);
       if(!list.length) return '';
@@ -845,7 +851,7 @@ function editMapping(id, fromSelect){
   if(!fromSelect) document.getElementById('mappingFormCard').scrollIntoView({ behavior: 'smooth' });
 }
 function resetMappingForm(){
-  ['mEditId','mAmazonSku','mMeeshoSku','mFlipkartSku','mSellerSku','mSellerProductName'].forEach(f => document.getElementById(f).value = '');
+  ['mEditId','mAmazonSku','mMeeshoSku','mFlipkartSku','mAllSku','mSellerSku','mSellerProductName'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('mProductSel').value = '';
   renderExistingSkus(null);
   document.getElementById('mSeller').value = OWN_SOURCE;
@@ -858,9 +864,9 @@ function resetMappingForm(){
    Import only ADDS: creates products that don't exist yet and appends new
    marketplace SKUs to existing ones (matched by name, else My SKU). A SKU
    already on a different product is skipped and reported — never moved. */
-const BULK_HEADERS = ['Product Name', 'My SKU', 'Amazon SKU(s)', 'Meesho SKU(s)', 'Flipkart SKU(s)'];
+const BULK_HEADERS = ['Product Name', 'My SKU', 'Amazon SKU(s)', 'Meesho SKU(s)', 'Flipkart SKU(s)', 'All-platform SKU(s)'];
 function downloadProductsTemplate(){
-  const ws = XLSX.utils.aoa_to_sheet([BULK_HEADERS, ['Washing Machine Cover 7kg', '', '', 'VST-WFAT-7-8.5-FA34, VST-WFAT-7-8.5-FA32', '']]);
+  const ws = XLSX.utils.aoa_to_sheet([BULK_HEADERS, ['Washing Machine Cover 7kg', '', '', 'VST-WFAT-7-8.5-FA34, VST-WFAT-7-8.5-FA32', '', 'VST-WMC-7KG']]);
   ws['!cols'] = BULK_HEADERS.map(() => ({ wch: 32 }));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Products');
   XLSX.writeFile(wb, 'VISUTRA-products-template.xlsx');
@@ -869,6 +875,7 @@ function exportProductsXlsx(){
   const rows = mappingsCache.slice().sort((a,b) => String(a.productName||'').localeCompare(String(b.productName||''))).map(m => ({
     'Product Name': m.productName || '', 'My SKU': m.buyerSku || '',
     'Amazon SKU(s)': joinSkuList(m.amazonSku), 'Meesho SKU(s)': joinSkuList(m.meeshoSku), 'Flipkart SKU(s)': joinSkuList(m.flipkartSku),
+    'All-platform SKU(s)': joinSkuList(m.allSku),
     'Inactive SKUs': (m.inactiveSkus || []).join(', '),
     'Linked Seller': isOwnProduct(m) ? '' : (m.sellerName || ''), 'Seller Product': m.sellerProductName || '',
     'Stock': m.stock || 0, 'Status': m.status || ''
@@ -887,7 +894,8 @@ function bulkColIndex(headers){
     my: find(x => x.includes('my sku') || x.includes('own')),
     amazon: find(x => x.includes('amazon')),
     meesho: find(x => x.includes('meesho')),
-    flipkart: find(x => x.includes('flipkart'))
+    flipkart: find(x => x.includes('flipkart')),
+    all: find(x => x.includes('all-platform') || x.includes('all platform') || x === 'all' || x.startsWith('all '))
   };
 }
 async function previewBulkImport(){
@@ -909,40 +917,40 @@ async function previewBulkImport(){
     const name = String(r[col.name] || '').trim();
     if(!name) return;
     const k = name.toLowerCase();
-    if(!groups.has(k)) groups.set(k, { name, my: '', skus: { amazonSku: [], meeshoSku: [], flipkartSku: [] } });
+    if(!groups.has(k)) groups.set(k, { name, my: '', skus: { amazonSku: [], meeshoSku: [], flipkartSku: [], allSku: [] } });
     const g = groups.get(k);
     if(col.my >= 0 && String(r[col.my]).trim() && !g.my) g.my = String(r[col.my]).trim();
-    [['amazon','amazonSku'],['meesho','meeshoSku'],['flipkart','flipkartSku']].forEach(([c, field]) => {
+    [['amazon','amazonSku'],['meesho','meeshoSku'],['flipkart','flipkartSku'],['all','allSku']].forEach(([c, field]) => {
       if(col[c] >= 0) g.skus[field].push(...splitSkuList(r[col[c]]));
     });
   });
 
   // 2) Plan each product: create/update, SKUs to add, conflicts.
   const claimed = {}; // `${field}|sku` -> product name within this file
-  const LABEL = { amazonSku: 'Amazon', meeshoSku: 'Meesho', flipkartSku: 'Flipkart' };
+  const LABEL = { amazonSku: 'Amazon', meeshoSku: 'Meesho', flipkartSku: 'Flipkart', allSku: 'All-platform' };
   bulkPlan = [];
   for(const g of groups.values()){
     const existing = mappingsCache.find(m => String(m.productName||'').trim().toLowerCase() === g.name.toLowerCase())
       || (g.my ? mappingsCache.find(m => String(m.buyerSku||'').trim().toLowerCase() === g.my.toLowerCase()) : null);
-    const plan = { name: existing ? existing.productName : g.name, existing, setMy: '', add: { amazonSku: [], meeshoSku: [], flipkartSku: [] }, notes: [] };
+    const plan = { name: existing ? existing.productName : g.name, existing, setMy: '', add: { amazonSku: [], meeshoSku: [], flipkartSku: [], allSku: [] }, notes: [] };
     if(g.my){
       const myOwner = mappingsCache.find(m => String(m.buyerSku||'').trim().toLowerCase() === g.my.toLowerCase());
       if(myOwner && (!existing || myOwner.id !== existing.id)) plan.notes.push(`My SKU ${g.my} is already on "${myOwner.productName}"`);
       else if(existing && existing.buyerSku && existing.buyerSku.toLowerCase() !== g.my.toLowerCase()) plan.notes.push(`keeps existing My SKU ${existing.buyerSku}`);
       else if(!existing || !existing.buyerSku) plan.setMy = g.my;
     }
-    for(const field of ['amazonSku','meeshoSku','flipkartSku']){
+    for(const field of SKU_FIELDS){
       for(const sku of splitSkuList(g.skus[field].join(','))){
         const ck = field + '|' + sku.toLowerCase();
         if(existing && skuListHas(existing[field], sku)) continue; // already there
-        const owner = mappingsCache.find(m => skuListHas(m[field], sku) && (!existing || m.id !== existing.id));
+        const owner = skuClashes(mappingsCache, field, sku, existing ? existing.id : null)[0];
         if(owner){ plan.notes.push(`${LABEL[field]} ${sku} is on "${owner.productName}"`); continue; }
         if(claimed[ck] && claimed[ck] !== g.name){ plan.notes.push(`${LABEL[field]} ${sku} also listed for "${claimed[ck]}"`); continue; }
         claimed[ck] = g.name;
         plan.add[field].push(sku);
       }
     }
-    plan.addCount = plan.add.amazonSku.length + plan.add.meeshoSku.length + plan.add.flipkartSku.length;
+    plan.addCount = SKU_FIELDS.reduce((a, f) => a + plan.add[f].length, 0);
     plan.action = existing ? ((plan.addCount || plan.setMy) ? 'Update' : 'No change') : 'Create';
     bulkPlan.push(plan);
   }
@@ -955,7 +963,7 @@ async function previewBulkImport(){
     <td><b>${esc(p.name)}</b></td>
     <td><span class="badge${p.action === 'No change' ? ' off' : ' on'}">${p.action}</span></td>
     <td>${p.setMy ? `<code>${esc(p.setMy)}</code>` : '—'}</td>
-    <td style="font-size:12.5px">${['amazonSku','meeshoSku','flipkartSku'].filter(f => p.add[f].length).map(f => `${LABEL[f]}: ${p.add[f].map(esc).join(', ')}`).join('<br>') || '—'}</td>
+    <td style="font-size:12.5px">${SKU_FIELDS.filter(f => p.add[f].length).map(f => `${LABEL[f]}: ${p.add[f].map(esc).join(', ')}`).join('<br>') || '—'}</td>
     <td style="font-size:12.5px;color:#9E3608">${p.notes.map(esc).join('<br>')}</td></tr>`).join('');
   document.getElementById('bulkApplyBtn').disabled = !(creates || updates);
   document.getElementById('bulkPreview').style.display = 'block';
@@ -974,7 +982,7 @@ async function applyBulkImport(){
       if(p.existing){
         const upd = { updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
         if(p.setMy) upd.buyerSku = p.setMy;
-        ['amazonSku','meeshoSku','flipkartSku'].forEach(f => { if(p.add[f].length) upd[f] = joinSkuList([p.existing[f] || '', ...p.add[f]].join(',')); });
+        SKU_FIELDS.forEach(f => { if(p.add[f].length) upd[f] = joinSkuList([p.existing[f] || '', ...p.add[f]].join(',')); });
         await col.doc(p.existing.id).set(upd, { merge: true });
         mapping = { ...p.existing, ...upd };
         updated++;
@@ -984,6 +992,7 @@ async function applyBulkImport(){
           linkType: 'OWN', sellerId: currentUser.uid, sellerName: OWN_SELLER_NAME, productId: 'own_' + ref.id,
           productName: p.name, buyerSku: p.setMy || '', sellerProductName: '', sellerSku: '',
           amazonSku: joinSkuList(p.add.amazonSku.join(',')), meeshoSku: joinSkuList(p.add.meeshoSku.join(',')), flipkartSku: joinSkuList(p.add.flipkartSku.join(',')),
+          allSku: joinSkuList(p.add.allSku.join(',')),
           inactiveSkus: [], status: 'ACTIVE', stock: 0, reorderLevel: 0,
           createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
@@ -992,7 +1001,8 @@ async function applyBulkImport(){
         created++;
       }
       // Clear matching Unmapped SKUs and deduct labels already printed with them.
-      const pairs = [['AMAZON','amazonSku'],['MEESHO','meeshoSku'],['FLIPKART','flipkartSku']].flatMap(([mk, f]) => p.add[f].map(x => [mk, x]));
+      const pairs = [['AMAZON','amazonSku'],['MEESHO','meeshoSku'],['FLIPKART','flipkartSku']].flatMap(([mk, f]) => p.add[f].map(x => [mk, x]))
+        .concat(p.add.allSku.flatMap(x => [['AMAZON', x], ['MEESHO', x], ['FLIPKART', x]]));
       await Promise.all(pairs.map(([mk, x]) => resolveUnmappedIfMatching(mk, x)));
       const late = await settleBuyerQueueFor(mapping, pairs.map(([, x]) => x));
       if(late) lateLabels++;
@@ -1029,7 +1039,7 @@ function renderProductCatalog(){
   const list = mappingsCache.filter(m => !q || [m.productName, m.buyerSku].some(v => String(v||'').toLowerCase().includes(q)))
     .slice().sort((a,b) => String(a.productName||'').localeCompare(String(b.productName||'')));
   document.getElementById('productCatalogTable').innerHTML = list.map(m => {
-    const n = ['amazonSku','meeshoSku','flipkartSku'].reduce((a, f) => a + splitSkuList(m[f]).length, 0);
+    const n = SKU_FIELDS.reduce((a, f) => a + splitSkuList(m[f]).length, 0);
     return `<tr>
       <td><b>${esc(m.productName)}</b></td>
       <td>${m.buyerSku ? `<code>${esc(m.buyerSku)}</code>` : '<span style="color:var(--muted)">—</span>'}</td>
