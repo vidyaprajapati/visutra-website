@@ -124,8 +124,8 @@
 
     <div id="stockAggWrap" class="hidden" style="margin-top:18px">
       <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 2 — Match each product/SKU, then apply</h3>
-      <p class="sub">For Meesho/Flipkart sheets the status column decides: <b>DELIVERED / EXCHANGED = Sold</b> (stock down), <b>CANCELLED = not counted</b>, <b>anything else (RTO, RETURN, LOST…) = Returned</b> (stock up). Net is what actually changes stock.</p>
-      <table><thead><tr><th>From report</th><th>Sold</th><th>Returned</th><th title="Orders already counted by a printed label or an earlier upload — skipped so they aren't counted twice">Already counted (skipped)</th><th title="CANCELLED rows — not counted in stock">Cancelled (not counted)</th><th>Net Stock Change</th><th>Matches to</th></tr></thead>
+      <p class="sub"><b>Total orders − Returns = Actual sales</b>, and stock goes down by actual sales. Status column: <b>DELIVERED / EXCHANGED</b> = order, <b>CANCELLED</b> = not counted, <b>anything else (RTO, RETURN, LOST…)</b> = return. A return only adds stock back if that order was already deducted when it left (label printed / earlier upload); otherwise it simply isn't counted as a sale. Orders already counted before are not counted again.</p>
+      <table><thead><tr><th>From report</th><th title="Every order in the file except cancelled ones">Total orders</th><th title="Returned / RTO orders in the file">Returns</th><th title="Total orders − Returns">Actual sales</th><th title="Already counted earlier (printed label or an earlier upload) — not counted again">Already counted</th><th title="CANCELLED — not counted">Cancelled</th><th title="What your stock actually changes by now">Stock change</th><th>Matches to</th></tr></thead>
       <tbody id="stockAggTable"></tbody></table>
       <h3 style="font-family:var(--display);font-size:16px;margin:20px 0 6px">Step 3 — Check the product-wise summary, then apply</h3>
       <p class="sub">What this upload will do to each of your products for the chosen month — compare it with your own Excel before applying. <b>Already recorded</b> = sales/returns already in the system for that month (printed labels, earlier uploads, manual entries). <b>From this file</b> = only the new orders (ones already counted are skipped). Use the green <b>Excel</b> button to download this summary.</p>
@@ -658,81 +658,37 @@ function renderStockColumnMapUI(){
   });
 }
 async function aggregateStockUpload(){
-  const agg = new Map();
-  function bump(raw, qty, isReturn){
-    if(!raw) return;
-    const key = raw.toLowerCase();
-    if(!agg.has(key)) agg.set(key, { displayKey: raw, soldQty: 0, returnedQty: 0, alreadyQty: 0, cancelledQty: 0, linkedRows: [] });
-    const entry = agg.get(key);
-    if(isReturn) entry.returnedQty += qty; else entry.soldQty += qty;
-  }
-  const held = [];
-  // Cancelled rows: shown in their own column, never change stock.
-  function addCancelled(raw, qty){
-    bump(raw, 0, false);
-    agg.get(raw.toLowerCase()).cancelledQty += qty;
-  }
-  function hold(mk, raw, qty, isReturn, orderId){
-    if(orderId) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn });
-    else bump(raw, qty, isReturn);
-  }
+  // Total orders − Returns = Actual sales (shared engine: label-stock-core.js → reconAggregator)
+  const A = VLS.reconAggregator();
   stockUploadSheets.forEach((s, i) => {
-    if(s.detected && s.detected.format === 'meesho'){
-      const { reasonIdx, skuIdx, qtyIdx, orderIdx } = s.detected;
-      // One row per order: Meesho lists some orders twice (payment + later
-      // adjustment); keep the most final status (label-stock-core.js).
-      VLS.collapseReconRows(s.rows, orderIdx, reasonIdx, skuIdx).forEach(row => {
+    if(s.detected && (s.detected.format === 'meesho' || s.detected.format === 'flipkart-pnl')){
+      const mk = s.detected.format === 'meesho' ? 'MEESHO' : 'FLIPKART';
+      const { skuIdx, qtyIdx, orderIdx } = s.detected;
+      const statusIdx = s.detected.format === 'meesho' ? s.detected.reasonIdx : s.detected.statusIdx;
+      // Meesho lists some orders twice (payment + later adjustment) — one row per order.
+      const rows = mk === 'MEESHO' ? VLS.collapseReconRows(s.rows, orderIdx, statusIdx, skuIdx) : s.rows;
+      rows.forEach(row => {
         const sku = String(row[skuIdx] ?? '').trim();
         if(!sku) return;
         const qty = parseFloat(row[qtyIdx]) || 0;
-        const reason = String(row[reasonIdx] ?? '').trim();
         const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
-        // DELIVERED / EXCHANGED = sold, CANCELLED = 0, anything else = returned
-        // (shared rule: label-stock-core.js → reconStatusKind).
-        const kind = VLS.reconStatusKind(reason);
-        if(kind === 'sold') hold('MEESHO', sku, qty, false, orderId);
-        else if(kind === 'return') hold('MEESHO', sku, qty, true, orderId);
-        else if(kind === 'cancel') addCancelled(sku, qty);
-      });
-    } else if(s.detected && s.detected.format === 'flipkart-pnl'){
-      const { skuIdx, statusIdx, qtyIdx, orderIdx } = s.detected;
-      s.rows.forEach(row => {
-        const sku = String(row[skuIdx] ?? '').trim();
-        if(!sku) return;
-        const qty = parseFloat(row[qtyIdx]) || 0;
-        const status = String(row[statusIdx] ?? '').trim();
-        const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
-        const kind = VLS.reconStatusKind(status);
-        if(kind === 'sold') hold('FLIPKART', sku, qty, false, orderId);
-        else if(kind === 'return') hold('FLIPKART', sku, qty, true, orderId);
-        else if(kind === 'cancel') addCancelled(sku, qty);
+        // DELIVERED / EXCHANGED = order sold, CANCELLED = not counted, anything else = returned
+        const kind = VLS.reconStatusKind(String(row[statusIdx] ?? '').trim());
+        if(kind === 'sold') A.sold(sku, qty, mk, orderId);
+        else if(kind === 'return') A.ret(sku, qty, mk, orderId);
+        else if(kind === 'cancel') A.cancel(sku, qty);
       });
     } else {
       const prodIdx = parseInt(document.getElementById('stockColProd'+i).value, 10);
       const qtyIdx = parseInt(document.getElementById('stockColQty'+i).value, 10);
       s.rows.forEach(row => {
         const raw = String(row[prodIdx] ?? '').trim();
-        if(!raw) return;
-        bump(raw, parseFloat(row[qtyIdx]) || 0, false);
+        if(raw) A.sold(raw, parseFloat(row[qtyIdx]) || 0);
       });
     }
   });
-  if(held.length){
-    await VLS.linkReconRows(currentUser.uid, 'buyer', held);
-    held.forEach(r => {
-      if(!r.key || r.status === 'new'){
-        bump(r.sku, r.qty, r.isReturn);
-        if(r.key) agg.get(r.sku.toLowerCase()).linkedRows.push(r);
-      } else {
-        bump(r.sku, 0, false);
-        agg.get(r.sku.toLowerCase()).alreadyQty += r.qty;
-      }
-    });
-  }
-  stockAggregation = Array.from(agg.entries())
-    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, soldQty: v.soldQty, returnedQty: v.returnedQty, netChange: v.returnedQty - v.soldQty, alreadyQty: v.alreadyQty, cancelledQty: v.cancelledQty, linkedRows: v.linkedRows }))
-    .filter(r => r.soldQty !== 0 || r.returnedQty !== 0 || r.alreadyQty !== 0 || r.cancelledQty !== 0)
-    .sort((a,b) => Math.abs(b.netChange) - Math.abs(a.netChange));
+  stockAggregation = await A.finish(currentUser.uid, 'buyer');
+
   renderStockAggregationTable();
 }
 function renderStockAggregationTable(){
@@ -757,8 +713,9 @@ function renderStockAggregationTable(){
       : ' <span class="badge" title="No saved mapping yet — pick a product on the right">Unmapped</span>';
     return `<tr${known || auto ? '' : ' style="background:#FFF7ED"'}>
       <td>${esc(r.displayKey)}${tag}</td>
-      <td>${r.soldQty || 0}</td>
-      <td>${r.returnedQty || 0}</td>
+      <td>${r.orders || 0}</td>
+      <td>${r.returns || 0}</td>
+      <td><b>${r.actualSales || 0}</b></td>
       <td style="color:var(--muted)">${r.alreadyQty || 0}</td>
       <td style="color:var(--muted)">${r.cancelledQty || 0}</td>
       <td style="${netStyle}">${r.netChange > 0 ? '+' : ''}${r.netChange}</td>
@@ -775,22 +732,22 @@ async function renderReconSummary(){
   const month = document.getElementById('stockPeriod').value || new Date().toISOString().slice(0, 7);
   const movements = await ensureAllMovementsLoaded();
   const byProduct = new Map();
-  let skippedRows = 0, skippedUnits = 0;
+  let skippedRows = 0, skippedOrders = 0;
   stockAggregation.forEach((r, i) => {
     const sel = document.getElementById('stockAggMap' + i);
     const id = sel ? sel.value : '';
-    if(!id){ skippedRows++; skippedUnits += (r.soldQty || 0) + (r.returnedQty || 0); return; }
-    if(!byProduct.has(id)) byProduct.set(id, { sold: 0, returned: 0, already: 0, cancelled: 0, skus: [] });
+    if(!id){ skippedRows++; skippedOrders += r.orders || 0; return; }
+    if(!byProduct.has(id)) byProduct.set(id, { orders: 0, returns: 0, actual: 0, soldAlready: 0, stockOut: 0, addBack: 0, cancelled: 0, skus: [] });
     const p = byProduct.get(id);
-    p.sold += r.soldQty || 0; p.returned += r.returnedQty || 0; p.already += r.alreadyQty || 0; p.cancelled += r.cancelledQty || 0;
-    p.skus.push(r.displayKey);
+    p.orders += r.orders || 0; p.returns += r.returns || 0; p.actual += r.actualSales || 0; p.soldAlready += r.soldAlready || 0;
+    p.stockOut += r.soldQty || 0; p.addBack += r.returnedQty || 0; p.cancelled += r.cancelledQty || 0; p.skus.push(r.displayKey);
   });
   const rows = [...byProduct.entries()].map(([id, u]) => {
     const m = mySkuMappingsCache.find(x => x.id === id);
     if(!m) return null;
     const f = monthFigures(m, month, movements);
-    const net = u.returned - u.sold;
-    return { name: m.productName, skus: u.skus, f, u, net, closingAfter: f.closing + net, stockAfter: (Number(m.stock) || 0) + net };
+    const change = u.addBack - u.stockOut;
+    return { name: m.productName, skus: u.skus, f, u, change, closingAfter: f.closing + change, stockAfter: (Number(m.stock) || 0) + change };
   }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
   if(!rows.length){ box.innerHTML = '<p class="sub">No report SKU is matched to a product yet — pick products in the table above.</p>'; return; }
   const T = k => rows.reduce((s, r) => s + k(r), 0);
@@ -798,23 +755,24 @@ async function renderReconSummary(){
   box.innerHTML = `
     <table data-excel-name="Reconciliation summary ${month}"><thead><tr>
       <th>Product</th><th>Report SKUs</th><th>Opening (1st)</th>
-      <th>Sold — already recorded</th><th>Sold — from this file</th><th>Sold — month total</th>
-      <th>Returned — already recorded</th><th>Returned — from this file</th><th>Returned — month total</th>
-      <th>Skipped (already counted / cancelled)</th><th>Stock change now</th><th>Closing (month end)</th><th>Stock today after apply</th>
+      <th>Total orders</th><th>− Returns</th><th>= Actual sales</th>
+      <th title="Part of the actual sales already deducted earlier (labels printed / earlier upload)">Already deducted</th>
+      <th title="Actual sales deducted now">Deduct now</th>
+      <th title="Returns of orders that were deducted when they left — the item is back in stock">Returns back in stock</th>
+      <th>Stock change</th><th>Closing (month end)</th><th>Stock today after apply</th>
     </tr></thead><tbody>
     ${rows.map(r => `<tr>
       <td><b>${esc(r.name)}</b></td><td style="font-size:12px">${r.skus.map(esc).join('<br>')}</td><td>${r.f.opening}</td>
-      <td>${r.f.sold}</td><td>${r.u.sold}</td><td><b>${r.f.sold + r.u.sold}</b></td>
-      <td>${r.f.returned}</td><td>${r.u.returned}</td><td><b>${r.f.returned + r.u.returned}</b></td>
-      <td style="color:var(--muted)">${r.u.already} / ${r.u.cancelled}</td>
-      <td style="color:${r.net < 0 ? 'var(--paprika-dark)' : r.net > 0 ? '#0E7C6B' : 'inherit'}"><b>${sign(r.net)}</b></td>
+      <td>${r.u.orders}</td><td>${r.u.returns}</td><td><b>${r.u.actual}</b></td>
+      <td style="color:var(--muted)">${r.u.soldAlready}</td><td>${r.u.stockOut}</td><td>${r.u.addBack}</td>
+      <td style="color:${r.change < 0 ? 'var(--paprika-dark)' : r.change > 0 ? '#0E7C6B' : 'inherit'}"><b>${sign(r.change)}</b></td>
       <td><b>${r.closingAfter}</b></td><td>${r.stockAfter}</td></tr>`).join('')}
     <tr style="font-weight:700;background:var(--head-bg,#FAF6EF)"><td>Total</td><td></td><td>${T(r => r.f.opening)}</td>
-      <td>${T(r => r.f.sold)}</td><td>${T(r => r.u.sold)}</td><td>${T(r => r.f.sold + r.u.sold)}</td>
-      <td>${T(r => r.f.returned)}</td><td>${T(r => r.u.returned)}</td><td>${T(r => r.f.returned + r.u.returned)}</td>
-      <td>${T(r => r.u.already)} / ${T(r => r.u.cancelled)}</td><td>${sign(T(r => r.net))}</td><td>${T(r => r.closingAfter)}</td><td>${T(r => r.stockAfter)}</td></tr>
+      <td>${T(r => r.u.orders)}</td><td>${T(r => r.u.returns)}</td><td>${T(r => r.u.actual)}</td>
+      <td>${T(r => r.u.soldAlready)}</td><td>${T(r => r.u.stockOut)}</td><td>${T(r => r.u.addBack)}</td>
+      <td>${sign(T(r => r.change))}</td><td>${T(r => r.closingAfter)}</td><td>${T(r => r.stockAfter)}</td></tr>
     </tbody></table>
-    ${skippedRows ? `<p class="sub" style="margin-top:6px">⚠ ${skippedRows} report SKU(s) set to "Skip" (${skippedUnits} units) are not included.</p>` : ''}`;
+    <p class="sub" style="margin-top:6px">Check: <b>Actual sales = Already deducted + Deduct now</b>. Stock change = − Deduct now + Returns back in stock.${skippedRows ? ` ⚠ ${skippedRows} report SKU(s) set to "Skip" (${skippedOrders} orders) are not included.` : ''}</p>`;
 }
 async function applyStockUpload(){
   const period = document.getElementById('stockPeriod').value || new Date().toISOString().slice(0,7);
