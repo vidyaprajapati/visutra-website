@@ -170,7 +170,7 @@ async function addNewSupplier(){
 // cut typos; a rate outside this list (already saved on an old line, or a
 // genuinely unusual one) still shows correctly via the extra option
 // appended in renderLineItems() below, it just won't be one of the presets.
-const GST_RATE_OPTIONS = [0, 0.25, 3, 5, 12, 18, 28];
+const GST_RATE_OPTIONS = [0, 0.25, 3, 5, 12, 18, 28, 40]; // 40% = new GST slab
 
 function addLineItem(){
   lineItems.push({ name: '', qty: 1, rate: 0, gstRate: 0, priceMode: 'excl', linkedSkuMappingId: null });
