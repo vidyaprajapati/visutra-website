@@ -38,6 +38,7 @@
     <div class="grid2">
       <div class="field"><label>Supplier</label><select id="pSupplier" onchange="onSupplierChange()"><option value="">Select supplier…</option></select></div>
       <div class="field"><label>Purchase date</label><input id="pDate" type="date"></div>
+      <div class="field"><label>Supplier invoice no. <span style="text-transform:none;color:var(--muted)">(for GSTR-2B matching)</span></label><input id="pInvoiceNo" placeholder="e.g. TC/0045" maxlength="16"></div>
     </div>
 
     <div class="card" id="newSupplierCard" style="display:none;background:var(--ivory);margin:14px 0">
@@ -287,6 +288,7 @@ async function savePurchase(){
   const purchaseData = {
     supplierId, supplierName: supplier.name,
     date,
+    invoiceNo: ((document.getElementById('pInvoiceNo') || {}).value || '').trim(),
     items: validItems.map(li => {
       const taxable = lineTaxable(li);
       const gstAmt = taxable * (li.gstRate||0) / 100;

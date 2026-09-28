@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GSTR-1 Filing | VISUTRA Billing</title>
+<title>GST — Purchases &amp; ITC | VISUTRA</title>
 <meta name="robots" content="noindex, nofollow">
 <link rel="icon" href="../../favicon.svg">
 <link href="https://fonts.bunny.net/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -33,8 +33,18 @@
     <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first, then get linked by a seller from their Customers page.</p>
   </div>
 
+  <div class="card" id="itcCard" style="display:none">
+    <h2>🧾 ITC &amp; GSTR-2B Reconciliation — <span id="itcPeriod"></span></h2>
+    <p class="sub">Input tax credit (ITC) from these purchases, for your GSTR-3B Table 4. Purchases from suppliers <b>with a GSTIN</b> are eligible; others are not. Then match with <b>GSTR-2B</b> (GST portal → Returns → GSTR-2B → Download JSON or Excel): claim ITC only for what your suppliers actually filed.</p>
+    <div class="vt-kpis" id="itcKpis"></div>
+    <div class="row-actions" style="margin-bottom:8px"><button class="btn" onclick="downloadBuyerItcExcel()">⬇ ITC summary (Excel)</button></div>
+    <div class="row-actions"><input type="file" id="buyer2bFile" accept=".json,.xlsx,.xls"><button class="btn primary" onclick="runBuyer2bReconcile()">Reconcile with GSTR-2B</button></div>
+    <p class="msg" id="buyer2bMsg"></p>
+    <div id="buyer2bResult"></div>
+  </div>
+
   <div class="card">
-    <h2>GSTR-1 Filing — Purchases from Sellers</h2>
+    <h2>GST — Purchases &amp; Input Tax Credit (ITC)</h2>
     <p class="sub">Compiles <b>every</b> purchase received from any linked seller (auto-created here the moment they accept your order) into one GST-rate-wise register for the period below — your <b>inward</b> supply data, for return/ITC prep. Note: the GST portal doesn't accept a direct upload of purchase/inward data — your ITC is auto-populated from your sellers' own GSTR-1 filings (via 2A/2B). The JSON here is for your own records or your accountant, not a portal upload.</p>
     <div class="grid3">
       <div class="field"><label>Financial Year</label><select id="gFY" onchange="onFYChange()"></select></div>
@@ -95,6 +105,7 @@
 <script src="../assets/vt-firebase-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="../assets/gst-returns.js"></script>
 <script>
 let currentUser = null;
 let purchasesCache = [];
@@ -194,7 +205,9 @@ auth.onAuthStateChanged(async user => {
 
   populateFY();
 
-  const purSnap = await db.collection('users').doc(currentUser.uid).collection('purchases').where('autoCreatedFromOrder', '==', true).get();
+  // Buyer purchases live in buyerPurchases (since the buyer/seller data split):
+  // manual Purchase Entry, imports and accepted seller orders — all of them.
+  const purSnap = await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').get();
   purchasesCache = purSnap.docs.map(d => ({id:d.id, ...d.data()}));
   const ppSnap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').get();
   purchaseProductsCache = ppSnap.docs.map(d => ({id: d.id, ...d.data()}));
@@ -214,17 +227,19 @@ function generateReport(){
 
   reportRows = filtered.map(p => ({
     id: p.id, date: p.date, supplierName: p.supplierName || 'Unknown seller', orderNumber: p.orderNumber || '',
+    supplierId: p.supplierId || '', sellerUid: p.sellerUid || '', invoiceNo: p.invoiceNo || p.sellerInvoiceNo || '',
     taxable: p.subtotal || 0, gst: p.gstTotal || 0, total: p.grandTotal || 0, items: p.items || [], gstFiled: !!p.gstFiled
   }));
 
   const msgEl = document.getElementById('pageMsg');
   if(!reportRows.length){
-    msgEl.textContent = 'No purchases from sellers found for this period.';
+    msgEl.textContent = 'No purchases found for this period.';
     msgEl.className = 'msg error';
     ['totalsCard','rateCard','registerCard','markFiledCard'].forEach(id => document.getElementById(id).classList.add('hidden'));
     return;
   }
   msgEl.textContent = `${reportRows.length} purchase(s) in ${period.label}.`;
+  renderBuyerItc(period.label);
   msgEl.className = 'msg ok';
   document.getElementById('periodLabel').textContent = period.label;
   document.getElementById('markFiledPeriodLabel').textContent = period.label;
@@ -329,6 +344,71 @@ function exportJson(){
   URL.revokeObjectURL(url);
 }
 
+/* ================= ITC + GSTR-2B (shared engine: gst-returns.js) ================= */
+let buyerSupplierGstin = null, buyerOwnState = '', buyerItcRes = null, buyerBooks = [];
+async function loadBuyerGstContext(){
+  if(buyerSupplierGstin) return;
+  buyerSupplierGstin = {};
+  const uid = currentUser.uid;
+  try{
+    const me = await db.collection('users').doc(uid).get();
+    const d = me.exists ? me.data() : {};
+    buyerOwnState = String(d.stateCode || (d.gstin || '').slice(0, 2) || '').padStart(2, '0');
+    const sup = await db.collection('users').doc(uid).collection('buyerSuppliers').get();
+    sup.docs.forEach(x => { buyerSupplierGstin[x.id] = (x.data().gstin || '').trim().toUpperCase(); });
+  }catch(e){ console.warn('GST context:', e); }
+}
+async function renderBuyerItc(periodLabel){
+  if(typeof VTGst === 'undefined') return;
+  await loadBuyerGstContext();
+  buyerBooks = reportRows.map(r => ({ id: r.id, ctin: buyerSupplierGstin[r.supplierId] || '', name: r.supplierName, no: r.invoiceNo || '', date: r.date, taxable: r.taxable, tax: r.gst, items: r.items }));
+  const purchases = buyerBooks.map(b => ({ date: b.date, gstin: b.ctin, inter: !!b.ctin && b.ctin.slice(0, 2) !== buyerOwnState,
+    items: (b.items || []).map(li => ({ rate: Number(li.gstRate) || 0, taxable: Number(li.taxable) || 0 })) }));
+  buyerItcRes = VTGst.buildGstr3b([], purchases, { gstin: '', period: new Date().toISOString().slice(0, 7) });
+  const e = buyerItcRes.json.itc_elg, k = (l, v, a) => `<div class="vt-kpi" style="--kpi-accent:${a}"><div class="k-label">${l}</div><div class="k-value" style="font-size:20px">${v}</div></div>`;
+  document.getElementById('itcKpis').innerHTML = k('Eligible ITC — IGST', '₹' + fmtMoney(e.itc_net.iamt), '#0E9F8E') + k('Eligible ITC — CGST', '₹' + fmtMoney(e.itc_net.camt), '#16A34A') +
+    k('Eligible ITC — SGST', '₹' + fmtMoney(e.itc_net.samt), '#D97706') + k('Not eligible (no supplier GSTIN)', '₹' + fmtMoney(e.itc_inelg[1].iamt + e.itc_inelg[1].camt + e.itc_inelg[1].samt), '#DC2626');
+  document.getElementById('itcPeriod').textContent = periodLabel;
+  document.getElementById('itcCard').style.display = reportRows.length ? 'block' : 'none';
+}
+function downloadBuyerItcExcel(){
+  if(!buyerItcRes) return;
+  const e = buyerItcRes.json.itc_elg;
+  const aoa = [['GSTR-3B Table 4 — ITC from purchases', '', 'Integrated tax', 'Central tax', 'State/UT tax', 'Cess'],
+    ['(A)(5) All other ITC (suppliers with GSTIN)', '', e.itc_avl[4].iamt, e.itc_avl[4].camt, e.itc_avl[4].samt, e.itc_avl[4].csamt],
+    ['(C) Net ITC available', '', e.itc_net.iamt, e.itc_net.camt, e.itc_net.samt, e.itc_net.csamt],
+    ['(D)(2) Ineligible (supplier without GSTIN)', '', e.itc_inelg[1].iamt, e.itc_inelg[1].camt, e.itc_inelg[1].samt, e.itc_inelg[1].csamt], [],
+    ['Date', 'Supplier', 'Supplier GSTIN', 'Invoice no.', 'Taxable', 'GST']].concat(buyerBooks.map(b => [b.date, b.name, b.ctin, b.no, b.taxable, b.tax]));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'ITC');
+  XLSX.writeFile(wb, `ITC-Summary-${reportFileTag}.xlsx`);
+}
+async function runBuyer2bReconcile(){
+  const f = document.getElementById('buyer2bFile').files[0], msg = document.getElementById('buyer2bMsg');
+  if(!f){ msg.textContent = 'Choose the GSTR-2B file downloaded from the GST portal first.'; msg.className = 'msg error'; return; }
+  try{
+    const twoB = f.name.toLowerCase().endsWith('.json') ? VTGst.parse2bJson(JSON.parse(await f.text())) : VTGst.parse2bWorkbook(XLSX, XLSX.read(await f.arrayBuffer(), { type: 'array' }));
+    if(!twoB.length){ msg.textContent = 'No invoices found in that file — is it the GSTR-2B JSON/Excel from the portal?'; msg.className = 'msg error'; return; }
+    const rec = VTGst.reconcile(buyerBooks, twoB);
+    renderBuyer2b(rec);
+    msg.textContent = `Read ${twoB.length} document(s) from GSTR-2B and ${buyerBooks.length} purchase(s) from your books.`; msg.className = 'msg ok';
+  }catch(err){ msg.textContent = 'Could not read the file: ' + err.message; msg.className = 'msg error'; }
+}
+function renderBuyer2b(rec){
+  const S = rec.summary, label = { matched: ['Matched', 'ok'], mismatch: ['Amount differs', 'warn'], 'missing-in-2b': ['Not in GSTR-2B (supplier not filed)', 'bad'],
+    'missing-in-books': ['Missing in your purchases', 'warn'], 'no-gstin': ['No supplier GSTIN', 'off'] };
+  const money = n => n == null ? '' : '₹' + fmtMoney(n);
+  document.getElementById('buyer2bResult').innerHTML = `
+    <div class="vt-kpis">${[['Matched', S.matched, '#16A34A'], ['Amount differs', S.mismatch, '#D97706'], ['Not in 2B', S['missing-in-2b'], '#DC2626'], ['Missing in books', S['missing-in-books'], '#D97706'], ['ITC you can claim', money(S.itcClaimable), '#2E4374']]
+      .map(([l, v, a]) => `<div class="vt-kpi" style="--kpi-accent:${a}"><div class="k-label">${l}</div><div class="k-value" style="font-size:20px">${v}</div></div>`).join('')}</div>
+    <table data-excel-name="GSTR-2B reconciliation"><thead><tr><th>Status</th><th>Supplier GSTIN</th><th>Supplier</th><th>Your entry</th><th>GSTR-2B document</th><th>Taxable (yours)</th><th>Taxable (2B)</th><th>Tax (yours)</th><th>Tax (2B)</th></tr></thead><tbody>
+    ${rec.rows.map(r => { const b = r.book || {}, x = r.twoB || {}; const tax2b = r.twoB ? VTGst.r2(x.igst + x.cgst + x.sgst) : null;
+      return `<tr><td><span class="badge ${label[r.status][1]}">${label[r.status][0]}</span>${r.how ? `<div style="font-size:11px;color:var(--muted)">by ${r.how}</div>` : ''}</td>
+        <td><code>${esc(b.ctin || x.ctin || '')}</code></td><td>${esc(b.name || x.name || '')}</td>
+        <td>${r.book ? `${esc(b.no || '—')} · ${esc(b.date)}` : ''}</td><td>${r.twoB ? `${esc(x.no)} · ${esc(x.date)}${x.type !== 'Invoice' ? ' (' + x.type + ')' : ''}` : ''}</td>
+        <td>${money(r.book ? b.taxable : null)}</td><td>${money(r.twoB ? x.taxable : null)}</td><td>${money(r.book ? b.tax : null)}</td><td>${money(tax2b)}</td></tr>`; }).join('')}
+    </tbody></table>`;
+}
+
 function parseLocalDate(s){ const [y,m,d] = (s||'1970-01-01').split('-').map(Number); return new Date(y, m-1, d); }
 function fix2(n){ return Math.round((n||0)*100)/100; }
 /* Deleting a purchase here means the same thing as on the Seller side: soft
@@ -373,7 +453,7 @@ async function deletePurchase(id){
         }
       }
     }
-    await db.collection('users').doc(currentUser.uid).collection('purchases').doc(id).delete();
+    await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').doc(id).delete();
     purchasesCache = purchasesCache.filter(p => p.id !== id);
     generateReport();
   }catch(err){
@@ -391,7 +471,7 @@ async function markPeriodAsFiled(){
   msgEl.textContent = 'Marking period as filed…';
   msgEl.className = 'msg ok';
   try{
-    const col = db.collection('users').doc(currentUser.uid).collection('purchases');
+    const col = db.collection('users').doc(currentUser.uid).collection('buyerPurchases');
     for(let i = 0; i < ids.length; i += 400){
       const batch = db.batch();
       ids.slice(i, i + 400).forEach(id => {
