@@ -434,7 +434,7 @@ async function deletePurchase(id){
             stock: firebase.firestore.FieldValue.increment(-li.qty)
           }).catch(err => console.error(`Stock reversal failed for ${li.linkedProductId}:`, err));
           await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
-            type: 'purchase-in', productId: li.linkedProductId, qty: -li.qty, date: new Date().toISOString().slice(0,10),
+            type: 'purchase-in', productId: li.linkedProductId, qty: -li.qty, date: (purchase && purchase.date) || new Date().toISOString().slice(0,10),
             note: `Reversed: deleted purchase dated ${purchase.date}`,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
           });
@@ -446,7 +446,7 @@ async function deletePurchase(id){
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           }).catch(err => console.error(`Stock reversal failed for mapping ${li.linkedSkuMappingId}:`, err));
           await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
-            type: 'purchase-in', mappingId: li.linkedSkuMappingId, productName: li.name, qty: -li.qty, date: new Date().toISOString().slice(0,10),
+            type: 'purchase-in', mappingId: li.linkedSkuMappingId, productName: li.name, qty: -li.qty, date: (purchase && purchase.date) || new Date().toISOString().slice(0,10),
             note: `Reversed: deleted purchase dated ${purchase.date}`,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
           });

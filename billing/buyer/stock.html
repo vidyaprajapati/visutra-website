@@ -83,9 +83,16 @@
 
   <div class="card">
     <h2>Manual Monthly Sell &amp; Return Update</h2>
-    <p class="sub">No report file to upload? Type in the numbers directly for a month — a sale reduces stock, a return adds it back. This writes the same kind of movement the file upload below does, just entered by hand.</p>
-    <div class="field" style="max-width:220px"><label>Month</label><input id="manualSrMonth" type="month"></div>
-    <table style="margin-top:10px"><thead><tr><th>Product</th><th>Sold Qty</th><th>Returned Qty</th><th></th></tr></thead>
+    <p class="sub">No report file? Type the month's numbers from your own sheet. <b>Month totals</b> (recommended): enter the month's <b>total</b> sold and returned per product — sales already recorded for that month (printed labels, uploads, earlier entries) are subtracted, so <b>only the difference is applied</b> and nothing is counted twice; applying again changes nothing. <b>Add quantities</b>: the numbers are added on top of what's recorded.</p>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:end">
+      <div class="field" style="max-width:220px;margin:0"><label>Month</label><input id="manualSrMonth" type="month" onchange="refreshManualSrRows()"></div>
+      <div class="field" style="margin:0"><label>How to apply</label>
+        <select id="manualSrMode" onchange="refreshManualSrRows()">
+          <option value="total">Month totals — apply only the difference (recommended)</option>
+          <option value="add">Add these quantities on top of what's recorded</option>
+        </select></div>
+    </div>
+    <table style="margin-top:12px"><thead><tr><th>Product</th><th title="Already recorded for this month: printed labels, reconciliation uploads, earlier manual entries">Already recorded<br>sold / returned</th><th id="manualSrSoldHead">Sold — month total</th><th id="manualSrRetHead">Returned — month total</th><th>Will change stock by</th><th></th></tr></thead>
     <tbody id="manualSrTable"></tbody></table>
     <button class="btn small" style="margin-top:10px" onclick="addManualSrRow()">+ Add product</button>
     <br><button class="btn primary" style="margin-top:14px" onclick="applyManualSr()">Apply to Stock</button>
@@ -104,7 +111,7 @@
     <p class="sub">If you resell what you buy from sellers on your own Meesho/Flipkart shop, upload the report(s) you download for the month here to keep this stock accurate. Everything is read in your browser only. Meesho and Flipkart reports are recognised automatically by their columns — delivered items reduce stock, and cancelled/RTO/returned items add stock back, since those physically come back to you. Other formats fall back to treating every row as a sale. Each row is matched to one of your Buyer SKU Master products above (not the Seller/Billing side's Products) — the first time you upload, you'll map each SKU to one of them once, remembered automatically for future months.</p>
     <div class="grid2">
       <div class="field"><label>Report files (.csv, .xlsx, .xls) — you can select more than one</label><input id="stockFiles" type="file" multiple accept=".csv,.xlsx,.xls"></div>
-      <div class="field"><label>Month this report covers</label><input id="stockPeriod" type="month"></div>
+      <div class="field"><label>Month this report covers</label><input id="stockPeriod" type="month" onchange="renderReconSummary()"></div>
     </div>
     <button class="btn" onclick="parseStockFiles()">Read Files</button>
     <p class="msg" id="stockUploadMsg"></p>
@@ -120,6 +127,9 @@
       <p class="sub">For Meesho/Flipkart sheets the status column decides: <b>DELIVERED / EXCHANGED = Sold</b> (stock down), <b>CANCELLED = not counted</b>, <b>anything else (RTO, RETURN, LOST…) = Returned</b> (stock up). Net is what actually changes stock.</p>
       <table><thead><tr><th>From report</th><th>Sold</th><th>Returned</th><th title="Orders already counted by a printed label or an earlier upload — skipped so they aren't counted twice">Already counted (skipped)</th><th title="CANCELLED rows — not counted in stock">Cancelled (not counted)</th><th>Net Stock Change</th><th>Matches to</th></tr></thead>
       <tbody id="stockAggTable"></tbody></table>
+      <h3 style="font-family:var(--display);font-size:16px;margin:20px 0 6px">Step 3 — Check the product-wise summary, then apply</h3>
+      <p class="sub">What this upload will do to each of your products for the chosen month — compare it with your own Excel before applying. <b>Already recorded</b> = sales/returns already in the system for that month (printed labels, earlier uploads, manual entries). <b>From this file</b> = only the new orders (ones already counted are skipped). Use the green <b>Excel</b> button to download this summary.</p>
+      <div id="reconSummaryBox"></div>
       <button class="btn primary" style="margin-top:14px" onclick="applyStockUpload()">Apply &amp; Update Stock</button>
     </div>
   </div>
@@ -416,12 +426,38 @@ function exportMonthlyStockReport(){
   XLSX.writeFile(wb, `VISUTRA-Stock-Report-${from}_to_${to}.xlsx`);
 }
 
+/* ---------------- Month figures per product (shared by the manual update
+   and the reconciliation summary) ----------------
+   From the full movement history + today's live stock (every stock change
+   is logged as a movement, so this is exact):
+     opening  = stock on the 1st of the month
+     sold / returned = already recorded in that month
+     closing  = stock at month end */
+const SOLD_TYPES = { 'sale-out': 1, 'sell-via-label': 1 };
+function monthFigures(mapping, month, movements){
+  const { start, end } = monthBounds(month);
+  const mm = movements.filter(x => x.mappingId === mapping.id);
+  const after = mm.filter(x => x.date > end).reduce((s, x) => s + (Number(x.qty) || 0), 0);
+  const closing = (Number(mapping.stock) || 0) - after;
+  const inMonth = mm.filter(x => x.date >= start && x.date <= end);
+  const net = inMonth.reduce((s, x) => s + (Number(x.qty) || 0), 0);
+  let sold = 0, returned = 0;
+  inMonth.forEach(x => {
+    const q = Number(x.qty) || 0;
+    if(SOLD_TYPES[x.type]) sold += -q;                              // sales are logged as negative
+    else if((x.type === 'undo-print' || x.type === 'undo') && q > 0) sold -= q; // an undone print / lowered total
+    else if(x.type === 'return-in') returned += q;
+  });
+  return { opening: closing - net, sold, returned, other: net - (-sold + returned), closing };
+}
+
 /* ---------------- Manual Monthly Sell & Return Update ----------------
    For when there's no report file to upload — types straight into the same
    stock-movement pipeline addStockMovement() below already uses for the
    file-based reconciliation, just entered by hand, one product row at a
    time for the chosen month. */
 let manualSrRowCount = 0;
+function manualSrMode(){ return document.getElementById('manualSrMode').value === 'add' ? 'add' : 'total'; }
 function addManualSrRow(){
   const idx = manualSrRowCount++;
   const options = ['<option value="">Select product…</option>']
@@ -429,38 +465,75 @@ function addManualSrRow(){
   const row = document.createElement('tr');
   row.id = `manualSrRow_${idx}`;
   row.innerHTML = `
-    <td><select id="manualSrProduct_${idx}">${options.join('')}</select></td>
-    <td><input type="number" min="0" step="1" id="manualSrSold_${idx}" value="0" style="width:90px"></td>
-    <td><input type="number" min="0" step="1" id="manualSrReturned_${idx}" value="0" style="width:90px"></td>
+    <td><select id="manualSrProduct_${idx}" onchange="refreshManualSrRows()">${options.join('')}</select></td>
+    <td class="msr-rec" style="color:var(--muted);white-space:nowrap">—</td>
+    <td><input type="number" min="0" step="1" id="manualSrSold_${idx}" value="0" style="width:90px" oninput="refreshManualSrRows()"></td>
+    <td><input type="number" min="0" step="1" id="manualSrReturned_${idx}" value="0" style="width:90px" oninput="refreshManualSrRows()"></td>
+    <td class="msr-eff" style="white-space:nowrap">—</td>
     <td><button class="btn small danger" onclick="document.getElementById('manualSrRow_${idx}').remove()">×</button></td>`;
   document.getElementById('manualSrTable').appendChild(row);
+}
+// What each row will do: in "month totals" mode only the difference between
+// the entered total and what's already recorded for that month is applied.
+function manualSrPlan(row, month, movements){
+  const sel = row.querySelector('select');
+  const [soldInput, retInput] = row.querySelectorAll('input');
+  const mapping = mySkuMappingsCache.find(m => m.id === sel.value);
+  if(!mapping || !month) return null;
+  const f = monthFigures(mapping, month, movements);
+  const sold = parseFloat(soldInput.value) || 0, returned = parseFloat(retInput.value) || 0;
+  const dSold = manualSrMode() === 'total' ? sold - f.sold : sold;
+  const dRet = manualSrMode() === 'total' ? returned - f.returned : returned;
+  return { mapping, f, dSold, dRet, effect: -dSold + dRet };
+}
+let manualSrMovements = null;
+async function refreshManualSrRows(){
+  const month = document.getElementById('manualSrMonth').value;
+  const total = manualSrMode() === 'total';
+  document.getElementById('manualSrSoldHead').textContent = total ? 'Sold — month total' : 'Sold — add';
+  document.getElementById('manualSrRetHead').textContent = total ? 'Returned — month total' : 'Returned — add';
+  manualSrMovements = await ensureAllMovementsLoaded();
+  document.querySelectorAll('#manualSrTable tr').forEach(row => {
+    const plan = manualSrPlan(row, month, manualSrMovements);
+    row.querySelector('.msr-rec').textContent = plan ? `${plan.f.sold} / ${plan.f.returned}` : '—';
+    const eff = row.querySelector('.msr-eff');
+    if(!plan){ eff.textContent = '—'; eff.style.color = ''; return; }
+    eff.textContent = (plan.effect > 0 ? '+' : '') + plan.effect + (plan.effect === 0 ? ' (nothing to change)' : '');
+    eff.style.color = plan.effect < 0 ? 'var(--paprika-dark)' : (plan.effect > 0 ? '#0E7C6B' : 'var(--muted)');
+  });
 }
 async function applyManualSr(){
   const month = document.getElementById('manualSrMonth').value;
   if(!month){ showMsg('manualSrMsg', 'Pick a month first.', false); return; }
   const dateVal = monthBounds(month).end;
   const label = monthLabel(month);
+  const movements = await ensureAllMovementsLoaded();
   const rows = Array.from(document.getElementById('manualSrTable').querySelectorAll('tr'));
-  let applied = 0;
+  let applied = 0, unchanged = 0;
   for(const row of rows){
-    const sel = row.querySelector('select');
-    const [soldInput, returnedInput] = row.querySelectorAll('input');
-    const mappingId = sel.value;
-    const sold = parseFloat(soldInput.value) || 0;
-    const returned = parseFloat(returnedInput.value) || 0;
-    if(!mappingId || (!sold && !returned)) continue;
-    if(sold) await addStockMovement('sale-out', mappingId, -sold, dateVal, `${label} — manual sell entry`);
-    if(returned) await addStockMovement('return-in', mappingId, returned, dateVal, `${label} — manual return entry`);
+    const plan = manualSrPlan(row, month, movements);
+    if(!plan) continue;
+    const id = plan.mapping.id;
+    if(!plan.dSold && !plan.dRet){ unchanged++; continue; }
+    const how = manualSrMode() === 'total' ? 'month total' : 'manual';
+    if(plan.dSold > 0) await addStockMovement('sale-out', id, -plan.dSold, dateVal, `${label} — ${how} sell entry`);
+    if(plan.dSold < 0) await addStockMovement('undo', id, -plan.dSold, dateVal, `${label} — ${how}: sold total lowered by ${-plan.dSold}`);
+    if(plan.dRet > 0) await addStockMovement('return-in', id, plan.dRet, dateVal, `${label} — ${how} return entry`);
+    if(plan.dRet < 0) await addStockMovement('manual-adjust', id, plan.dRet, dateVal, `${label} — ${how}: returned total lowered by ${-plan.dRet}`);
     applied++;
   }
-  if(!applied){ showMsg('manualSrMsg', 'Pick at least one product with a Sold or Returned quantity.', false); return; }
+  if(!applied){
+    showMsg('manualSrMsg', unchanged ? `Nothing to change — ${label}'s recorded totals already match what you entered.` : 'Pick at least one product with a Sold or Returned quantity.', !!unchanged);
+    return;
+  }
   allMovementsCache = null;
   await loadStock();
   await renderMonthlyStockReport();
+  buyerRenderSalesReorder(); buyerRenderStockAnalysis();
   document.getElementById('manualSrTable').innerHTML = '';
   manualSrRowCount = 0;
   addManualSrRow();
-  showMsg('manualSrMsg', `Applied to ${applied} product(s) for ${label}.`, true);
+  showMsg('manualSrMsg', `Applied to ${applied} product(s) for ${label}` + (unchanged ? ` (${unchanged} already matched — unchanged).` : '.'), true);
 }
 
 /* ---------------- Monthly Inventory Reconciliation (Meesho/Flipkart-aware) ----------------
@@ -672,19 +745,76 @@ function renderStockAggregationTable(){
   wrap.classList.remove('hidden');
   document.getElementById('stockAggTable').innerHTML = stockAggregation.map((r, i) => {
     const known = reconciliationMapCache.find(m => m.rawKey === r.rawKey);
+    // Not matched before? Use your Buyer SKU Master: the product that already
+    // has this marketplace SKU (active SKUs only).
+    const auto = known ? null : mySkuMappingsCache.find(m => m.status !== 'INACTIVE' &&
+      ['AMAZON', 'MEESHO', 'FLIPKART'].some(mk => mappingMatchesSku(m, mk, r.displayKey)));
+    const selId = known ? known.mappingId : (auto ? auto.id : '');
     const options = ['<option value="">Skip — not a stock item</option>']
-      .concat(mySkuMappingsCache.map(m => `<option value="${m.id}" ${known && known.mappingId === m.id ? 'selected' : ''}>${esc(m.productName)}</option>`));
+      .concat(mySkuMappingsCache.map(m => `<option value="${m.id}" ${selId === m.id ? 'selected' : ''}>${esc(m.productName)}</option>`));
     const netStyle = r.netChange < 0 ? 'color:var(--paprika-dark)' : (r.netChange > 0 ? 'color:#0E7C6B' : '');
-    return `<tr${known ? '' : ' style="background:#FFF7ED"'}>
-      <td>${esc(r.displayKey)}${known ? '' : ' <span class="badge" title="No saved mapping yet — pick a product on the right">Unmapped</span>'}</td>
+    const tag = known ? '' : auto ? ' <span class="badge ok" title="Matched from the marketplace SKUs in Buyer SKU Master — check it">from SKU Master</span>'
+      : ' <span class="badge" title="No saved mapping yet — pick a product on the right">Unmapped</span>';
+    return `<tr${known || auto ? '' : ' style="background:#FFF7ED"'}>
+      <td>${esc(r.displayKey)}${tag}</td>
       <td>${r.soldQty || 0}</td>
       <td>${r.returnedQty || 0}</td>
       <td style="color:var(--muted)">${r.alreadyQty || 0}</td>
       <td style="color:var(--muted)">${r.cancelledQty || 0}</td>
       <td style="${netStyle}">${r.netChange > 0 ? '+' : ''}${r.netChange}</td>
-      <td><select id="stockAggMap${i}">${options.join('')}</select></td>
+      <td><select id="stockAggMap${i}" onchange="renderReconSummary()">${options.join('')}</select></td>
     </tr>`;
   }).join('');
+  renderReconSummary();
+}
+/* Product-wise summary of what the upload will do — shown BEFORE applying so
+   it can be checked against your own sheet. */
+async function renderReconSummary(){
+  const box = document.getElementById('reconSummaryBox');
+  if(!box || !stockAggregation.length) return;
+  const month = document.getElementById('stockPeriod').value || new Date().toISOString().slice(0, 7);
+  const movements = await ensureAllMovementsLoaded();
+  const byProduct = new Map();
+  let skippedRows = 0, skippedUnits = 0;
+  stockAggregation.forEach((r, i) => {
+    const sel = document.getElementById('stockAggMap' + i);
+    const id = sel ? sel.value : '';
+    if(!id){ skippedRows++; skippedUnits += (r.soldQty || 0) + (r.returnedQty || 0); return; }
+    if(!byProduct.has(id)) byProduct.set(id, { sold: 0, returned: 0, already: 0, cancelled: 0, skus: [] });
+    const p = byProduct.get(id);
+    p.sold += r.soldQty || 0; p.returned += r.returnedQty || 0; p.already += r.alreadyQty || 0; p.cancelled += r.cancelledQty || 0;
+    p.skus.push(r.displayKey);
+  });
+  const rows = [...byProduct.entries()].map(([id, u]) => {
+    const m = mySkuMappingsCache.find(x => x.id === id);
+    if(!m) return null;
+    const f = monthFigures(m, month, movements);
+    const net = u.returned - u.sold;
+    return { name: m.productName, skus: u.skus, f, u, net, closingAfter: f.closing + net, stockAfter: (Number(m.stock) || 0) + net };
+  }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+  if(!rows.length){ box.innerHTML = '<p class="sub">No report SKU is matched to a product yet — pick products in the table above.</p>'; return; }
+  const T = k => rows.reduce((s, r) => s + k(r), 0);
+  const sign = n => (n > 0 ? '+' : '') + n;
+  box.innerHTML = `
+    <table data-excel-name="Reconciliation summary ${month}"><thead><tr>
+      <th>Product</th><th>Report SKUs</th><th>Opening (1st)</th>
+      <th>Sold — already recorded</th><th>Sold — from this file</th><th>Sold — month total</th>
+      <th>Returned — already recorded</th><th>Returned — from this file</th><th>Returned — month total</th>
+      <th>Skipped (already counted / cancelled)</th><th>Stock change now</th><th>Closing (month end)</th><th>Stock today after apply</th>
+    </tr></thead><tbody>
+    ${rows.map(r => `<tr>
+      <td><b>${esc(r.name)}</b></td><td style="font-size:12px">${r.skus.map(esc).join('<br>')}</td><td>${r.f.opening}</td>
+      <td>${r.f.sold}</td><td>${r.u.sold}</td><td><b>${r.f.sold + r.u.sold}</b></td>
+      <td>${r.f.returned}</td><td>${r.u.returned}</td><td><b>${r.f.returned + r.u.returned}</b></td>
+      <td style="color:var(--muted)">${r.u.already} / ${r.u.cancelled}</td>
+      <td style="color:${r.net < 0 ? 'var(--paprika-dark)' : r.net > 0 ? '#0E7C6B' : 'inherit'}"><b>${sign(r.net)}</b></td>
+      <td><b>${r.closingAfter}</b></td><td>${r.stockAfter}</td></tr>`).join('')}
+    <tr style="font-weight:700;background:var(--head-bg,#FAF6EF)"><td>Total</td><td></td><td>${T(r => r.f.opening)}</td>
+      <td>${T(r => r.f.sold)}</td><td>${T(r => r.u.sold)}</td><td>${T(r => r.f.sold + r.u.sold)}</td>
+      <td>${T(r => r.f.returned)}</td><td>${T(r => r.u.returned)}</td><td>${T(r => r.f.returned + r.u.returned)}</td>
+      <td>${T(r => r.u.already)} / ${T(r => r.u.cancelled)}</td><td>${sign(T(r => r.net))}</td><td>${T(r => r.closingAfter)}</td><td>${T(r => r.stockAfter)}</td></tr>
+    </tbody></table>
+    ${skippedRows ? `<p class="sub" style="margin-top:6px">⚠ ${skippedRows} report SKU(s) set to "Skip" (${skippedUnits} units) are not included.</p>` : ''}`;
 }
 async function applyStockUpload(){
   const period = document.getElementById('stockPeriod').value || new Date().toISOString().slice(0,7);
@@ -732,6 +862,7 @@ async function applyStockUpload(){
 
   document.getElementById('stockColumnMapWrap').classList.add('hidden');
   document.getElementById('stockAggWrap').classList.add('hidden');
+  document.getElementById('reconSummaryBox').innerHTML = '';
   document.getElementById('stockFiles').value = '';
   stockUploadSheets = [];
   stockAggregation = [];
