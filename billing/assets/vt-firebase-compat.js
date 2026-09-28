@@ -388,7 +388,12 @@
         const before = this.currentUser ? this.currentUser.uid : null;
         this._set(session ? session.user : null);
         const after = this.currentUser ? this.currentUser.uid : null;
-        if (this._ready && (before !== after || event === 'USER_UPDATED' || event === 'SIGNED_IN')) this._emit();
+        // Only a real change of user counts (sign-in, sign-out, a different
+        // account). Supabase also sends SIGNED_IN / TOKEN_REFRESHED every time
+        // you come back to the tab; passing those on made every page re-run its
+        // start-up (Billing jumped to Business Profile, forms lost their input).
+        // Firebase's onAuthStateChanged never fired for those, so neither do we.
+        if (this._ready && before !== after) this._emit();
       });
     }
     _set(u) {

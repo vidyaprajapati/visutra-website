@@ -81,13 +81,13 @@ auth.onAuthStateChanged(async user => {
 
     // Sidebar starts scoped to Business Profile only; the two buttons there
     // (or a deep link below) reveal the GST Billing or Purchase Entry pages.
+    // Open the section you were on: the address keeps it as #stock, #invoices …
+    // (so a refresh stays put), or a deep link like app.html?view=purchases.
+    // Read it BEFORE showing the default page — showing Business Profile
+    // rewrites the address to #profile.
+    const requestedView = (window.location.hash || '').replace(/^#/, '') || new URLSearchParams(window.location.search).get('view');
     activateView('profile');
-
-    // Deep-link support: e.g. app.html?view=purchases (used by the "Purchase
-    // Data Entry" button on the main site) opens straight on that tab instead
-    // of the default Business Profile view.
-    const requestedView = new URLSearchParams(window.location.search).get('view');
-    if(requestedView) activateView(requestedView);
+    if(requestedView && requestedView !== 'profile') activateView(requestedView);
   }catch(err){
     // Without this, any Firestore hiccup here (expired token, offline, a
     // permission error) throws inside an unhandled async callback and the
@@ -110,6 +110,14 @@ function activateView(viewName){
   link.classList.add('active');
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   target.classList.remove('hidden');
+
+  // Remember the section in the address bar (without adding history entries),
+  // so refreshing the page — or reopening the tab — comes back to it.
+  try{
+    if(window.location.hash !== '#' + viewName){
+      history.replaceState(null, '', window.location.pathname + window.location.search + '#' + viewName);
+    }
+  }catch(e){}
 
   // Scope the sidebar: only the group ("billing" or "purchase") this view
   // belongs to stays visible. Business Profile has no data-group, so it's
