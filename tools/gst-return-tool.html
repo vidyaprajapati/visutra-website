@@ -429,7 +429,10 @@
             <h3>Your GSTR-1 ready file</h3>
             <p>An Excel workbook with B2B, B2CL, B2CS and HSN sheets, formatted to match the GST offline tool template — plus a full source-data sheet for your records.</p>
           </div>
-          <button class="btn" id="downloadBtn">Download Excel</button>
+          <label style="font-size:13px;display:inline-flex;align-items:center;gap:6px;margin-right:6px">Return period <input type="month" id="gstPeriod" style="padding:6px 8px;border:1px solid #ddd;border-radius:8px"></label>
+          <button class="btn" id="downloadJsonBtn" style="background:#E0531A;color:#fff;border-color:#E0531A">⬇ GSTR-1 JSON (portal upload)</button>
+          <button class="btn" id="downloadBtn">⬇ GSTR-1 Excel (Offline Tool)</button>
+          <div id="gstToolChecks" style="margin-top:10px;font-size:13px"></div>
         </div>
       </div>
     </div>
@@ -449,6 +452,7 @@
   </div>
 </footer>
 
+<script src="../billing/assets/gst-returns.js"></script>
 <script>
 
 /* =========================================================================
@@ -1077,6 +1081,7 @@ document.getElementById('generateBtn').addEventListener('click', function () {
   lastResult = result;
   lastResult.sellerGstin = sellerGstin;
   lastResult.sellerState = sellerState;
+  lastResult.transactions = allTxns; // used by the GSTR-1 JSON / Excel export (shared GST engine)
 
   renderResults(result);
   document.getElementById('results').classList.add('show');
@@ -1153,58 +1158,72 @@ function tableHTML(headers, rows, numericCols) {
 /* =========================================================================
    Excel export
    ========================================================================= */
+/* =========================================================================
+   GSTR-1 export via the shared VISUTRA GST engine (billing/assets/gst-returns.js):
+   current portal JSON (HSN split B2B/B2C, documents issued, Table 14 for
+   marketplace sales) + GSTN Offline Tool Excel layout.
+   ========================================================================= */
+function toolIsoDate(v) {
+  var s = String(v == null ? '' : v).trim(), m;
+  if (typeof v === 'number') { var d0 = new Date(Math.round((v - 25569) * 864e5)); return d0.toISOString().slice(0, 10); }
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})/))) return m[1] + '-' + m[2] + '-' + m[3];
+  if ((m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/))) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+  var d = new Date(s); return isNaN(d) ? '' : d.toISOString().slice(0, 10);
+}
+function toolDocs(r) {
+  var groups = {}, creditNotes = [];
+  var seller = String(r.sellerState || '').padStart(2, '0');
+  (r.transactions || r.txns || []).forEach(function (t) {
+    var neg = (t.sign || 1) < 0 || t.taxableValue < 0;
+    var key = (t.invoiceNo || ('NO-INVOICE-' + t.source + '-' + toolIsoDate(t.invoiceDate))) + (neg ? '|RET' : '');
+    if (!groups[key]) groups[key] = { no: String(t.invoiceNo || '').slice(0, 16), date: toolIsoDate(t.invoiceDate), ctin: String(t.buyerGstin || '').toUpperCase(),
+      name: t.buyerName || '', pos: String(t.posStateCode || '').padStart(2, '0'), etin: t.ecoGstin || '', neg: neg, items: [] };
+    groups[key].items.push({ hsn: t.hsn, desc: t.description, unit: 'PCS', qty: t.qty, rate: t.rate, taxable: t.taxableValue });
+  });
+  var docs = [];
+  Object.keys(groups).forEach(function (k) {
+    var g = groups[k];
+    g.inter = g.pos !== seller;
+    if (g.neg) {
+      if (g.ctin) { creditNotes.push(g); return; }   // B2B return → credit note (Table 9B), not netted
+      g.noDocSeries = true;                          // B2C return → netted into B2CS / HSN
+    }
+    docs.push(g);
+  });
+  return { docs: docs, creditNotes: creditNotes };
+}
+function toolBuild() {
+  if (!lastResult) return null;
+  var r = lastResult, conv = toolDocs(r);
+  var period = document.getElementById('gstPeriod').value;
+  if (!period) {
+    var months = {}; conv.docs.forEach(function (d) { if (d.date) months[d.date.slice(0, 7)] = (months[d.date.slice(0, 7)] || 0) + 1; });
+    period = Object.keys(months).sort(function (a, b) { return months[b] - months[a]; })[0] || new Date().toISOString().slice(0, 7);
+    document.getElementById('gstPeriod').value = period;
+  }
+  var res = VTGst.buildGstr1(conv.docs, { gstin: r.sellerGstin, stateCode: r.sellerState, period: period });
+  if (conv.creditNotes.length) res.issues.unshift({ level: 'warn', msg: conv.creditNotes.length + ' return(s) from GST-registered buyers must be filed as credit notes (Table 9B — CDNR) on the portal; they are not in this file.', ref: conv.creditNotes.map(function (c) { return c.no; }).slice(0, 5).join(', ') });
+  var box = document.getElementById('gstToolChecks');
+  var errs = res.issues.filter(function (i) { return i.level === 'error'; }).length;
+  box.innerHTML = res.issues.length
+    ? '<b style="color:' + (errs ? '#B91C1C' : '#A16207') + '">Check before filing: ' + errs + ' error(s), ' + (res.issues.length - errs) + ' warning(s)</b><ul style="margin:4px 0 0;padding-left:18px">' +
+      res.issues.slice(0, 15).map(function (i) { return '<li>' + i.level.toUpperCase() + ' — ' + i.msg.replace(/</g, '&lt;') + (i.ref ? ' (' + String(i.ref).replace(/</g, '&lt;') + ')' : '') + '</li>'; }).join('') + '</ul>'
+    : '<b style="color:#15803D">✓ No problems found — ready to upload.</b>';
+  return { res: res, period: period, r: r };
+}
+document.getElementById('downloadJsonBtn').addEventListener('click', function () {
+  var b = toolBuild(); if (!b) return;
+  var errs = b.res.issues.filter(function (i) { return i.level === 'error'; }).length;
+  if (errs && !confirm(errs + ' problem(s) would make the GST portal reject this file (listed below the buttons). Download anyway?')) return;
+  VTGst.downloadJson(b.res.json, 'GSTR1_' + (b.r.sellerGstin || 'GSTIN') + '_' + VTGst.fpOf(b.period) + '.json');
+});
 document.getElementById('downloadBtn').addEventListener('click', function () {
-  if (!lastResult) return;
-  var r = lastResult;
-  var wb = XLSX.utils.book_new();
-
-  var readme = [
-    ['GSTR-1 ready file — generated by Visutra GST Tool'],
-    ['Seller GSTIN', r.sellerGstin],
-    ['Generated on', new Date().toLocaleString('en-IN')],
-    [],
-    ['Sheets in this workbook:'],
-    ['b2b', 'Invoice-wise supplies to registered buyers (Table 4)'],
-    ['b2cl', 'Invoice-wise inter-state supplies to consumers above the B2CL threshold (Table 5)'],
-    ['b2cs', 'State and rate-wise summary of all other consumer supplies (Table 7)'],
-    ['hsn', 'HSN/rate-wise summary of outward supplies (Table 12)'],
-    ['source data', 'Every individual transaction line used to build the sheets above, for your own audit trail'],
-    [],
-    ['How to use this file:'],
-    ['1. Open the GST portal\'s Returns Offline Tool and load the official GSTR-1 Excel template for your return period.'],
-    ['2. Copy the rows from each sheet here into the matching sheet in the official template (column order matches).'],
-    ['3. Import the completed template into the Offline Tool and generate the JSON.'],
-    ['4. Upload the JSON on the GST portal and reconcile the auto-populated totals against this file and your books before filing.'],
-    [],
-    ['This file is a calculation aid, not a filed return. Verify totals, GST rates and thresholds before relying on it.']
-  ];
-  var wsReadme = XLSX.utils.aoa_to_sheet(readme);
-  XLSX.utils.book_append_sheet(wb, wsReadme, 'Read Me');
-
-  var b2bHeader = ['GSTIN/UIN of Recipient', 'Receiver Name', 'Invoice Number', 'Invoice date', 'Invoice Value', 'Place Of Supply', 'Reverse Charge', 'Applicable % of Tax Rate', 'Invoice Type', 'Rate', 'Taxable Value', 'Cess Amount'];
-  var b2bRows = r.b2b.map(function (x) { return [x.gstin, x.receiverName, x.invoiceNo, x.invoiceDate, x.invoiceValue, posLabel(x.posStateCode), x.reverseCharge, '', x.invoiceType, x.rate, x.taxableValue, 0]; });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2bHeader].concat(b2bRows)), 'b2b');
-
-  var b2clHeader = ['Invoice Number', 'Invoice date', 'Invoice Value', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount'];
-  var b2clRows = [];
-  r.b2cl.forEach(function (inv) { inv.items.forEach(function (it) { b2clRows.push([inv.invoiceNo, inv.invoiceDate, inv.invoiceValue, posLabel(inv.posStateCode), '', it.rate, it.taxableValue, 0]); }); });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2clHeader].concat(b2clRows)), 'b2cl');
-
-  var b2csHeader = ['Type', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount'];
-  var b2csRows = r.b2cs.map(function (x) { return [x.type, posLabel(x.posStateCode), '', x.rate, x.taxableValue, 0]; });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2csHeader].concat(b2csRows)), 'b2cs');
-
-  var hsnHeader = ['HSN', 'Description', 'UQC', 'Total Quantity', 'Total Value', 'Rate', 'Taxable Value', 'Integrated Tax Amount', 'Central Tax Amount', 'State/UT Tax Amount', 'Cess Amount'];
-  var hsnRows = r.hsn.map(function (x) { return [x.hsn, x.description, x.uqc, x.qty, x.totalValue, x.rate, x.taxableValue, x.igst, x.cgst, x.sgst, 0]; });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hsnHeader].concat(hsnRows)), 'hsn');
-
-  var srcHeader = ['Source', 'Doc Type', 'Invoice No.', 'Invoice Date', 'Place of Supply', 'HSN', 'Qty', 'Rate', 'Taxable Value', 'Tax Amount', 'Invoice Value', 'Warnings'];
-  var srcRows = r.allTxns.map(function (t) { return [t.source, t.docType, t.invoiceNo, t.invoiceDate, posLabel(t.posStateCode), t.hsn, t.qty, t.rate, t.taxableValue, t.taxAmount, t.invoiceValue, (t.warnings || []).join('; ')]; });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([srcHeader].concat(srcRows)), 'source data');
-
-  var period = (getGstPeriodRange().fileTag || 'period').replace(/[^\w-]+/g, '_');
-  var fname = 'GSTR1_' + (r.sellerGstin || 'seller') + '_' + period + '.xlsx';
-  XLSX.writeFile(wb, fname);
+  var b = toolBuild(); if (!b) return;
+  var wb = VTGst.gstr1Workbook(XLSX, b.res), r = b.r;
+  var src = [['Source', 'Type', 'Invoice No', 'Invoice Date', 'Buyer GSTIN', 'Place of Supply', 'E-Commerce GSTIN', 'HSN', 'Description', 'Qty', 'Rate', 'Taxable Value', 'Tax']]
+    .concat((r.transactions || r.txns || []).map(function (t) { return [t.source, t.docType, t.invoiceNo, t.invoiceDate, t.buyerGstin, t.posStateCode, t.ecoGstin, t.hsn, t.description, t.qty, t.rate, t.taxableValue, t.taxAmount]; }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(src), 'source data');
+  XLSX.writeFile(wb, 'GSTR1_' + (r.sellerGstin || 'GSTIN') + '_' + VTGst.fpOf(b.period) + '.xlsx');
 });
 
 </script>
