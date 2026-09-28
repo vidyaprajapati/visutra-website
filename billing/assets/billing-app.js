@@ -1827,7 +1827,7 @@ function computePurchaseGstrRows(start, end){
     const supplier = suppliersCache.find(s => s.id === p.supplierId);
     return {
       id: p.id, date: p.date, supplierName: p.supplierName || (supplier && supplier.name) || 'Unknown',
-      gstin: (supplier && supplier.gstin) || '',
+      gstin: (supplier && supplier.gstin) || '', invoiceNo: p.invoiceNo || '',
       taxable: p.subtotal || 0, gst: p.gstTotal || 0, total: p.grandTotal || 0, items: p.items || []
     };
   });
@@ -2055,6 +2055,7 @@ async function savePurchase(){
 
   const paidNow = parseFloat(document.getElementById('purPaidNow').value) || 0;
   const purchaseData = {
+    invoiceNo: ((document.getElementById('purInvoiceNo') || {}).value || '').trim(),
     supplierId: supId, supplierName: supplier.name, date: dateVal,
     items, subtotal: totals.subtotal, gstTotal: totals.gstTotal, grandTotal: totals.grand,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -3089,6 +3090,12 @@ function getSelectedPeriodRange(){
 async function generateGstr1(){
   const period = getSelectedPeriodRange();
   showMsg('gstrMsg', 'Reading invoices for this period…', true);
+  // Purchases (for ITC / GSTR-3B / 2B matching) and suppliers (their GSTINs)
+  // must be loaded even if the Purchases screen was never opened.
+  try{
+    if(typeof suppliersCache !== 'undefined' && !suppliersCache.length && typeof loadSuppliers === 'function') await loadSuppliers();
+    if(typeof purchasesCache !== 'undefined' && !purchasesCache.length && typeof loadPurchases === 'function') await loadPurchases();
+  }catch(e){ console.warn('Could not preload purchases for GST:', e); }
 
   const start = period.start, end = period.end;
 
@@ -3100,10 +3107,17 @@ async function generateGstr1(){
     showMsg('gstrMsg', 'Could not read invoices — check your connection and try again (see browser console for details).', false);
     return;
   }
-  const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(inv => !inv.deleted).filter(inv => {
+  // All invoices in the period, deleted ones included (they're reported as cancelled in Table 13).
+  gstr1AllPeriodInvoices = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(inv => {
     const d = parseLocalDate(inv.date);
     return d >= start && d < end;
   });
+  // Return period for the GST files: MMYYYY of the period's LAST month
+  // (monthly = that month; quarterly/QRMP = the quarter's last month, as GSTN requires).
+  const lastDay = new Date(end.getTime() - 864e5);
+  gstr1PeriodTag = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}`;
+  gstr1PeriodLabel = period.label || period.fileTag;
+  const invoices = gstr1AllPeriodInvoices.filter(inv => !inv.deleted);
 
   const b2b = [], b2cl = [], b2csMap = {}, hsnMap = {};
 
@@ -3201,117 +3215,123 @@ async function generateGstr1(){
   try {
     await loadPurchases();
     gstr1PurchaseRows = computePurchaseGstrRows(start, end);
+    renderGstFiling(); // needs this period's purchases (ITC / GSTR-3B / 2B)
     document.getElementById('pgPeriodLabel').textContent = period.label;
     renderPurchaseGstrSection();
     document.getElementById('pgSummaryCard').classList.remove('hidden');
     showMsg('gstrMsg', `Found ${invoices.length} sale(s) and ${gstr1PurchaseRows.length} purchase(s) in this period.`, true);
   } catch(err) {
+    renderGstFiling(); // still show the sales files even if purchases failed to load
     console.error('Purchases side of GSTR-1 failed to load:', err);
     gstr1PurchaseRows = [];
     showMsg('gstrMsg', `Found ${invoices.length} sale(s). Purchases couldn't be loaded (see console) — Sales download is still available below.`, false);
   }
 }
 
-function downloadGstr1Excel(){
-  if(!gstr1Data) return;
-  const wb = XLSX.utils.book_new();
-  const b2bHeader = ['GSTIN/UIN of Recipient','Receiver Name','Invoice Number','Invoice date','Invoice Value','Place Of Supply','Reverse Charge','Applicable % of Tax Rate','Invoice Type','Rate','Taxable Value','Cess Amount'];
-  const b2clHeader = ['Invoice Number','Invoice date','Invoice Value','Place Of Supply','Applicable % of Tax Rate','Rate','Taxable Value','Cess Amount'];
-  const b2csHeader = ['Type','Place Of Supply','Applicable % of Tax Rate','Rate','Taxable Value','Cess Amount'];
-  const hsnHeader = ['HSN','Description','UQC','Total Quantity','Total Value','Rate','Taxable Value','Integrated Tax Amount','Central Tax Amount','State/UT Tax Amount','Cess Amount'];
-
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2bHeader].concat(gstr1Data.b2b)), 'Sales - b2b');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2clHeader].concat(gstr1Data.b2cl)), 'Sales - b2cl');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([b2csHeader].concat(gstr1Data.b2cs)), 'Sales - b2cs');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hsnHeader].concat(gstr1Data.hsn)), 'Sales - hsn');
-
-  const purHeader = ['Date','Supplier','GSTIN','Taxable Value','GST Amount','Total'];
-  const purRows = gstr1PurchaseRows.map(r => [r.date, r.supplierName, r.gstin || '', r.taxable, r.gst, r.total]);
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([purHeader].concat(purRows)), 'Purchases - Register');
-
-  const purItemsHeader = ['Date','Supplier','Product','HSN','Qty','Unit','GST Rate','Taxable','GST Amount','Total'];
-  const purItemsRows = [];
-  gstr1PurchaseRows.forEach(r => r.items.forEach(li => {
-    purItemsRows.push([r.date, r.supplierName, li.name, li.hsn || '', li.qty, li.unit || '', li.gstRate || 0, li.taxable || 0, li.gstAmt || 0, li.total || 0]);
-  }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([purItemsHeader].concat(purItemsRows)), 'Purchases - Items');
-
-  const byRate = {};
-  gstr1PurchaseRows.forEach(r => r.items.forEach(li => {
-    const rate = li.gstRate || 0;
-    if(!byRate[rate]) byRate[rate] = { taxable: 0, gst: 0 };
-    byRate[rate].taxable += li.taxable || 0;
-    byRate[rate].gst += li.gstAmt || 0;
-  }));
-  const purRateHeader = ['GST Rate','Taxable Value','GST Amount','Total'];
-  const purRateRows = Object.keys(byRate).map(Number).sort((a,b) => a-b)
-    .map(r => [r + '%', byRate[r].taxable, byRate[r].gst, byRate[r].taxable + byRate[r].gst]);
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([purRateHeader].concat(purRateRows)), 'Purchases - Rate Summary');
-
-  XLSX.writeFile(wb, `GSTR1-Sales-Purchases-${gstr1Data.period}.xlsx`);
+/* ================= GST filing (shared engine: assets/gst-returns.js) =================
+   GSTR-1 JSON/Excel in the current portal format, GSTR-3B summary, GSTR-2B
+   reconciliation. The report tables above stay as the on-screen preview. */
+let gstr1AllPeriodInvoices = [], gstr1PeriodTag = '', gstr1PeriodLabel = '', gstRes1 = null, gstRes3b = null;
+function gstBusiness(){
+  const gstin = ((document.getElementById('bizGstin') || {}).value || (typeof businessData !== 'undefined' && businessData.gstin) || '').trim().toUpperCase();
+  const stateCode = String((typeof businessData !== 'undefined' && businessData.stateCode) || gstin.slice(0, 2) || '').padStart(2, '0');
+  return { gstin, stateCode };
 }
-
-// GST-offline-tool-style JSON for the Sales/outward side only — there is no
-// portal endpoint that accepts a Purchases/inward upload (ITC is populated
-// from suppliers' own GSTR-1 filings via 2A/2B), so folding purchase data
-// into this file would just be extra fields the real offline tool doesn't
-// expect. Structure follows the publicly documented GSTR-1 JSON shape
-// (gstin/fp + b2b/b2cl/b2cs/hsn) as closely as possible from here, but
-// GSTN updates this schema periodically — import into the current official
-// offline tool and check for validation errors before filing with it.
+function gstDocsFromInvoices(list){
+  return list.map(inv => ({
+    no: inv.invoiceNo, date: inv.date, cancelled: !!inv.deleted,
+    ctin: (inv.customer && inv.customer.gstin || '').trim().toUpperCase(),
+    name: inv.customer ? (inv.customer.legalName || inv.customer.name || '') : '',
+    pos: String((inv.customer && inv.customer.stateCode) || '').padStart(2, '0'),
+    inter: !inv.sameState, rchrg: !!inv.reverseCharge, value: inv.grandTotal,
+    items: (inv.items || []).filter(li => li.productId).map(li => ({
+      hsn: li.hsn || (productsCache.find(p => p.id === li.productId) || {}).hsn || '',
+      desc: li.name, unit: li.unit, qty: Number(li.qty) || 0, rate: Number(li.gstRate) || 0, taxable: Number(li.taxable) || 0
+    }))
+  }));
+}
+function gstPurchases(){
+  const biz = gstBusiness();
+  return (gstr1PurchaseRows || []).map(r => ({
+    date: r.date, gstin: (r.gstin || '').toUpperCase(), inter: !!r.gstin && r.gstin.slice(0, 2) !== biz.stateCode,
+    items: (r.items || []).map(li => ({ rate: Number(li.gstRate) || 0, taxable: Number(li.taxable) || 0 }))
+  }));
+}
+function renderGstFiling(){
+  if(typeof VTGst === 'undefined') return;
+  const biz = gstBusiness();
+  const docs = gstDocsFromInvoices(gstr1AllPeriodInvoices);
+  gstRes1 = VTGst.buildGstr1(docs, { gstin: biz.gstin, stateCode: biz.stateCode, period: gstr1PeriodTag });
+  gstRes3b = VTGst.buildGstr3b(docs, gstPurchases(), { gstin: biz.gstin, period: gstr1PeriodTag });
+  document.getElementById('gstFilingPeriod').textContent = gstr1PeriodLabel;
+  const errs = gstRes1.issues.filter(i => i.level === 'error'), warns = gstRes1.issues.filter(i => i.level !== 'error');
+  document.getElementById('gstCheckBox').innerHTML = gstRes1.issues.length
+    ? `<div class="box" style="border-color:${errs.length ? '#F3B4A8' : '#F2D18B'};background:${errs.length ? '#FDECE8' : '#FFF8E6'};margin-bottom:12px">
+        <b>Check before filing — ${errs.length} error(s), ${warns.length} warning(s)</b>
+        <ul style="margin:6px 0 0;padding-left:18px;font-size:13px">${gstRes1.issues.slice(0, 40).map(i => `<li><span class="badge ${i.level === 'error' ? 'bad' : 'warn'}">${i.level}</span> ${esc(i.msg)} ${i.ref ? `<span style="color:var(--muted)">— ${esc(i.ref)}</span>` : ''}</li>`).join('')}</ul>
+        ${gstRes1.issues.length > 40 ? `<p class="sub">…and ${gstRes1.issues.length - 40} more (listed in the Excel file's CHECK-BEFORE-FILING sheet).</p>` : ''}</div>`
+    : '<div class="box" style="border-color:#BFE3CB;background:#F1FAF4;margin-bottom:12px">✅ <b>No problems found</b> — the files are ready to upload.</div>';
+  const t = gstRes1.totals, k = (l, v, a) => `<div class="vt-kpi" style="--kpi-accent:${a}"><div class="k-label">${l}</div><div class="k-value" style="font-size:20px">${v}</div></div>`;
+  document.getElementById('gstKpis').innerHTML = k('Invoices', t.invoices, 'var(--indigo)') + k('Taxable value', '₹' + fmtMoney(t.taxable), 'var(--paprika)') +
+    k('IGST', '₹' + fmtMoney(t.igst), '#0E9F8E') + k('CGST', '₹' + fmtMoney(t.cgst), '#16A34A') + k('SGST', '₹' + fmtMoney(t.sgst), '#D97706');
+  const c = gstRes1.counts;
+  document.getElementById('gstr1Counts').textContent = `B2B ${c.b2b} invoice(s) · B2CL ${c.b2cl} · B2CS ${c.b2cs} line(s) · HSN ${c.hsnB2B} B2B + ${c.hsnB2C} B2C · Documents ${c.docs} series`;
+  const j = gstRes3b.json, s = j.sup_details, e = j.itc_elg, net = VTGst.netPayable(gstRes3b);
+  const r = (label, o) => `<tr><td>${label}</td><td>${o.txval != null ? '₹' + fmtMoney(o.txval) : ''}</td><td>₹${fmtMoney(o.iamt || 0)}</td><td>₹${fmtMoney(o.camt || 0)}</td><td>₹${fmtMoney(o.samt || 0)}</td></tr>`;
+  document.getElementById('gst3bBox').innerHTML = `<table><thead><tr><th>Table</th><th>Taxable</th><th>IGST</th><th>CGST</th><th>SGST</th></tr></thead><tbody>
+    ${r('3.1(a) Outward taxable supplies', s.osup_det)}${r('3.1(c) Nil rated / exempt', s.osup_nil_exmp)}
+    ${r('4(A)(5) Eligible ITC (from purchase entries)', e.itc_avl[4])}${r('4(D) Ineligible — supplier without GSTIN', e.itc_inelg[1])}
+    <tr style="font-weight:700"><td>Approx. tax payable in cash</td><td></td><td>₹${fmtMoney(net[0])}</td><td>₹${fmtMoney(net[1])}</td><td>₹${fmtMoney(net[2])}</td></tr></tbody></table>
+    <p class="sub" style="margin-top:6px">3.2 inter-state supplies to unregistered persons: ${j.inter_sup.unreg_details.length} state(s). ITC here is from your purchase entries — claim only what the GSTR-2B reconciliation below shows as matched.</p>`;
+  document.getElementById('gstFilingCard').classList.remove('hidden');
+}
+function gstFileTag(){ const biz = gstBusiness(); return `${biz.gstin || 'GSTIN'}_${VTGst.fpOf(gstr1PeriodTag)}`; }
 function downloadGstr1Json(){
-  if(!gstr1Data) return;
-  const gstin = (document.getElementById('bizGstin').value || '').trim();
-
-  const b2bByCtin = {};
-  gstr1Invoices.forEach(inv => {
-    if(!(inv.customer && inv.customer.gstin)) return;
-    const ctin = inv.customer.gstin;
-    if(!b2bByCtin[ctin]) b2bByCtin[ctin] = [];
-    const items = (inv.items || []).filter(li => li.productId);
-    const rateGroups = {};
-    items.forEach(li => {
-      const key = li.gstRate;
-      if(!rateGroups[key]) rateGroups[key] = { txval: 0, rt: Number(li.gstRate) };
-      rateGroups[key].txval += li.taxable;
-    });
-    const inter = !inv.sameState;
-    const itms = Object.values(rateGroups).map((r, i) => {
-      const taxAmt = fix2(r.txval * r.rt / 100);
-      return { num: i + 1, itm_det: { txval: fix2(r.txval), rt: r.rt, iamt: inter ? taxAmt : 0, camt: inter ? 0 : fix2(taxAmt / 2), samt: inter ? 0 : fix2(taxAmt / 2), csamt: 0 } };
-    });
-    b2bByCtin[ctin].push({
-      inum: inv.invoiceNo, idt: ddmmyyyy(inv.date), val: fix2(inv.grandTotal),
-      pos: (inv.customer.stateCode || '') + '', rchrg: inv.reverseCharge ? 'Y' : 'N', inv_typ: 'R', itms
-    });
-  });
-  const b2b = Object.keys(b2bByCtin).map(ctin => ({ ctin, inv: b2bByCtin[ctin] }));
-
-  const b2cl = gstr1Data.b2cl.map(row => ({
-    inum: row[0], idt: ddmmyyyy(row[1]), val: row[2], pos: row[3],
-    itms: [{ num: 1, itm_det: { rt: row[5], txval: row[6], iamt: fix2(row[6] * row[5] / 100), csamt: row[7] || 0 } }]
-  }));
-
-  const b2cs = gstr1Data.b2cs.map(row => ({
-    typ: row[0] === 'Inter State' ? 'INTER' : 'INTRA', pos: row[1], rt: row[3], txval: row[4], csamt: row[5] || 0
-  }));
-
-  const hsn = { data: gstr1Data.hsn.map((row, i) => ({
-    num: i + 1, hsn_sc: row[0], desc: row[1], uqc: row[2], qty: row[3], val: row[4],
-    txval: row[6], iamt: row[7], camt: row[8], samt: row[9], csamt: row[10] || 0
-  })) };
-
-  const json = {
-    gstin, fp: gstr1Data.period.replace('-', ''), version: 'GST3.0.4', hash: 'hash not computed',
-    b2b, b2cl, b2cs, hsn
-  };
-  const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `GSTR1-Sales-${gstr1Data.period}.json`;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  if(!gstRes1) return;
+  const errs = gstRes1.issues.filter(i => i.level === 'error').length;
+  if(errs && !confirm(`${errs} problem(s) would make the GST portal reject this file (see "Check before filing"). Download anyway?`)) return;
+  VTGst.downloadJson(gstRes1.json, `GSTR1_${gstFileTag()}.json`);
 }
+function downloadGstr1Excel(){
+  if(!gstRes1) return;
+  XLSX.writeFile(VTGst.gstr1Workbook(XLSX, gstRes1), `GSTR1_${gstFileTag()}.xlsx`);
+}
+function downloadGstr3bJson(){ if(gstRes3b) VTGst.downloadJson(gstRes3b.json, `GSTR3B_${gstFileTag()}.json`); }
+function downloadGstr3bExcel(){ if(gstRes3b) XLSX.writeFile(VTGst.gstr3bWorkbook(XLSX, gstRes3b, { periodLabel: gstr1PeriodLabel }), `GSTR3B_${gstFileTag()}.xlsx`); }
+async function readGst2bFile(file){
+  const name = file.name.toLowerCase();
+  if(name.endsWith('.json')) return VTGst.parse2bJson(JSON.parse(await file.text()));
+  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  return VTGst.parse2bWorkbook(XLSX, wb);
+}
+function renderGst2b(targetId, rec){
+  const S = rec.summary, label = { matched: ['Matched', 'ok'], mismatch: ['Amount differs', 'warn'], 'missing-in-2b': ['Not in GSTR-2B (supplier not filed)', 'bad'],
+    'missing-in-books': ['Missing in your purchases', 'warn'], 'no-gstin': ['No supplier GSTIN', 'off'] };
+  const money = n => n == null ? '' : '₹' + fmtMoney(n);
+  document.getElementById(targetId).innerHTML = `
+    <div class="vt-kpis">${[['Matched', S.matched, '#16A34A'], ['Amount differs', S.mismatch, '#D97706'], ['Not in 2B', S['missing-in-2b'], '#DC2626'], ['Missing in books', S['missing-in-books'], '#D97706'], ['ITC you can claim', money(S.itcClaimable), '#2E4374']]
+      .map(([l, v, a]) => `<div class="vt-kpi" style="--kpi-accent:${a}"><div class="k-label">${l}</div><div class="k-value" style="font-size:20px">${v}</div></div>`).join('')}</div>
+    <table data-excel-name="GSTR-2B reconciliation"><thead><tr><th>Status</th><th>Supplier GSTIN</th><th>Supplier</th><th>Your entry</th><th>GSTR-2B document</th><th>Taxable (yours)</th><th>Taxable (2B)</th><th>Tax (yours)</th><th>Tax (2B)</th></tr></thead><tbody>
+    ${rec.rows.map(r => { const b = r.book || {}, x = r.twoB || {}; const tax2b = r.twoB ? VTGst.r2(x.igst + x.cgst + x.sgst) : null;
+      return `<tr><td><span class="badge ${label[r.status][1]}">${label[r.status][0]}</span>${r.how ? `<div style="font-size:11px;color:var(--muted)">by ${r.how}</div>` : ''}</td>
+        <td><code>${esc(b.ctin || x.ctin || '')}</code></td><td>${esc(b.name || x.name || '')}</td>
+        <td>${r.book ? `${esc(b.no || '—')} · ${esc(b.date)}` : ''}</td><td>${r.twoB ? `${esc(x.no)} · ${esc(x.date)}${x.type !== 'Invoice' ? ' (' + x.type + ')' : ''}` : ''}</td>
+        <td>${money(r.book ? b.taxable : null)}</td><td>${money(r.twoB ? x.taxable : null)}</td><td>${money(r.book ? b.tax : null)}</td><td>${money(tax2b)}</td></tr>`; }).join('')}
+    </tbody></table>`;
+}
+async function runGst2bReconcile(){
+  const f = document.getElementById('gst2bFile').files[0];
+  if(!f){ showMsg('gst2bMsg', 'Choose the GSTR-2B file downloaded from the GST portal first.', false); return; }
+  try{
+    const twoB = await readGst2bFile(f);
+    if(!twoB.length){ showMsg('gst2bMsg', 'No invoices found in that file — is it the GSTR-2B JSON/Excel from the portal?', false); return; }
+    const books = (gstr1PurchaseRows || []).map(r => ({ id: r.id, ctin: (r.gstin || '').toUpperCase(), name: r.supplierName, no: r.invoiceNo || '', date: r.date, taxable: r.taxable, tax: r.gst }));
+    const rec = VTGst.reconcile(books, twoB);
+    renderGst2b('gst2bResult', rec);
+    showMsg('gst2bMsg', `Read ${twoB.length} document(s) from GSTR-2B and ${books.length} purchase(s) from your books.`, true);
+  }catch(err){ showMsg('gst2bMsg', 'Could not read the file: ' + err.message, false); }
+}
+
 function ddmmyyyy(dateStr){
   const [y, m, d] = (dateStr || '').split('-');
   return d && m && y ? `${d}-${m}-${y}` : dateStr;
