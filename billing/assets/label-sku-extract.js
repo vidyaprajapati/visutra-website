@@ -218,14 +218,28 @@ function skuListHas(v, sku){
    removing them: mapping.inactiveSkus = ['MEESHO:vst-a', ...]. An inactive
    SKU is ignored by label matching (the label shows as unmapped) but stays
    reserved to that product. */
-var SKU_FIELD_BY_MARKETPLACE = { AMAZON: 'amazonSku', MEESHO: 'meeshoSku', FLIPKART: 'flipkartSku' };
+// ALL = "All platforms": one SKU code used on Amazon, Meesho AND Flipkart for the same product.
+var SKU_FIELD_BY_MARKETPLACE = { AMAZON: 'amazonSku', MEESHO: 'meeshoSku', FLIPKART: 'flipkartSku', ALL: 'allSku' };
+var SKU_FIELDS = ['amazonSku', 'meeshoSku', 'flipkartSku', 'allSku'];
 function skuStateKey(marketplace, sku){ return String(marketplace).toUpperCase() + ':' + String(sku).trim().toLowerCase(); }
 function isSkuInactive(m, marketplace, sku){
   return !!(m && Array.isArray(m.inactiveSkus) && m.inactiveSkus.includes(skuStateKey(marketplace, sku)));
 }
 function mappingMatchesSku(m, marketplace, sku){
   const field = SKU_FIELD_BY_MARKETPLACE[marketplace];
-  return !!field && skuListHas(m[field], sku) && !isSkuInactive(m, marketplace, sku);
+  if (field && field !== 'allSku' && skuListHas(m[field], sku) && !isSkuInactive(m, marketplace, sku)) return true;
+  // An "All platforms" SKU matches a label / report / file from ANY marketplace.
+  return skuListHas(m.allSku, sku) && !isSkuInactive(m, 'ALL', sku);
+}
+/* Which products already use this SKU in a way that would clash with adding
+   it to `field` on another product:
+     - a platform SKU clashes with the same code on that platform or in "All platforms"
+     - an "All platforms" SKU clashes with the same code anywhere
+   (The same code on DIFFERENT platforms for different products is allowed —
+   e.g. VST-A = 9 kg cover on Meesho but 6 kg on Flipkart.) */
+function skuClashes(mappings, field, sku, exceptId){
+  return (mappings || []).filter(m => m.id !== exceptId && m.status !== 'INACTIVE' &&
+    (field === 'allSku' ? SKU_FIELDS.some(f => skuListHas(m[f], sku)) : (skuListHas(m[field], sku) || skuListHas(m.allSku, sku))));
 }
 
 /* ---------------- Smart product suggestion for a new SKU ----------------
