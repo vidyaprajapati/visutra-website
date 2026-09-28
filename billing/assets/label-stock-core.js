@@ -295,7 +295,7 @@
      Re-uploading the same report therefore changes nothing the second time.
      rows: [{ marketplace, sku, orderId, qty, isReturn }]  side: 'seller'|'buyer'
      Adds to each row: key (null = no order ID → old behaviour) and
-     status: 'new' | 'already'. */
+     status: sales 'new' | 'already'; returns 'addback' | 'netted' | 'already'. */
   /* How a marketplace report status counts (Meesho "Reason for Credit
      Entry", Flipkart "Order Status"):
        CANCELLED                        → 'cancel' (counts 0)
@@ -363,16 +363,23 @@
         retExists[k] = (await u(uid).collection(cols.ret).doc(k).get()).exists;
       });
     }
-    // A return no longer needs its sale to be on record: most returns in a
-    // month's report are for orders sold before that record existed, and
-    // requiring it wrongly skipped them. Cancellations — the case that rule
-    // was guarding — now count 0 anyway (reconStatusKind).
-    const seen = new Set();
-    linked.forEach(r => {
-      const done = r.isReturn ? retExists[r.key] : soldExists[r.key];
-      const dupKey = (r.isReturn ? 'R|' : 'S|') + r.key;
-      if(done || seen.has(dupKey)) r.status = 'already';   // counted before, or listed twice in this upload
-      else { r.status = 'new'; seen.add(dupKey); }
+    // Sales: 'new' (deduct now) or 'already' (deducted before / listed twice).
+    // Returns — Total orders − Returns = Actual sales:
+    //   'already' — this return was added back before
+    //   'addback' — the order WAS deducted when it left (label printed, an
+    //               earlier upload, or a sale row in this same file), so the
+    //               item physically came back: add it to stock again
+    //   'netted'  — the order was never deducted: it went out and came back,
+    //               so no stock change; it only reduces "actual sales"
+    const seen = new Set(), soldNow = new Set();
+    linked.filter(r => !r.isReturn).forEach(r => {
+      if(soldExists[r.key] || seen.has('S|' + r.key)) r.status = 'already';
+      else { r.status = 'new'; seen.add('S|' + r.key); soldNow.add(r.key); }
+    });
+    linked.filter(r => r.isReturn).forEach(r => {
+      if(retExists[r.key] || seen.has('R|' + r.key)) { r.status = 'already'; return; }
+      seen.add('R|' + r.key);
+      r.status = (soldExists[r.key] || soldNow.has(r.key)) ? 'addback' : 'netted';
     });
     return rows;
   }
@@ -380,7 +387,7 @@
      Returns box or re-upload sees them). targetId = productId / mappingId. */
   async function markReconRows(uid, side, rows, targetId, source){
     const cols = reconCols(side);
-    const todo = rows.filter(r => r.key && r.status === 'new');
+    const todo = rows.filter(r => r.key && (r.status === 'new' || r.status === 'addback' || r.status === 'netted'));
     for(let i = 0; i < todo.length; i += 400){
       const batch = db.batch();
       todo.slice(i, i + 400).forEach(r => {
@@ -391,6 +398,65 @@
       });
       await batch.commit();
     }
+  }
+
+  /* ---------- Monthly reconciliation aggregator (Seller + Buyer pages) ----------
+     Your method: TOTAL ORDERS − RETURNS = ACTUAL SALES, and stock goes down by
+     actual sales. Per report SKU:
+       orders      every non-cancelled order row in the file
+       returns     returned / RTO rows in the file
+       actualSales orders − returns
+       soldAlready actual sales already deducted before (labels, earlier upload)
+       stockOut    actual sales to deduct NOW   (soldQty)
+       addBack     returns of orders deducted when they left → back into stock (returnedQty)
+       netted      returns of orders never deducted → no stock change
+       netChange   addBack − stockOut  (what the stock actually changes by)
+     Rows with an order ID are matched to earlier labels/uploads (linkReconRows);
+     rows without one: sale = deduct, return = netted. */
+  function reconAggregator(){
+    const agg = new Map(), held = [];
+    const entry = raw => {
+      const k = String(raw).toLowerCase();
+      if(!agg.has(k)) agg.set(k, { displayKey: raw, orders: 0, returns: 0, soldAlready: 0, retAlready: 0, stockOut: 0, addBack: 0, netted: 0, cancelled: 0, linkedRows: [] });
+      return agg.get(k);
+    };
+    return {
+      sold(raw, qty, mk, orderId){
+        if(!raw) return;
+        if(orderId && mk) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn: false });
+        else { const e = entry(raw); e.orders += qty; e.stockOut += qty; }
+      },
+      ret(raw, qty, mk, orderId){
+        if(!raw) return;
+        if(orderId && mk) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn: true });
+        else { const e = entry(raw); e.orders += qty; e.returns += qty; e.netted += qty; }
+      },
+      cancel(raw, qty){ if(raw) entry(raw).cancelled += qty; },
+      async finish(uid, side){
+        if(held.length){
+          await linkReconRows(uid, side, held);
+          held.forEach(r => {
+            const e = entry(r.sku);
+            e.orders += r.qty;
+            if(!r.isReturn){
+              if(r.status === 'already') e.soldAlready += r.qty;
+              else { e.stockOut += r.qty; if(r.key) e.linkedRows.push(r); }
+            } else {
+              e.returns += r.qty;
+              if(r.status === 'already') e.retAlready += r.qty;
+              else if(r.status === 'addback'){ e.addBack += r.qty; e.linkedRows.push(r); }
+              else { e.netted += r.qty; if(r.key) e.linkedRows.push(r); }
+            }
+          });
+        }
+        return [...agg.entries()].map(([rawKey, e]) => ({
+          rawKey, displayKey: e.displayKey, orders: e.orders, returns: e.returns, actualSales: e.orders - e.returns,
+          soldAlready: e.soldAlready, retAlready: e.retAlready, netted: e.netted, cancelledQty: e.cancelled,
+          soldQty: e.stockOut, returnedQty: e.addBack, alreadyQty: e.soldAlready + e.retAlready,
+          netChange: e.addBack - e.stockOut, linkedRows: e.linkedRows
+        })).filter(r => r.orders || r.cancelledQty).sort((a, b) => b.orders - a.orders);
+      }
+    };
   }
 
   /* ---------- Reorder suggestions (#7) ----------
@@ -439,5 +505,5 @@
       <td>${badge(r.status)}</td></tr>`).join('');
   }
 
-  global.VLS = { reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce };
+  global.VLS = { reconAggregator, reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce };
 })(window);

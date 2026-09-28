@@ -772,93 +772,37 @@ function renderStockColumnMapUI(){
   });
 }
 async function aggregateStockUpload(){
-  // normalized SKU/text -> {displayKey, soldQty, returnedQty, skippedQty, skippedStatuses}
-  const agg = new Map();
-  function bump(raw, qty, isReturn){
-    if(!raw) return;
-    const key = raw.toLowerCase();
-    if(!agg.has(key)) agg.set(key, { displayKey: raw, soldQty: 0, returnedQty: 0, skippedQty: 0, skippedStatuses: new Set(), alreadyQty: 0, cancelledQty: 0, linkedRows: [] });
-    const entry = agg.get(key);
-    if(isReturn) entry.returnedQty += qty; else entry.soldQty += qty;
-  }
-  // Rows from Meesho/Flipkart reports that carry an order ID are held back
-  // and checked against labels already printed / returns already added
-  // (label-stock-core.js → linkReconRows) before they're counted.
-  const held = [];
-  // Cancelled rows: shown in their own column, never change stock.
-  function addCancelled(raw, qty){
-    bump(raw, 0, false);
-    agg.get(raw.toLowerCase()).cancelledQty += qty;
-  }
-  function hold(mk, raw, qty, isReturn, orderId){
-    if(orderId) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn });
-    else bump(raw, qty, isReturn);
-  }
-
+  // Total orders − Returns = Actual sales (shared engine: label-stock-core.js → reconAggregator)
+  const A = VLS.reconAggregator();
   stockUploadSheets.forEach((s, i) => {
-    if(s.detected && s.detected.format === 'meesho'){
-      const { reasonIdx, skuIdx, qtyIdx, orderIdx } = s.detected;
-      // One row per order: Meesho lists some orders twice (payment + later
-      // adjustment); keep the most final status (label-stock-core.js).
-      VLS.collapseReconRows(s.rows, orderIdx, reasonIdx, skuIdx).forEach(row => {
+    if(s.detected && (s.detected.format === 'meesho' || s.detected.format === 'flipkart-pnl')){
+      const mk = s.detected.format === 'meesho' ? 'MEESHO' : 'FLIPKART';
+      const { skuIdx, qtyIdx, orderIdx } = s.detected;
+      const statusIdx = s.detected.format === 'meesho' ? s.detected.reasonIdx : s.detected.statusIdx;
+      // Meesho lists some orders twice (payment + later adjustment) — one row per order.
+      const rows = mk === 'MEESHO' ? VLS.collapseReconRows(s.rows, orderIdx, statusIdx, skuIdx) : s.rows;
+      rows.forEach(row => {
         const sku = String(row[skuIdx] ?? '').trim();
         if(!sku) return;
         const qty = parseFloat(row[qtyIdx]) || 0;
-        const reason = String(row[reasonIdx] ?? '').trim();
         const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
-        // DELIVERED / EXCHANGED = sold, CANCELLED = 0, anything else = returned
-        // (shared rule: label-stock-core.js → reconStatusKind).
-        const kind = VLS.reconStatusKind(reason);
-        if(kind === 'sold') hold('MEESHO', sku, qty, false, orderId);
-        else if(kind === 'return') hold('MEESHO', sku, qty, true, orderId);
-        else if(kind === 'cancel') addCancelled(sku, qty);
-      });
-    } else if(s.detected && s.detected.format === 'flipkart-pnl'){
-      const { skuIdx, statusIdx, qtyIdx, orderIdx } = s.detected;
-      s.rows.forEach(row => {
-        const sku = String(row[skuIdx] ?? '').trim();
-        if(!sku) return;
-        const qty = parseFloat(row[qtyIdx]) || 0;
-        const status = String(row[statusIdx] ?? '').trim();
-        const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
-        const kind = VLS.reconStatusKind(status);
-        if(kind === 'sold') hold('FLIPKART', sku, qty, false, orderId);
-        else if(kind === 'return') hold('FLIPKART', sku, qty, true, orderId);
-        else if(kind === 'cancel') addCancelled(sku, qty);
+        // DELIVERED / EXCHANGED = order sold, CANCELLED = not counted, anything else = returned
+        const kind = VLS.reconStatusKind(String(row[statusIdx] ?? '').trim());
+        if(kind === 'sold') A.sold(sku, qty, mk, orderId);
+        else if(kind === 'return') A.ret(sku, qty, mk, orderId);
+        else if(kind === 'cancel') A.cancel(sku, qty);
       });
     } else {
-      // Unrecognised format — same behaviour as before this change: every
-      // row counts as a plain sale, since there's no status column to tell
-      // a return apart from a delivery.
       const prodIdx = parseInt(document.getElementById('stockColProd'+i).value, 10);
       const qtyIdx = parseInt(document.getElementById('stockColQty'+i).value, 10);
       s.rows.forEach(row => {
         const raw = String(row[prodIdx] ?? '').trim();
-        if(!raw) return;
-        bump(raw, parseFloat(row[qtyIdx]) || 0, false);
+        if(raw) A.sold(raw, parseFloat(row[qtyIdx]) || 0);
       });
     }
   });
+  stockAggregation = await A.finish(currentUser.uid, 'seller');
 
-  if(held.length){
-    await VLS.linkReconRows(currentUser.uid, 'seller', held);
-    held.forEach(r => {
-      if(!r.key || r.status === 'new'){
-        bump(r.sku, r.qty, r.isReturn);
-        if(r.key) agg.get(r.sku.toLowerCase()).linkedRows.push(r);
-      } else {
-        // 'already' = that sale/return was counted before (printed label,
-        // Returns box or an earlier upload) — doesn't change stock again.
-        bump(r.sku, 0, false);
-        agg.get(r.sku.toLowerCase()).alreadyQty += r.qty;
-      }
-    });
-  }
-
-  stockAggregation = Array.from(agg.entries())
-    .map(([rawKey, v]) => ({ rawKey, displayKey: v.displayKey, soldQty: v.soldQty, returnedQty: v.returnedQty, netChange: v.returnedQty - v.soldQty, alreadyQty: v.alreadyQty, cancelledQty: v.cancelledQty, linkedRows: v.linkedRows }))
-    .filter(r => r.soldQty !== 0 || r.returnedQty !== 0 || r.alreadyQty !== 0 || r.cancelledQty !== 0)
-    .sort((a,b) => Math.abs(b.netChange) - Math.abs(a.netChange));
   renderStockAggregationTable();
 }
 function renderStockAggregationTable(){
@@ -876,8 +820,9 @@ function renderStockAggregationTable(){
     const netStyle = r.netChange < 0 ? 'color:var(--paprika-dark)' : (r.netChange > 0 ? 'color:#0E7C6B' : '');
     return `<tr${known ? '' : ' style="background:#FFF7ED"'}>
       <td>${esc(r.displayKey)}${known ? '' : ' <span class="badge" title="No saved mapping yet — pick a product on the right">Unmapped</span>'}</td>
-      <td>${r.soldQty || 0}</td>
-      <td>${r.returnedQty || 0}</td>
+      <td>${r.orders || 0}</td>
+      <td>${r.returns || 0}</td>
+      <td><b>${r.actualSales || 0}</b></td>
       <td style="color:var(--muted)">${r.alreadyQty || 0}</td>
       <td style="color:var(--muted)">${r.cancelledQty || 0}</td>
       <td style="${netStyle}">${r.netChange > 0 ? '+' : ''}${r.netChange}</td>
