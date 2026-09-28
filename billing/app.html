@@ -435,6 +435,7 @@
         <div class="grid2">
           <div class="field"><label>Supplier</label><select id="purSupplier" onchange="onPurchaseSupplierChange()"></select></div>
           <div class="field"><label>Purchase date</label><input id="purDate" type="date"></div>
+          <div class="field"><label>Supplier invoice no. <span style="text-transform:none;color:var(--muted)">(for GSTR-2B matching)</span></label><input id="purInvoiceNo" placeholder="e.g. TC/0045" maxlength="16"></div>
         </div>
 
         <table class="line-items">
@@ -684,6 +685,30 @@
         <p class="msg" id="gstrMsg"></p>
       </div>
 
+      <div class="card hidden" id="gstFilingCard">
+        <h2>📄 GST Filing Files — <span id="gstFilingPeriod"></span></h2>
+        <p class="sub">Ready-to-upload files in the current GST portal format (HSN split B2B/B2C, documents issued, e-commerce table). Upload the <b>JSON</b> on the GST portal → Returns → GSTR-1 → <b>Prepare Offline → Upload</b>, or open the <b>Excel</b> in the GSTN Returns Offline Tool. Fix anything listed under "Check before filing" first.</p>
+        <div id="gstCheckBox"></div>
+        <div class="vt-kpis" id="gstKpis"></div>
+        <h3 style="font-family:var(--display);font-size:16px;margin:10px 0 6px">GSTR-1 — Sales</h3>
+        <div class="row-actions" style="margin-bottom:6px">
+          <button class="btn primary" onclick="downloadGstr1Json()">⬇ GSTR-1 JSON (portal upload)</button>
+          <button class="btn" onclick="downloadGstr1Excel()">⬇ GSTR-1 Excel (Offline Tool)</button>
+        </div>
+        <p class="sub" id="gstr1Counts" style="margin-top:6px"></p>
+        <h3 style="font-family:var(--display);font-size:16px;margin:18px 0 6px">GSTR-3B — Monthly Summary</h3>
+        <div id="gst3bBox"></div>
+        <div class="row-actions" style="margin-top:8px">
+          <button class="btn" onclick="downloadGstr3bJson()">⬇ GSTR-3B JSON</button>
+          <button class="btn" onclick="downloadGstr3bExcel()">⬇ GSTR-3B Excel</button>
+        </div>
+        <h3 style="font-family:var(--display);font-size:16px;margin:18px 0 6px">GSTR-2B Reconciliation — Purchases vs. what suppliers filed</h3>
+        <p class="sub">Download GSTR-2B from the GST portal (Returns → GSTR-2B → Download JSON or Excel) and choose it here. Your purchase entries for this period are matched by supplier GSTIN + invoice number (or amount + date). Claim ITC in GSTR-3B only for what is matched.</p>
+        <div class="row-actions"><input type="file" id="gst2bFile" accept=".json,.xlsx,.xls,.zip"><button class="btn primary" onclick="runGst2bReconcile()">Reconcile</button></div>
+        <p class="msg" id="gst2bMsg"></p>
+        <div id="gst2bResult"></div>
+      </div>
+
       <div class="card hidden" id="gstrSummaryCard">
         <h2>Sales (Outward Supplies) — <span id="gstrPeriodLabel"></span></h2>
         <div class="grid3">
@@ -824,6 +849,7 @@
 <script src="assets/label-sku-extract.js"></script>
 <script src="assets/label-stock-core.js"></script>
 <script src="assets/stock-charts.js"></script>
+<script src="assets/gst-returns.js"></script>
 <script src="assets/billing-app.js"></script>
 <script src="assets/android-download.js"></script>
 <script src="assets/vt-excel.js"></script>
