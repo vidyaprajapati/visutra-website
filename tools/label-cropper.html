@@ -1827,7 +1827,7 @@ function renderStockPanel(rows){
   const active = mappingsCache.filter(m => m.status === 'ACTIVE')
     .slice().sort((a,b) => String(a.productName||'').localeCompare(String(b.productName||'')));
   // Smart suggestion: the product whose existing SKUs look most like this one.
-  const buyerCandidates = active.map(m => ({ id: m.id, skus: [...splitSkuList(m.amazonSku), ...splitSkuList(m.meeshoSku), ...splitSkuList(m.flipkartSku)] }));
+  const buyerCandidates = active.map(m => ({ id: m.id, skus: [...splitSkuList(m.amazonSku), ...splitSkuList(m.meeshoSku), ...splitSkuList(m.flipkartSku), ...splitSkuList(m.allSku)] }));
   const productOptionsFor = selId => active.map(m =>
     `<option value="${escapeHtml(m.id)}"${m.id === selId ? ' selected' : ''}>${m.id === selId ? '★ ' : ''}${escapeHtml(m.productName)}${m.buyerSku ? ' — ' + escapeHtml(m.buyerSku) : ''} (stock ${m.stock||0})</option>`).join('');
 
@@ -1846,6 +1846,7 @@ function renderStockPanel(rows){
               <option value="">Select your product…</option>
               <option value="${NEW_BUYER_PRODUCT}">＋ New product with this SKU…</option>${productOptionsFor(sug ? sug.id : '')}
             </select>${sug ? '<span class="vlc-pill" title="Pre-selected because its existing SKUs look like this one — check it, then click Map">★ suggested</span>' : ''}
+            <label style="font-size:11.5px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap" title="Same SKU code on Amazon, Meesho and Flipkart"><input type="checkbox" id="vlcBuyerAllPf-${i}" style="width:auto"> all platforms</label>
             <button class="vlc-map-btn" id="vlcBuyerMapBtn-${i}" onclick="saveBuyerMapping(${i})">Map</button>
           </div>
         </td>
@@ -1885,14 +1886,16 @@ async function saveBuyerMapping(i){
   const sel = document.getElementById('vlcBuyerMapSel-' + i);
   const btn = document.getElementById('vlcBuyerMapBtn-' + i);
   if(!r || !sel || !cropperUser) return;
-  const field = mkField(r.marketplace);
+  const allPf = document.getElementById('vlcBuyerAllPf-' + i);
+  // "all platforms" ticked → the SKU matches labels from Amazon, Meesho and Flipkart.
+  const field = (allPf && allPf.checked) ? 'allSku' : mkField(r.marketplace);
   if(!field){ buyerMsg('Unknown marketplace for ' + r.sku + '.', false); return; }
   const choice = sel.value;
   if(!choice){ buyerMsg('Pick a product for ' + r.sku + ' first (or ＋ New product).', false); return; }
   const uid = cropperUser.uid;
   const col = db.collection('users').doc(uid).collection('buyerSkuMappings');
   // Never let one SKU sit on two products — a label couldn't pick which stock.
-  const clash = mappingsCache.find(m => m.status === 'ACTIVE' && skuListHas(m[field], r.sku));
+  const clash = skuClashes(mappingsCache.filter(m => m.status === 'ACTIVE'), field, r.sku)[0];
   if(clash){
     buyerMsg(isSkuInactive(clash, r.marketplace, r.sku)
       ? `${r.sku} is on "${clash.productName}" but switched off there — switch it on (or remove it) in Buyer SKU Master → My Products → Manage SKUs.`
@@ -1911,7 +1914,7 @@ async function saveBuyerMapping(i){
       mapping = {
         linkType: 'OWN', sellerId: uid, sellerName: 'Not linked (own product)', productId: 'own_' + ref.id,
         productName: name, sellerProductName: '', sellerSku: '', buyerSku: '',
-        amazonSku: '', meeshoSku: '', flipkartSku: '', [field]: r.sku,
+        amazonSku: '', meeshoSku: '', flipkartSku: '', allSku: '', [field]: r.sku,
         status: 'ACTIVE', stock: 0, reorderLevel: 0,
         createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       };
