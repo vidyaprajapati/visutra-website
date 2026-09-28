@@ -408,7 +408,14 @@ async function saveProduct(){
   };
   if(!data.name){ showMsg('productMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('products');
-  if(id){ await col.doc(id).set(data); } else { await col.add(data); }
+  if(id){
+    // Editing: change only what's on the form. Stock, visibility and on/off
+    // are NOT written — they may have changed since this page loaded (a label
+    // printed, a purchase, an order), and writing the page's old copy back
+    // would undo that.
+    const { stock, active, buyerVisibility, ...formFields } = data;
+    await col.doc(id).set(formFields, { merge: true });
+  } else { await col.add(data); }
   ['pName','pHsn','pUnit','pSku','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
   showMsg('productMsg', 'Saved.', true);
@@ -426,7 +433,11 @@ function editProduct(id){
   document.getElementById('pUnit').value = p.unit;
   document.getElementById('pSku').value = p.sku || '';
   document.getElementById('pPriceIncl').value = (p.price * (1 + (p.gstRate||0)/100)).toFixed(2);
-  document.getElementById('pGst').value = p.gstRate;
+  const gstSel = document.getElementById('pGst');
+  if(![...gstSel.options].some(opt => Number(opt.value) === Number(p.gstRate))){
+    gstSel.insertAdjacentHTML('beforeend', `<option value="${Number(p.gstRate)}">${Number(p.gstRate)}%</option>`);
+  }
+  gstSel.value = String(Number(p.gstRate));
   document.getElementById('pReorderLevel').value = p.reorderLevel || 0;
   updateProductExclusivePreview();
 }
@@ -1334,7 +1345,7 @@ async function saveSupplier(){
   };
   if(!data.name){ showMsg('supplierMsg', 'Supplier name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('suppliers');
-  if(id){ await col.doc(id).set(data); } else { await col.add(data); }
+  if(id){ await col.doc(id).set(data, { merge: true }); } else { await col.add(data); }
   ['sLegalName','sName','sGstin','sAddress','sEmail','sPhone','sEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('sState').value = '';
   showMsg('supplierMsg', 'Saved.', true);
@@ -1429,7 +1440,7 @@ async function savePurchaseProduct(){
   };
   if(!data.name){ showMsg('purchaseProductMsg', 'Product name is required.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('purchaseProducts');
-  if(id){ await col.doc(id).set(data); } else { await col.add(data); }
+  if(id){ await col.doc(id).set(data, { merge: true }); } else { await col.add(data); }
   ['ppName','ppHsn','ppUnit','ppEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('ppLinkedProduct').value = '';
   showMsg('purchaseProductMsg', 'Saved.', true);
@@ -1910,6 +1921,13 @@ function purchaseLineCalc(li){
   const taxable = gstRate ? total / (1 + gstRate/100) : total;
   return { taxable, gstAmt: total - taxable, total };
 }
+/* GST slabs offered in dropdowns (incl. the 40% and 3% slabs), plus any
+   other rate already saved on a record — so editing never changes it. */
+const GST_RATE_CHOICES = [0, 3, 5, 12, 18, 28, 40];
+function gstRateOptions(current){
+  const c = Number(current);
+  return (isFinite(c) && !GST_RATE_CHOICES.includes(c)) ? GST_RATE_CHOICES.concat([c]).sort((a, b) => a - b) : GST_RATE_CHOICES;
+}
 function renderPurchaseLineItems(){
   const tbody = document.getElementById('purchaseLineItemsTable');
   tbody.innerHTML = purchaseLineItems.map((li, i) => {
@@ -1925,7 +1943,7 @@ function renderPurchaseLineItems(){
         <option value="excl" ${mode==='excl'?'selected':''}>Excl. GST</option>
       </select></td>
       <td><select style="width:80px" onchange="updatePurchaseLine(${i},'gstRate',this.value)">
-        ${[0,5,12,18,28].map(r => `<option value="${r}" ${Number(li.gstRate)===r ? 'selected' : ''}>${r}%</option>`).join('')}
+        ${gstRateOptions(li.gstRate).map(r => `<option value="${r}" ${Number(li.gstRate)===r ? 'selected' : ''}>${r}%</option>`).join('')}
       </select></td>
       <td>${fmtMoney(taxable)}</td>
       <td>${fmtMoney(gstAmt)}</td>
@@ -2028,11 +2046,14 @@ async function savePurchase(){
     if(original){
       await reverseStockForPurchaseItems(original.items || [], dateVal, `Correction: purchase on ${original.date} edited`);
     }
+    // merge:true — only these fields change; everything else on the purchase
+    // (GST-filed lock, order links, …) is kept. A plain set() erased them.
     await db.collection('users').doc(currentUser.uid).collection('purchases').doc(editId).set({
       supplierId: supId, supplierName: supplier.name, date: dateVal,
+      invoiceNo: ((document.getElementById('purInvoiceNo') || {}).value || '').trim(),
       items, subtotal: totals.subtotal, gstTotal: totals.gstTotal, grandTotal: totals.grand,
       createdAt: (original && original.createdAt) || firebase.firestore.FieldValue.serverTimestamp()
-    });
+    }, { merge: true });
     for(const li of items){
       if(li.linkedProductId){
         await addStockMovement('purchase-in', li.linkedProductId, li.qty, dateVal, `Purchase from ${supplier.name} (edited)`);
@@ -2100,6 +2121,7 @@ async function savePurchase(){
   purchaseLineItems = [];
   addPurchaseLineItem();
   document.getElementById('purSupplier').value = '';
+  const newInvNoEl = document.getElementById('purInvoiceNo'); if(newInvNoEl) newInvNoEl.value = '';
   document.getElementById('purPaidNow').value = '0'; updateAmountWords('purPaidNow','purPaidNowWords');
   await loadPurchases();
 }
@@ -2278,10 +2300,16 @@ function editPurchase(id){
   // Purchase Product's CURRENT hsn when the saved item has none — otherwise
   // editing an old purchase (recorded before hsn existed, or before it was
   // filled in for that product) would silently drop/never gain hsn on save.
+  // Load each line EXACTLY as saved — including the price type (Incl./Excl.
+  // GST). Leaving it out made an "Excl. GST" purchase reopen as "Incl. GST",
+  // silently changing its taxable value, GST and total before you touched it.
   purchaseLineItems = (purchase.items || []).map(li => ({
     productId: li.productId, name: li.name, unit: li.unit, qty: li.qty, rate: li.rate, gstRate: li.gstRate,
+    priceMode: li.priceMode === 'excl' ? 'excl' : 'incl',
     hsn: li.hsn || (purchaseProductsCache.find(p => p.id === li.productId) || {}).hsn || ''
   }));
+  const invNoEl = document.getElementById('purInvoiceNo');
+  if(invNoEl) invNoEl.value = purchase.invoiceNo || '';
   if(!purchaseLineItems.length) purchaseLineItems.push({productId:'', name:'', unit:'PCS', qty:1, rate:0, gstRate:0});
   renderPurchaseLineItems();
   document.getElementById('purFormTitle').textContent = 'Edit Purchase';
@@ -2291,6 +2319,7 @@ function editPurchase(id){
 }
 function cancelEditPurchase(){
   document.getElementById('purEditId').value = '';
+  const invNoEl = document.getElementById('purInvoiceNo'); if(invNoEl) invNoEl.value = '';
   document.getElementById('purSupplier').value = '';
   document.getElementById('purPaidNow').value = '0'; updateAmountWords('purPaidNow','purPaidNowWords');
   purchaseLineItems = [];
@@ -2345,7 +2374,7 @@ async function saveEditedPayment(){
     date: dateVal, amount, mode, note,
     purchaseId: existing.purchaseId || null,
     createdAt: existing.createdAt || firebase.firestore.FieldValue.serverTimestamp()
-  });
+  }, { merge: true });
   closeEditPaymentModal();
   await loadPayments();
   if(currentLedgerSupplierId) renderSupplierLedger(currentLedgerSupplierId);
