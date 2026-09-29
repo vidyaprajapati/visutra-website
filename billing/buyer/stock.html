@@ -125,7 +125,7 @@
     <div id="stockAggWrap" class="hidden" style="margin-top:18px">
       <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 2 — Match each product/SKU, then apply</h3>
       <p class="sub"><b>Total orders − Returns = Actual sales</b>, and stock goes down by actual sales. Status column: <b>DELIVERED / EXCHANGED</b> = order, <b>CANCELLED</b> = not counted, <b>anything else (RTO, RETURN, LOST…)</b> = return. A return only adds stock back if that order was already deducted when it left (label printed / earlier upload); otherwise it simply isn't counted as a sale. Orders already counted before are not counted again.</p>
-      <table><thead><tr><th>From report</th><th title="Every order in the file except cancelled ones">Total orders</th><th title="Returned / RTO orders in the file">Returns</th><th title="Total orders − Returns">Actual sales</th><th title="Already counted earlier (printed label or an earlier upload) — not counted again">Already counted</th><th title="CANCELLED — not counted">Cancelled</th><th title="What your stock actually changes by now">Stock change</th><th>Matches to</th></tr></thead>
+      <table><thead><tr><th>From report</th><th>Platform</th><th title="Every order in the file except cancelled ones">Total orders</th><th title="Returned / RTO orders in the file">Returns</th><th title="Total orders − Returns">Actual sales</th><th title="Already counted earlier (printed label or an earlier upload) — not counted again">Already counted</th><th title="CANCELLED — not counted">Cancelled</th><th title="What your stock actually changes by now">Stock change</th><th>Matches to</th><th title="Unmapped SKUs are saved into Buyer SKU Master when you apply">Buyer SKU Master</th></tr></thead>
       <tbody id="stockAggTable"></tbody></table>
       <h3 style="font-family:var(--display);font-size:16px;margin:20px 0 6px">Step 3 — Check the product-wise summary, then apply</h3>
       <p class="sub">What this upload will do to each of your products for the chosen month — compare it with your own Excel before applying. <b>Already recorded</b> = sales/returns already in the system for that month (printed labels, earlier uploads, manual entries). <b>From this file</b> = only the new orders (ones already counted are skipped). Use the green <b>Excel</b> button to download this summary.</p>
@@ -629,15 +629,26 @@ async function parseStockFiles(){
   showStockMsg(`Read ${stockUploadSheets.length} sheet(s) from ${files.length} file(s).` +
     (autoCount ? ` ${autoCount} recognised automatically (Meesho/Flipkart) — returns and cancellations will be added back to stock, not deducted.` : ' Pick the product and quantity column for each below.'), true);
 }
+const RECON_PLATFORMS = [['MEESHO', 'Meesho'], ['FLIPKART', 'Flipkart'], ['AMAZON', 'Amazon'], ['ALL', 'All platforms / mixed']];
+function platformSelectHtml(i, preset){
+  return `<div class="field" style="max-width:320px;margin:8px 0 0"><label>Which platform is this file from?</label>
+    <select id="stockPlatform${i}"><option value="">Select platform…</option>${RECON_PLATFORMS.map(([v, l]) => `<option value="${v}" ${v === preset ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`;
+}
+function reconPlatformOf(i){
+  const el = document.getElementById('stockPlatform' + i);
+  return el ? el.value : '';
+}
 function renderStockColumnMapUI(){
   document.getElementById('stockColumnMapWrap').classList.remove('hidden');
   document.getElementById('stockAggWrap').classList.add('hidden');
   document.getElementById('stockColumnMapList').innerHTML = stockUploadSheets.map((s, i) => {
+    const preset = s.detected ? (s.detected.format === 'meesho' ? 'MEESHO' : 'FLIPKART') : '';
     if(s.detected){
       const label = s.detected.format === 'meesho' ? (s.detected.variant === 'payment' ? 'Meesho payment file (Order Payments)' : 'Meesho') : 'Flipkart Orders P&L';
       return `<div class="box" style="margin-bottom:10px">
         <p style="margin:0;font-size:13px"><span class="badge">${label} — detected automatically</span></p>
         <p style="margin:6px 0 0;font-size:13px;color:var(--muted)">${esc(s.fileName)} — ${esc(s.sheetName)} (${s.rows.length} rows). Status/reason column read automatically — no columns to pick.</p>
+        ${platformSelectHtml(i, preset)}
       </div>`;
     }
     const opts = s.headers.map((h, ci) => `<option value="${ci}">${esc(h || ('(column ' + (ci+1) + ')'))}</option>`).join('');
@@ -647,6 +658,7 @@ function renderStockColumnMapUI(){
         <div class="field"><label>Product / SKU column</label><select id="stockColProd${i}">${opts}</select></div>
         <div class="field"><label>Quantity column</label><select id="stockColQty${i}">${opts}</select></div>
       </div>
+      ${platformSelectHtml(i, preset)}
     </div>`;
   }).join('');
   stockUploadSheets.forEach((s, i) => {
@@ -659,10 +671,13 @@ function renderStockColumnMapUI(){
 }
 async function aggregateStockUpload(){
   // Total orders − Returns = Actual sales (shared engine: label-stock-core.js → reconAggregator)
+  const missing = stockUploadSheets.map((s, i) => reconPlatformOf(i) ? null : s.fileName).filter(Boolean);
+  if(missing.length){ showStockMsg(`Choose which platform each file is from (${missing.join(', ')}).`, false); return; }
   const A = VLS.reconAggregator();
   stockUploadSheets.forEach((s, i) => {
+    const platform = reconPlatformOf(i);
     if(s.detected && (s.detected.format === 'meesho' || s.detected.format === 'flipkart-pnl')){
-      const mk = s.detected.format === 'meesho' ? 'MEESHO' : 'FLIPKART';
+      const mk = platform;
       const { skuIdx, qtyIdx, orderIdx } = s.detected;
       const statusIdx = s.detected.format === 'meesho' ? s.detected.reasonIdx : s.detected.statusIdx;
       // Meesho lists some orders twice (payment + later adjustment) — one row per order.
@@ -676,14 +691,14 @@ async function aggregateStockUpload(){
         const kind = VLS.reconStatusKind(String(row[statusIdx] ?? '').trim());
         if(kind === 'sold') A.sold(sku, qty, mk, orderId);
         else if(kind === 'return') A.ret(sku, qty, mk, orderId);
-        else if(kind === 'cancel') A.cancel(sku, qty);
+        else if(kind === 'cancel') A.cancel(sku, qty, mk);
       });
     } else {
       const prodIdx = parseInt(document.getElementById('stockColProd'+i).value, 10);
       const qtyIdx = parseInt(document.getElementById('stockColQty'+i).value, 10);
       s.rows.forEach(row => {
         const raw = String(row[prodIdx] ?? '').trim();
-        if(raw) A.sold(raw, parseFloat(row[qtyIdx]) || 0);
+        if(raw) A.sold(raw, parseFloat(row[qtyIdx]) || 0, platform);
       });
     }
   });
@@ -700,29 +715,69 @@ function renderStockAggregationTable(){
   }
   wrap.classList.remove('hidden');
   document.getElementById('stockAggTable').innerHTML = stockAggregation.map((r, i) => {
-    const known = reconciliationMapCache.find(m => m.rawKey === r.rawKey);
-    // Not matched before? Use your Buyer SKU Master: the product that already
-    // has this marketplace SKU (active SKUs only).
-    const auto = known ? null : mySkuMappingsCache.find(m => m.status !== 'INACTIVE' &&
-      ['AMAZON', 'MEESHO', 'FLIPKART'].some(mk => mappingMatchesSku(m, mk, r.displayKey)));
-    const selId = known ? known.mappingId : (auto ? auto.id : '');
+    // Buyer SKU Master first (the SKU on this platform, or an All-platforms SKU);
+    // an older reconciliation-only match as a fallback suggestion.
+    const auto = reconSkuMasterMatch(r);
+    const known = auto ? null : reconciliationMapCache.find(m => m.rawKey === r.rawKey);
+    const selId = auto ? auto.id : (known ? known.mappingId : '');
     const options = ['<option value="">Skip — not a stock item</option>']
-      .concat(mySkuMappingsCache.map(m => `<option value="${m.id}" ${selId === m.id ? 'selected' : ''}>${esc(m.productName)}</option>`));
+      .concat(mySkuMappingsCache.map(m => `<option value="${m.id}" ${selId === m.id ? 'selected' : ''}>${esc(m.productName)}</option>`))
+      .concat(['<option value="__new__">＋ New product…</option>']);
     const netStyle = r.netChange < 0 ? 'color:var(--paprika-dark)' : (r.netChange > 0 ? 'color:#0E7C6B' : '');
-    const tag = known ? '' : auto ? ' <span class="badge ok" title="Matched from the marketplace SKUs in Buyer SKU Master — check it">from SKU Master</span>'
-      : ' <span class="badge" title="No saved mapping yet — pick a product on the right">Unmapped</span>';
-    return `<tr${known || auto ? '' : ' style="background:#FFF7ED"'}>
+    const tag = auto ? '' : ' <span class="badge warn" title="Not in Buyer SKU Master yet — pick a product on the right">Unmapped</span>';
+    return `<tr${auto ? '' : ' style="background:#FFF7ED"'}>
       <td>${esc(r.displayKey)}${tag}</td>
+      <td><span class="badge">${esc(reconPlatformLabel(r.marketplace))}</span></td>
       <td>${r.orders || 0}</td>
       <td>${r.returns || 0}</td>
       <td><b>${r.actualSales || 0}</b></td>
       <td style="color:var(--muted)">${r.alreadyQty || 0}</td>
       <td style="color:var(--muted)">${r.cancelledQty || 0}</td>
       <td style="${netStyle}">${r.netChange > 0 ? '+' : ''}${r.netChange}</td>
-      <td><select id="stockAggMap${i}" onchange="renderReconSummary()">${options.join('')}</select></td>
+      <td><select id="stockAggMap${i}" onchange="onReconMapChange(${i})">${options.join('')}</select></td>
+      <td id="stockAggMaster${i}" style="font-size:12.5px;white-space:nowrap"></td>
     </tr>`;
   }).join('');
+  stockAggregation.forEach((r, i) => updateReconMasterCell(i));
   renderReconSummary();
+}
+function reconPlatformLabel(mk){ const p = RECON_PLATFORMS.find(x => x[0] === mk); return p ? p[1] : (mk || '—'); }
+function reconField(mk){ return mk === 'ALL' || !mk ? 'allSku' : SKU_FIELD_BY_MARKETPLACE[mk]; }
+// The Buyer SKU Master product this report SKU already belongs to (on its platform).
+function reconSkuMasterMatch(r){
+  const active = mySkuMappingsCache.filter(m => m.status !== 'INACTIVE');
+  return r.marketplace && r.marketplace !== 'ALL'
+    ? active.find(m => mappingMatchesSku(m, r.marketplace, r.displayKey))
+    : active.find(m => ['AMAZON', 'MEESHO', 'FLIPKART'].some(mk => mappingMatchesSku(m, mk, r.displayKey)));
+}
+// Picking "＋ New product…" asks for its name; any choice refreshes the row + summary.
+function onReconMapChange(i){
+  const sel = document.getElementById('stockAggMap' + i);
+  if(sel.value === '__new__'){
+    const r = stockAggregation[i];
+    const name = (prompt(`Name of the new product for SKU "${r.displayKey}":`, sel.dataset.newName || r.displayKey) || '').trim();
+    if(!name){ sel.value = ''; delete sel.dataset.newName; }
+    else {
+      sel.dataset.newName = name;
+      sel.querySelector('option[value="__new__"]').textContent = `＋ New: ${name}`;
+    }
+  }
+  updateReconMasterCell(i);
+  renderReconSummary();
+}
+function updateReconMasterCell(i){
+  const cell = document.getElementById('stockAggMaster' + i), sel = document.getElementById('stockAggMap' + i);
+  if(!cell || !sel) return;
+  const r = stockAggregation[i], id = sel.value, plat = reconPlatformLabel(r.marketplace);
+  if(!id){ cell.innerHTML = '<span style="color:var(--muted)">—</span>'; return; }
+  if(id === '__new__'){ cell.innerHTML = `<span class="badge ok">➕ new product + SKU (${esc(plat)})</span>`; return; }
+  const m = mySkuMappingsCache.find(x => x.id === id);
+  const match = reconSkuMasterMatch(r);
+  if(match && match.id === id){ cell.innerHTML = '<span class="badge ok">✓ already mapped</span>'; return; }
+  const clash = skuClashes(mySkuMappingsCache.filter(x => x.status !== 'INACTIVE'), reconField(r.marketplace), r.displayKey, id)[0];
+  cell.innerHTML = clash
+    ? `<span class="badge bad" title="This SKU belongs to another product — it won't be added">already on "${esc(clash.productName)}"</span>`
+    : `<span class="badge warn">➕ will be added (${esc(plat)})</span>`;
 }
 /* Product-wise summary of what the upload will do — shown BEFORE applying so
    it can be checked against your own sheet. */
@@ -735,15 +790,18 @@ async function renderReconSummary(){
   let skippedRows = 0, skippedOrders = 0;
   stockAggregation.forEach((r, i) => {
     const sel = document.getElementById('stockAggMap' + i);
-    const id = sel ? sel.value : '';
+    let id = sel ? sel.value : '';
     if(!id){ skippedRows++; skippedOrders += r.orders || 0; return; }
+    if(id === '__new__') id = '__new__:' + (sel.dataset.newName || r.displayKey).toLowerCase();
     if(!byProduct.has(id)) byProduct.set(id, { orders: 0, returns: 0, actual: 0, soldAlready: 0, stockOut: 0, addBack: 0, cancelled: 0, skus: [] });
     const p = byProduct.get(id);
     p.orders += r.orders || 0; p.returns += r.returns || 0; p.actual += r.actualSales || 0; p.soldAlready += r.soldAlready || 0;
     p.stockOut += r.soldQty || 0; p.addBack += r.returnedQty || 0; p.cancelled += r.cancelledQty || 0; p.skus.push(r.displayKey);
   });
   const rows = [...byProduct.entries()].map(([id, u]) => {
-    const m = mySkuMappingsCache.find(x => x.id === id);
+    const m = id.startsWith('__new__:')
+      ? { id, productName: '＋ ' + stockAggregation.map((r, i) => document.getElementById('stockAggMap' + i)).filter(s => s && s.value === '__new__' && ('__new__:' + (s.dataset.newName || '').toLowerCase()) === id).map(s => s.dataset.newName)[0] + ' (new)', stock: 0 }
+      : mySkuMappingsCache.find(x => x.id === id);
     if(!m) return null;
     const f = monthFigures(m, month, movements);
     const change = u.addBack - u.stockOut;
@@ -774,15 +832,77 @@ async function renderReconSummary(){
     </tbody></table>
     <p class="sub" style="margin-top:6px">Check: <b>Actual sales = Already deducted + Deduct now</b>. Stock change = − Deduct now + Returns back in stock.${skippedRows ? ` ⚠ ${skippedRows} report SKU(s) set to "Skip" (${skippedOrders} orders) are not included.` : ''}</p>`;
 }
+/* Step A of Apply: new products + unmapped SKUs go into Buyer SKU Master,
+   and labels printed while those SKUs were unmapped are caught up. Returns
+   the choice per platform+SKU so it can be re-applied after recalculating. */
+async function saveReconSkusToMaster(){
+  const uid = currentUser.uid, col = db.collection('users').doc(uid).collection('buyerSkuMappings');
+  const choices = new Map(), created = new Map(), added = [], skipped = [];
+  for(let i = 0; i < stockAggregation.length; i++){
+    const r = stockAggregation[i], sel = document.getElementById('stockAggMap' + i);
+    const key = r.marketplace + '|' + r.rawKey;
+    let id = sel ? sel.value : '';
+    if(!id){ choices.set(key, ''); continue; }
+    const field = reconField(r.marketplace);
+    if(id === '__new__'){
+      const name = (sel.dataset.newName || r.displayKey).trim();
+      const nk = name.toLowerCase();
+      if(!created.has(nk)){
+        const ref = col.doc();
+        await ref.set({ productName: name, buyerSku: '', status: 'ACTIVE', linkType: 'OWN', sellerId: uid, sellerName: 'My own product',
+          productId: 'own_' + ref.id, sellerProductName: '', sellerSku: '', amazonSku: '', meeshoSku: '', flipkartSku: '', allSku: '',
+          inactiveSkus: [], stock: 0, reorderLevel: 0, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+        const doc = { id: ref.id, productName: name, status: 'ACTIVE', linkType: 'OWN', sellerId: uid, productId: 'own_' + ref.id, amazonSku: '', meeshoSku: '', flipkartSku: '', allSku: '', inactiveSkus: [], stock: 0 };
+        mySkuMappingsCache.push(doc);
+        created.set(nk, doc);
+      }
+      id = created.get(nk).id;
+    }
+    choices.set(key, id);
+    const m = mySkuMappingsCache.find(x => x.id === id);
+    const match = reconSkuMasterMatch(r);
+    if(!m || (match && match.id === id)) continue;          // already mapped
+    if(skuClashes(mySkuMappingsCache.filter(x => x.status !== 'INACTIVE'), field, r.displayKey, id).length){ skipped.push(r.displayKey); continue; }
+    const value = joinSkuList([m[field] || '', r.displayKey].join(','));
+    await col.doc(id).set({ [field]: value, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    m[field] = value;
+    added.push({ sku: r.displayKey, mapping: m, platform: reconPlatformLabel(r.marketplace) });
+  }
+  // Labels printed in Label Cropper while these SKUs were unmapped → deduct them
+  // now (once each). Done BEFORE recalculating, so the report doesn't count
+  // those orders a second time.
+  let caughtUp = 0;
+  for(const a of added){
+    try{
+      const m = a.mapping;
+      const pkgSnap = await db.collection('users').doc(uid).collection('buyerProductPackaging').doc(`${m.sellerId}_${m.productId}`).get();
+      const out = await VLS.settleQueued(uid, VLS.queueDocId(a.sku), { id: m.id, name: m.productName }, pkgSnap.exists ? pkgSnap.data() : null,
+        () => '', { col: VLS.BUYER_Q, buyerMapping: m });
+      caughtUp += out.labels;
+    }catch(err){ console.warn('Catch-up for printed labels failed:', err); }
+  }
+  return { choices, created: created.size, added, skipped, caughtUp };
+}
+
 async function applyStockUpload(){
   const period = document.getElementById('stockPeriod').value || new Date().toISOString().slice(0,7);
-  // Dated to the LAST day of the chosen month, not today — this is what
-  // makes uploading a past month's report actually land inside that month
-  // for the Monthly Stock Report above (Opening/Closing) instead of
-  // silently counting against whatever month you happened to upload it in.
+  // Dated to the LAST day of the chosen month, so the report lands inside that
+  // month in the Monthly Stock Report (Opening/Closing).
   const dateVal = monthBounds(period).end;
   const periodLabel = new Date(period + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
   let applied = 0;
+
+  // A. SKUs → Buyer SKU Master (+ catch-up), then B. recalculate with the new
+  // mappings, re-applying your choices, then C. apply the stock changes.
+  const master = await saveReconSkusToMaster();
+  if(master.added.length || master.created){
+    await aggregateStockUpload();
+    stockAggregation.forEach((r, i) => {
+      const sel = document.getElementById('stockAggMap' + i);
+      const key = r.marketplace + '|' + r.rawKey;
+      if(sel && master.choices.has(key)) sel.value = master.choices.get(key);
+    });
+  }
 
   for(let i = 0; i < stockAggregation.length; i++){
     const row = stockAggregation[i];
@@ -792,17 +912,7 @@ async function applyStockUpload(){
     const mapping = mySkuMappingsCache.find(m => m.id === mappingId);
     if(!mapping) continue;
 
-    const existingMap = reconciliationMapCache.find(m => m.rawKey === row.rawKey);
-    if(existingMap){
-      if(existingMap.mappingId !== mappingId){
-        await db.collection('users').doc(currentUser.uid).collection('buyerReconciliationSkuMap').doc(existingMap.id)
-          .set({ rawKey: row.rawKey, mappingId, productName: mapping.productName });
-      }
-    } else {
-      await db.collection('users').doc(currentUser.uid).collection('buyerReconciliationSkuMap').add({
-        rawKey: row.rawKey, mappingId, productName: mapping.productName, createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-    }
+    // (SKUs are now kept in Buyer SKU Master — no separate reconciliation list.)
 
     if(row.soldQty) await addStockMovement('sale-out', mappingId, -row.soldQty, dateVal, `${periodLabel} — ${row.displayKey} (sold)`);
     if(row.returnedQty) await addStockMovement('return-in', mappingId, row.returnedQty, dateVal, `${periodLabel} — ${row.displayKey} (cancelled/RTO/returned)`);
@@ -824,7 +934,12 @@ async function applyStockUpload(){
   document.getElementById('stockFiles').value = '';
   stockUploadSheets = [];
   stockAggregation = [];
-  showStockMsg(`Stock updated for ${applied} product(s).`, true);
+  const notes = [];
+  if(master.created) notes.push(`${master.created} new product(s) created`);
+  if(master.added.length) notes.push(`${master.added.length} SKU(s) added to Buyer SKU Master (${master.added.map(a => `${a.sku} → ${a.mapping.productName}, ${a.platform}`).join('; ')})`);
+  if(master.caughtUp) notes.push(`${master.caughtUp} label(s) printed earlier for those SKUs deducted`);
+  if(master.skipped.length) notes.push(`not added (already on another product): ${master.skipped.join(', ')}`);
+  showStockMsg(`Stock updated for ${applied} product(s).` + (notes.length ? ' ' + notes.join('. ') + '.' : ''), true);
 }
 function showMsg(id, text, ok){
   const el = document.getElementById(id);
