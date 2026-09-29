@@ -1,0 +1,19 @@
+// GSTR-1 JSON schema (current portal rules: fp MMYYYY, pos 2-digit, hsn_b2b/hsn_b2c, doc_issue).
+const Ajv=require('ajv');const ajv=new Ajv({allErrors:true,strict:false});
+const itm={type:'object',required:['num','itm_det'],additionalProperties:false,properties:{num:{type:'number'},itm_det:{type:'object',required:['rt','txval'],additionalProperties:false,properties:{rt:{type:'number'},txval:{type:'number'},iamt:{type:'number'},camt:{type:'number'},samt:{type:'number'},csamt:{type:'number'}}}}};
+const inv={type:'object',required:['inum','idt','val','pos','rchrg','inv_typ','itms'],additionalProperties:false,properties:{inum:{type:'string',maxLength:16},idt:{type:'string',pattern:'^\\d{2}-\\d{2}-\\d{4}$'},val:{type:'number'},pos:{type:'string',pattern:'^\\d{2}$'},rchrg:{enum:['Y','N']},inv_typ:{enum:['R','DE','SEWP','SEWOP','CBW']},itms:{type:'array',items:itm},etin:{type:'string'}}};
+const b2clInv={type:'object',required:['inum','idt','val','itms'],additionalProperties:false,properties:{inum:{type:'string',maxLength:16},idt:{type:'string',pattern:'^\\d{2}-\\d{2}-\\d{4}$'},val:{type:'number'},itms:{type:'array',items:itm},etin:{type:'string'}}};
+const hsnE={type:'object',required:['hsn_sc','txval','rt','desc','num','uqc','qty'],additionalProperties:false,properties:{hsn_sc:{type:'string'},txval:{type:'number'},rt:{type:'number'},desc:{type:'string'},num:{type:'number'},iamt:{type:'number'},camt:{type:'number'},samt:{type:'number'},csamt:{type:'number'},user_desc:{type:'string'},uqc:{type:'string'},qty:{type:'number'}}};
+const schema={type:'object',required:['gstin','fp','hsn','doc_issue'],additionalProperties:false,properties:{
+ gstin:{type:'string',pattern:'^\\d{2}[A-Z]{5}\\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'},fp:{type:'string',pattern:'^(0[1-9]|1[0-2])\\d{4}$'},version:{type:'string'},hash:{type:'string'},
+ b2b:{type:'array',items:{type:'object',required:['ctin','inv'],additionalProperties:false,properties:{ctin:{type:'string'},inv:{type:'array',items:inv}}}},
+ b2cl:{type:'array',items:{type:'object',required:['pos','inv'],additionalProperties:false,properties:{pos:{type:'string',pattern:'^\\d{2}$'},inv:{type:'array',items:b2clInv}}}},
+ b2cs:{type:'array',items:{type:'object',required:['pos','rt','txval','sply_ty'],additionalProperties:false,properties:{pos:{type:'string'},rt:{type:'number'},txval:{type:'number'},sply_ty:{enum:['INTER','INTRA']},iamt:{type:'number'},camt:{type:'number'},samt:{type:'number'},csamt:{type:'number'},typ:{type:'string'},etin:{type:'string'}}}},
+ nil:{type:'object',additionalProperties:false,properties:{inv:{type:'array',items:{type:'object',required:['sply_ty'],additionalProperties:false,properties:{sply_ty:{type:'string'},expt_amt:{type:'number'},nil_amt:{type:'number'},ngsup_amt:{type:'number'}}}}}},
+ hsn:{type:'object',required:['hsn_b2b'],additionalProperties:false,properties:{hsn_b2b:{type:'array',items:hsnE},hsn_b2c:{type:'array',items:hsnE}}},
+ doc_issue:{type:'object',required:['doc_det'],additionalProperties:false,properties:{doc_det:{type:'array',items:{type:'object',required:['doc_num','docs'],additionalProperties:false,properties:{doc_num:{type:'number'},docs:{type:'array',items:{type:'object',required:['num','from','to','totnum','cancel','net_issue'],additionalProperties:false,properties:{num:{type:'number'},from:{type:'string'},to:{type:'string'},totnum:{type:'number'},cancel:{type:'number'},net_issue:{type:'number'}}}}}}}}},
+ supeco:{type:'object',additionalProperties:false,properties:{clttx:{type:'array',items:{type:'object',required:['etin','suppval'],additionalProperties:false,properties:{etin:{type:'string'},suppval:{type:'number'},igst:{type:'number'},cgst:{type:'number'},sgst:{type:'number'},cess:{type:'number'}}}}}}
+}};
+const validate=ajv.compile(schema);
+
+module.exports = { validate };
