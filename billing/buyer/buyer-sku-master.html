@@ -51,9 +51,13 @@
     <p class="msg" id="productMsg"></p>
     <div class="box" style="margin-top:16px;padding:14px 16px;border:1.5px dashed var(--line,#E4D8BD);border-radius:10px">
       <b>Bulk — Excel</b>
-      <p class="sub" style="margin:4px 0 10px">Export all products with their SKUs, or add many at once from Excel. Columns: <b>Product Name</b> (required), My SKU, Amazon SKU(s), Meesho SKU(s), Flipkart SKU(s), All-platform SKU(s). Several SKUs in one cell (commas) <i>or</i> one row per SKU — rows with the same product name are combined. Import only <b>adds</b>: new products are created, new SKUs are added to existing products (matched by name or My SKU); nothing is removed. You see a preview before anything is saved.</p>
+      <p class="sub" style="margin:4px 0 10px">Add many SKUs at once. Two layouts are accepted — the page recognises which one you upload:<br>
+      <b>① One row per SKU</b> (easiest): columns <b>Platform</b> (Amazon / Meesho / Flipkart / All platforms), <b>Product Name</b>, <b>SKU</b>. A product that doesn't exist yet is created.<br>
+      <b>② One row per product</b>: Product Name, My SKU, Amazon SKU(s), Meesho SKU(s), Flipkart SKU(s), All-platform SKU(s) (several SKUs in a cell, separated by commas).<br>
+      You always see a preview first; SKUs already on another product are skipped and listed.</p>
       <button class="btn small" onclick="exportProductsXlsx()">⬇ Export products (Excel)</button>
-      <button class="btn small" onclick="downloadProductsTemplate()">⬇ Blank template</button>
+      <button class="btn small" onclick="downloadProductsTemplate()">⬇ Blank template (one row per product)</button>
+      <button class="btn small" onclick="downloadSkuRowsTemplate()">⬇ Template: Platform · Product · SKU (one row per SKU)</button>
       <input type="file" id="bulkFile" accept=".xlsx,.xls,.csv" style="margin-left:8px">
       <button class="btn small primary" onclick="previewBulkImport()">Preview import</button>
       <div id="bulkPreview" style="display:none;margin-top:12px">
@@ -871,6 +875,50 @@ function downloadProductsTemplate(){
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Products');
   XLSX.writeFile(wb, 'VISUTRA-products-template.xlsx');
 }
+/* Template for the "one row per SKU" layout: Platform · Product Name · SKU,
+   plus a how-to sheet and your current products (names to copy exactly). */
+function downloadSkuRowsTemplate(){
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['Platform', 'Product Name', 'SKU'],
+    ['Meesho', 'Washing Machine Cover 7kg', 'VST-WFAT-7-8.5-FA34'],
+    ['Meesho', 'Washing Machine Cover 7kg', 'VST-WFAT-7-8.5-FA32'],
+    ['Flipkart', 'Washing Machine Cover 7kg', 'VST-WA-FA30-8_8.5'],
+    ['All platforms', 'Fridge Top Cover', 'VST-FTC-01']
+  ]);
+  ws['!cols'] = [{ wch: 16 }, { wch: 40 }, { wch: 34 }];
+  const help = XLSX.utils.aoa_to_sheet([
+    ['How to fill the "SKU mapping" sheet'], [],
+    ['Column', 'What to write'],
+    ['Platform', 'Amazon, Meesho, Flipkart — or "All platforms" when the same SKU code is used on every platform'],
+    ['Product Name', 'Your product. Use the exact name from the "My products" sheet to add SKUs to an existing product; a new name creates a new product'],
+    ['SKU', 'The marketplace SKU exactly as it appears on labels / reports. One SKU per row (several per cell also work, separated by commas)'],
+    [], ['Rules'],
+    ['• Delete the example rows before uploading.'],
+    ['• A SKU can belong to only one product on a platform; if it is already on another product it is skipped and listed in the preview.'],
+    ['• SKUs already on the product are ignored — uploading the same file twice changes nothing.'],
+    ['• Labels printed earlier with these SKUs (waiting to be mapped) are deducted automatically once.']
+  ]);
+  help['!cols'] = [{ wch: 16 }, { wch: 110 }];
+  const mine = XLSX.utils.aoa_to_sheet([['Product Name', 'Amazon SKU(s)', 'Meesho SKU(s)', 'Flipkart SKU(s)', 'All-platform SKU(s)']]
+    .concat(mappingsCache.filter(m => m.status !== 'INACTIVE').slice().sort((a, b) => String(a.productName || '').localeCompare(String(b.productName || '')))
+      .map(m => [m.productName || '', joinSkuList(m.amazonSku), joinSkuList(m.meeshoSku), joinSkuList(m.flipkartSku), joinSkuList(m.allSku)])));
+  mine['!cols'] = [{ wch: 40 }, { wch: 30 }, { wch: 40 }, { wch: 30 }, { wch: 30 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'SKU mapping');
+  XLSX.utils.book_append_sheet(wb, help, 'How to fill');
+  XLSX.utils.book_append_sheet(wb, mine, 'My products');
+  XLSX.writeFile(wb, 'VISUTRA-SKU-mapping-template.xlsx');
+}
+// "Amazon", "meesho", "All platforms", "common"… → the SKU field it goes into
+function platformToField(v){
+  const t = String(v || '').trim().toLowerCase().replace(/[^a-z]/g, '');
+  if(!t) return null;
+  if(t.startsWith('amazon') || t === 'amz') return 'amazonSku';
+  if(t.startsWith('meesho')) return 'meeshoSku';
+  if(t.startsWith('flipkart') || t === 'fk') return 'flipkartSku';
+  if(t.startsWith('all') || t === 'common' || t === 'any' || t === 'every' || t === 'allplatforms') return 'allSku';
+  return null;
+}
 function exportProductsXlsx(){
   const rows = mappingsCache.slice().sort((a,b) => String(a.productName||'').localeCompare(String(b.productName||''))).map(m => ({
     'Product Name': m.productName || '', 'My SKU': m.buyerSku || '',
@@ -885,7 +933,7 @@ function exportProductsXlsx(){
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Products');
   XLSX.writeFile(wb, `VISUTRA-products-${new Date().toISOString().slice(0,10)}.xlsx`);
 }
-let bulkPlan = [];
+let bulkPlan = [], bulkRowIssues = [], bulkLayoutLabel = '';
 function bulkColIndex(headers){
   const h = headers.map(x => String(x || '').trim().toLowerCase());
   const find = test => h.findIndex(test);
@@ -895,7 +943,10 @@ function bulkColIndex(headers){
     amazon: find(x => x.includes('amazon')),
     meesho: find(x => x.includes('meesho')),
     flipkart: find(x => x.includes('flipkart')),
-    all: find(x => x.includes('all-platform') || x.includes('all platform') || x === 'all' || x.startsWith('all '))
+    all: find(x => x.includes('all-platform') || x.includes('all platform') || x === 'all' || x.startsWith('all ')),
+    // "one row per SKU" layout
+    platform: find(x => x.includes('platform') && !x.includes('sku') || x.includes('e-commerce') || x.includes('ecommerce') || x.includes('marketplace') || x === 'channel'),
+    sku: find(x => (x === 'sku' || x === 'sku(s)' || x === 'skus' || x === 'marketplace sku' || x === 'seller sku') && !x.includes('my'))
   };
 }
 async function previewBulkImport(){
@@ -911,19 +962,38 @@ async function previewBulkImport(){
   const col = bulkColIndex(rows[0]);
   if(col.name < 0){ showMsg('bulkMsg', 'No "Product Name" column found in the first row.', false); return; }
 
-  // 1) Combine rows by product name.
-  const groups = new Map();
-  rows.slice(1).forEach(r => {
-    const name = String(r[col.name] || '').trim();
-    if(!name) return;
+  // 1) Combine rows by product name — from either layout.
+  const groups = new Map(), rowIssues = [];
+  const rowsPerSku = col.platform >= 0 && col.sku >= 0;
+  const groupOf = name => {
     const k = name.toLowerCase();
     if(!groups.has(k)) groups.set(k, { name, my: '', skus: { amazonSku: [], meeshoSku: [], flipkartSku: [], allSku: [] } });
-    const g = groups.get(k);
+    return groups.get(k);
+  };
+  rows.slice(1).forEach((r, i) => {
+    const line = i + 2;   // Excel row number
+    const name = String(r[col.name] || '').trim();
+    if(rowsPerSku){
+      // ① Platform · Product Name · SKU
+      const platformRaw = String(r[col.platform] || '').trim(), skus = splitSkuList(r[col.sku]);
+      if(!name && !platformRaw && !skus.length) return;                 // empty row
+      const field = platformToField(platformRaw);
+      if(!name){ rowIssues.push(`Row ${line}: no product name`); return; }
+      if(!skus.length){ rowIssues.push(`Row ${line}: no SKU`); return; }
+      if(!field){ rowIssues.push(`Row ${line}: platform "${platformRaw || '(empty)'}" not recognised — use Amazon, Meesho, Flipkart or All platforms`); return; }
+      groupOf(name).skus[field].push(...skus);
+      return;
+    }
+    // ② one row per product
+    if(!name) return;
+    const g = groupOf(name);
     if(col.my >= 0 && String(r[col.my]).trim() && !g.my) g.my = String(r[col.my]).trim();
     [['amazon','amazonSku'],['meesho','meeshoSku'],['flipkart','flipkartSku'],['all','allSku']].forEach(([c, field]) => {
       if(col[c] >= 0) g.skus[field].push(...splitSkuList(r[col[c]]));
     });
   });
+  bulkRowIssues = rowIssues;
+  bulkLayoutLabel = rowsPerSku ? 'one row per SKU (Platform · Product · SKU)' : 'one row per product';
 
   // 2) Plan each product: create/update, SKUs to add, conflicts.
   const claimed = {}; // `${field}|sku` -> product name within this file
@@ -958,7 +1028,8 @@ async function previewBulkImport(){
   const updates = bulkPlan.filter(p => p.action === 'Update').length;
   const skuAdds = bulkPlan.reduce((a, p) => a + p.addCount, 0);
   const skipped = bulkPlan.reduce((a, p) => a + p.notes.length, 0);
-  document.getElementById('bulkSummary').innerHTML = `<b>${creates}</b> new product(s), <b>${updates}</b> updated, <b>${skuAdds}</b> SKU(s) to add` + (skipped ? `, <b style="color:#9E3608">${skipped}</b> skipped (see notes)` : '') + '.';
+  document.getElementById('bulkSummary').innerHTML = `<span class="badge">${esc(bulkLayoutLabel)}</span> <b>${creates}</b> new product(s), <b>${updates}</b> updated, <b>${skuAdds}</b> SKU(s) to add` + (skipped ? `, <b style="color:#9E3608">${skipped}</b> skipped (see notes)` : '') + '.'
+    + (bulkRowIssues.length ? `<div style="margin-top:6px;color:#9E3608;font-size:13px"><b>${bulkRowIssues.length} row(s) not read:</b> ${bulkRowIssues.slice(0, 12).map(esc).join(' · ')}${bulkRowIssues.length > 12 ? ' …' : ''}</div>` : '');
   document.getElementById('bulkTable').innerHTML = bulkPlan.map(p => `<tr>
     <td><b>${esc(p.name)}</b></td>
     <td><span class="badge${p.action === 'No change' ? ' off' : ' on'}">${p.action}</span></td>
