@@ -1,1 +1,89 @@
+# VISUTRA — nightly database backup + keep the free Supabase project awake.
+#
+# Runs every night at 02:00 IST (and on demand: Actions → this workflow → Run workflow).
+#   1. Calls the Supabase API once — free projects pause after 7 days with no
+#      activity; this daily call prevents that.
+#   2. Dumps the database (all website data + login accounts) with pg_dump.
+#   3. ENCRYPTS it with your BACKUP_PASSPHRASE (AES-256). The website repo is
+#      public, so the backup is only ever stored encrypted — unreadable without
+#      your passphrase.
+#   4. Keeps it as a downloadable file for 90 days (Actions → a run → Artifacts).
+#
+# Needs 4 repository secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_URL               https://mxannyoulyhenvmrpzfr.supabase.co
+#   SUPABASE_PUBLISHABLE_KEY   sb_publishable_…
+#   SUPABASE_DB_URL            Session-pooler connection string (see BACKUP-AND-TESTS.md)
+#   BACKUP_PASSPHRASE          a long password only you know — needed to open backups
+name: Nightly backup + keep-alive
 
+on:
+  schedule:
+    - cron: '30 20 * * *'   # 20:30 UTC = 02:00 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Keep the Supabase project awake
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_URL" || { echo "::error::Secret SUPABASE_URL is missing"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$SUPABASE_URL/rest/v1/store_products?select=id&limit=1" -H "apikey: $SUPABASE_KEY")
+          echo "Supabase answered HTTP $code"
+          if [ "$code" != "200" ]; then echo "::warning::Supabase returned $code — if the project is paused, restore it in the Supabase dashboard"; fi
+
+      - name: Install PostgreSQL 17 client (pg_dump)
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSo /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
+          /usr/lib/postgresql/17/bin/pg_dump --version
+
+      - name: Dump the database
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$DB_URL" || { echo "::error::Secret SUPABASE_DB_URL is missing"; exit 1; }
+          STAMP=$(TZ=Asia/Kolkata date +%Y-%m-%d)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          mkdir -p backup
+          PGD=/usr/lib/postgresql/17/bin/pg_dump
+          # 1) everything the website stores (tables, security rules, functions, data)
+          $PGD "$DB_URL" --schema=public --no-owner --no-privileges -f "backup/visutra-data-$STAMP.sql"
+          # 2) login accounts (so people keep their passwords after a restore)
+          $PGD "$DB_URL" --data-only --table=auth.users --table=auth.identities --no-owner --no-privileges -f "backup/visutra-logins-$STAMP.sql"
+          for f in backup/*.sql; do echo "$f: $(wc -c < "$f") bytes, $(grep -c '^COPY ' "$f") tables with data"; done
+          # sanity check: the main table must be in the dump
+          grep -q 'COPY public.docs' "backup/visutra-data-$STAMP.sql" || { echo "::error::Backup looks incomplete (no docs table)"; exit 1; }
+
+      - name: Encrypt the backup (AES-256)
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          test -n "$PASSPHRASE" || { echo "::error::Secret BACKUP_PASSPHRASE is missing"; exit 1; }
+          tar czf backup.tar.gz backup
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$PASSPHRASE" \
+              --symmetric --cipher-algo AES256 -o "visutra-backup-$STAMP.tar.gz.gpg" backup.tar.gz
+          rm -rf backup backup.tar.gz
+          ls -la visutra-backup-*.gpg
+
+      - name: Keep for 90 days
+        uses: actions/upload-artifact@v4
+        with:
+          name: visutra-backup-${{ env.STAMP }}
+          path: visutra-backup-*.tar.gz.gpg
+          retention-days: 90
+          if-no-files-found: error

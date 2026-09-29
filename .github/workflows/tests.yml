@@ -1,0 +1,45 @@
+# VISUTRA — automatic tests on every upload.
+#
+# Every push to GitHub starts a real PostgreSQL database set up like Supabase
+# (same security rules — supabase/schema.sql), then loads the actual website
+# pages against it and checks stock rules, GST files, security, editing,
+# reconciliation, login behaviour and that every page loads without errors.
+# A red ✗ next to your commit (and an email from GitHub) means something broke.
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: pg
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: pg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install test tools
+        working-directory: tests
+        run: npm install --no-audit --no-fund
+      - name: Create the test database (Supabase-like)
+        working-directory: tests
+        run: node setup-db.js
+      - name: Run tests
+        working-directory: tests
+        run: node --test --test-concurrency=1 --test-reporter=spec
