@@ -298,9 +298,10 @@ create or replace function public.vt_commit(ops jsonb, pre jsonb default '[]'::j
 language plpgsql security invoker set search_path = public as $$
 declare
   c jsonb; op jsonb; cur record; nd jsonb; p text; out jsonb := '[]'::jsonb;
-  found_row boolean; n_rows int;
+  found_row boolean; n_rows int; must_not_exist jsonb := '{}'::jsonb;
 begin
   for c in select * from jsonb_array_elements(coalesce(pre, '[]'::jsonb)) loop
+    if c->'version' = 'null'::jsonb then must_not_exist := must_not_exist || jsonb_build_object(c->>'path', true); end if;
     select version into cur from public.docs where path = c->>'path' for update;
     if (c->'version' = 'null'::jsonb and found)
        or (c->'version' <> 'null'::jsonb and (not found or cur.version <> (c->>'version')::bigint)) then
@@ -328,8 +329,25 @@ begin
       update public.docs set data = nd, version = version + 1, updated_at = now() where path = p;
     else -- set
       nd := public.vt_resolve(case when found_row then cur.data end, op->'data', coalesce((op->>'merge')::boolean, false));
-      insert into public.docs (path, data) values (p, nd)
-        on conflict (path) do update set data = excluded.data, version = public.docs.version + 1, updated_at = now();
+      if must_not_exist ? p and found_row then
+        -- Read as "not there" at the start, but another device created it
+        -- while this commit was waiting for its turn → re-run the transaction.
+        raise exception 'VT_CONFLICT: %', p;
+      elsif must_not_exist ? p then
+        -- A transaction read this document as "not there yet" (e.g. a "label
+        -- already printed" marker). Row locks can't cover a row that doesn't
+        -- exist, so insert WITHOUT upsert: if another device created it a
+        -- moment ago, this fails and the website re-runs the transaction —
+        -- which then sees it and doesn't deduct stock a second time.
+        begin
+          insert into public.docs (path, data) values (p, nd);
+        exception when unique_violation then
+          raise exception 'VT_CONFLICT: %', p;
+        end;
+      else
+        insert into public.docs (path, data) values (p, nd)
+          on conflict (path) do update set data = excluded.data, version = public.docs.version + 1, updated_at = now();
+      end if;
     end if;
     out := out || jsonb_build_object('path', p);
   end loop;
