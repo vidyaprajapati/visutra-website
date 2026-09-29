@@ -67,7 +67,9 @@
     });
     const totalUnits = rows.reduce((a, r) => a + Math.max(0, r.stock), 0);
     const totalValue = rows.reduce((a, r) => a + Math.max(0, r.value), 0);
-    const soldTotal = Object.values(soldByDay).reduce((a, b) => a + b, 0);
+    // Total sold from the running total (an undone print may be larger than
+    // that day's sales on the chart, which is clamped at 0 per day).
+    const soldTotal = Math.max(0, mix.sold);
     return {
       dayList, soldByDay, inByDay, mix, rows,
       kpi: {
