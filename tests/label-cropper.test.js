@@ -1,0 +1,48 @@
+const { test, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { seed, read, list, reset, pool, makeClient } = require('./lib/fakesb');
+const { loadPage, loadCore, mkPdf, sleep, closeAll, A, B, C } = require('./lib/sbload');
+after(async () => { closeAll(); await pool.end(); });
+
+test('Label Cropper (Seller): print, reprint, undo, unmapped queue, catch-up', async () => {
+  await reset();
+  const U = 'users/' + A.uid;
+  await seed(U, { businessName: 'VISUTRA', stateCode: '09' });
+  await seed(U + '/products/p1', { name: 'LED Cover 55', stock: 10, reorderLevel: 2 });
+  await seed(U + '/products/p2', { name: 'WM Cover', stock: 10 });
+  await seed(U + '/skuMappings/m1', { rawKey: 'led-clr-55', productId: 'p1', productName: 'LED Cover 55' });
+  await seed(U + '/skuMappings/m2', { rawKey: 'VST-WA-FA30', productId: 'p2', productName: 'WM Cover' });
+  await seed(U + '/buyerProductPackaging/a1', { sellerUid: A.uid, productId: 'p1', packagingSizeId: 'bag', labelSizeId: 'lblOld' });
+  await seed(U + '/buyerProductPackaging/a2', { sellerUid: A.uid, productId: 'p2', packagingSizeId: 'bag', labelSizeId: 'lblOld' });
+  await seed(U + '/buyerPackagingSizes/bag', { name: 'Poly Bag', stock: 50, minQty: 2 });
+  await seed(U + '/buyerLabelSizes/lblOld', { name: 'Old roll', stock: 100 });
+  await seed(U + '/buyerLabelSizes/paper_4x6', { name: '4 × 6 in', paperKey: '4x6', stock: 30, minQty: 5, active: true });
+  const S = async () => { const g = async p => ((await read(U + p)) || {}).stock; return [await g('/products/p1'), await g('/products/p2'), await g('/buyerPackagingSizes/bag'), await g('/buyerLabelSizes/paper_4x6')]; };
+  const HEAD = 'Tax Invoice/Bill of Supply/Cash Memo (Original for Recipient) Sold By : VISUTRA Muradnagar Ghaziabad PAN No: ABCDE1234F GST Registration No: 09BVHPP4321G1ZJ ';
+  const inv = o => HEAD + `Order Number: ${o} Invoice Number : IN-1 Display Shield | B0G433K43L ( led-clr-55 ) HSN:63049291 ₹419.00 1 ₹419.00 TOTAL amazon`;
+  let PAGES = ['Ship to A amazon', inv('404-1111111-1111111'), 'Ship to B amazon', inv('404-2222222-2222222')];
+  const { w, $ } = loadPage('tools/label-cropper.html', A, { query: '?role=seller', before: w => {
+    w.pdfjsLib = { GlobalWorkerOptions: {}, getDocument: () => ({ promise: Promise.resolve({ numPages: PAGES.length, getPage: async i => ({ getTextContent: async () => ({ items: [{ str: PAGES[i - 1] }] }), getViewport: () => ({ width: 100, height: 141 }), render: () => ({ promise: Promise.resolve() }) }) }) }) };
+  } });
+  const file = async (n, name) => ({ type: 'application/pdf', name, arrayBuffer: async () => (await mkPdf(n)).buffer });
+  await sleep(500);
+  w.document.querySelector('.vlc-plat[data-p="amazon"]').click(); await sleep(20); $('vlcOutSize').value = '4x6';
+  await w.eval('handleFile')(await file(4, 'amz.pdf')); await sleep(300);
+  await w.eval('processPdf')(); await sleep(300);
+  assert.deepEqual(await S(), [8, 10, 48, 28], 'print: product −1 per order, 1 packing + 1 label per shipment');
+  await w.eval('processPdf')(); await sleep(300);
+  assert.deepEqual(await S(), [8, 10, 48, 26], 'reprint: only labels');
+  await w.eval('undoLastPrint')(); await sleep(300);
+  assert.deepEqual(await S(), [8, 10, 48, 28], 'undo gives the reprint labels back');
+  w.document.querySelector('.vlc-plat[data-p="meesho"]').click(); await sleep(20); $('vlcOutSize').value = '4x6';
+  PAGES = ['Valmo Meesho SKU Size Qty Color Order No. VST-WA-FA30 Free Size 2 Grey 111111111_1', 'Valmo Meesho SKU Size Qty Color Order No. NEW-SKU Free Size 1 Grey 222222222_1'];
+  await w.eval('handleFile')(await file(2, 'mee.pdf')); await sleep(300);
+  await w.eval('processPdf')(); await sleep(300);
+  assert.deepEqual(await S(), [8, 8, 47, 26], 'the unmapped SKU\'s packing waits until it is mapped');
+  const q = await list(U + '/sellerUnmappedLabelSkus/');
+  assert.equal(q.length, 1); assert.equal(q[0].data.sku, 'NEW-SKU');
+  $('vlcSellerMapSel-1').value = 'p1'; await w.eval('saveSellerMapping')(1); await sleep(300);
+  assert.equal((await read(U + '/products/p1')).stock, 7, 'mapping deducts the label printed earlier');
+  assert.equal((await read(U + '/buyerPackagingSizes/bag')).stock, 46, '…and its packing');
+  assert.equal((await list(U + '/sellerUnmappedLabelSkus/')).length, 0);
+});
