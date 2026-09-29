@@ -97,6 +97,7 @@
 
   function enhance(table) {
     if (table.dataset.vtExcel || table.hasAttribute('data-no-excel')) return;
+    if (!table.isConnected || !table.parentElement) return; // already replaced by a re-render
     if (!table.tBodies.length || table.closest('.modal-box, .no-excel, .sig-pad')) return;
     // Line-item entry grids (typing an invoice) aren't data lists.
     if (table.classList.contains('line-items')) return;

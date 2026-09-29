@@ -415,28 +415,30 @@
      rows without one: sale = deduct, return = netted. */
   function reconAggregator(){
     const agg = new Map(), held = [];
-    const entry = raw => {
-      const k = String(raw).toLowerCase();
-      if(!agg.has(k)) agg.set(k, { displayKey: raw, orders: 0, returns: 0, soldAlready: 0, retAlready: 0, stockOut: 0, addBack: 0, netted: 0, cancelled: 0, linkedRows: [] });
+    // One entry per platform + SKU: the same code can be a different product
+    // on another platform.
+    const entry = (raw, mk) => {
+      const k = (mk || '') + '|' + String(raw).toLowerCase();
+      if(!agg.has(k)) agg.set(k, { displayKey: raw, marketplace: mk || '', orders: 0, returns: 0, soldAlready: 0, retAlready: 0, stockOut: 0, addBack: 0, netted: 0, cancelled: 0, linkedRows: [] });
       return agg.get(k);
     };
     return {
       sold(raw, qty, mk, orderId){
         if(!raw) return;
         if(orderId && mk) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn: false });
-        else { const e = entry(raw); e.orders += qty; e.stockOut += qty; }
+        else { const e = entry(raw, mk); e.orders += qty; e.stockOut += qty; }
       },
       ret(raw, qty, mk, orderId){
         if(!raw) return;
         if(orderId && mk) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn: true });
-        else { const e = entry(raw); e.orders += qty; e.returns += qty; e.netted += qty; }
+        else { const e = entry(raw, mk); e.orders += qty; e.returns += qty; e.netted += qty; }
       },
-      cancel(raw, qty){ if(raw) entry(raw).cancelled += qty; },
+      cancel(raw, qty, mk){ if(raw) entry(raw, mk).cancelled += qty; },
       async finish(uid, side){
         if(held.length){
           await linkReconRows(uid, side, held);
           held.forEach(r => {
-            const e = entry(r.sku);
+            const e = entry(r.sku, r.marketplace);
             e.orders += r.qty;
             if(!r.isReturn){
               if(r.status === 'already') e.soldAlready += r.qty;
@@ -449,8 +451,8 @@
             }
           });
         }
-        return [...agg.entries()].map(([rawKey, e]) => ({
-          rawKey, displayKey: e.displayKey, orders: e.orders, returns: e.returns, actualSales: e.orders - e.returns,
+        return [...agg.values()].map(e => ({
+          rawKey: String(e.displayKey).toLowerCase(), marketplace: e.marketplace, displayKey: e.displayKey, orders: e.orders, returns: e.returns, actualSales: e.orders - e.returns,
           soldAlready: e.soldAlready, retAlready: e.retAlready, netted: e.netted, cancelledQty: e.cancelled,
           soldQty: e.stockOut, returnedQty: e.addBack, alreadyQty: e.soldAlready + e.retAlready,
           netChange: e.addBack - e.stockOut, linkedRows: e.linkedRows
