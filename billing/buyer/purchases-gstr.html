@@ -209,6 +209,7 @@ auth.onAuthStateChanged(async user => {
   // manual Purchase Entry, imports and accepted seller orders — all of them.
   const purSnap = await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').get();
   purchasesCache = purSnap.docs.map(d => ({id:d.id, ...d.data()}));
+  await loadMyInvoiceDeleteRequests();
   const ppSnap = await db.collection('users').doc(currentUser.uid).collection('purchaseProducts').get();
   purchaseProductsCache = ppSnap.docs.map(d => ({id: d.id, ...d.data()}));
 });
@@ -272,9 +273,7 @@ function generateReport(){
   document.getElementById('registerTable').innerHTML = reportRows.map(r => `
     <tr><td>${esc(r.date)}</td><td>${esc(r.supplierName)}${r.gstFiled ? ' <span class="badge">Filed</span>' : ''}</td><td>${esc(r.orderNumber)}</td>
     <td>${fmtMoney(r.taxable)}</td><td>${fmtMoney(r.gst)}</td><td>${fmtMoney(r.total)}</td>
-    <td class="row-actions">${r.gstFiled
-      ? `<button class="btn small" disabled title="Filed — can't be deleted">Delete</button>`
-      : `<button class="btn small danger" onclick="deletePurchase('${r.id}')">Delete</button>`}</td></tr>
+    <td class="row-actions">${purchaseDeleteCell(r)}</td></tr>
   `).join('');
 
   const itemRows = [];
@@ -415,8 +414,61 @@ function fix2(n){ return Math.round((n||0)*100)/100; }
    delete would need a Recycle Bin this page doesn't have, so this is a hard
    delete after confirmation — but it still reverses any stock the purchase
    added, exactly like the Seller side's delete does, so Stock stays correct. */
+/* A purchase that came from a VISUTRA seller's invoice/order can't be deleted
+   on one side only: the buyer sends a request, the seller approves, and the
+   database then deletes it from BOTH accounts (stock reversed on both sides). */
+let invDelMine = [];
+function purchaseIsFromSeller(p){ return !!(p && (p.invoiceId || p.sellerInvoiceId || p.orderId || p.autoCreatedFromOrder)); }
+function purchaseDeleteCell(r){
+  const p = purchasesCache.find(x => x.id === r.id) || {};
+  if(r.gstFiled) return `<button class="btn small" disabled title="Filed — can't be deleted">Delete</button>`;
+  if(purchaseIsFromSeller(p)){
+    const req = invDelMine.find(q => q.purchaseId === r.id);
+    if(req && req.status === 'PENDING') return '<span class="badge warn" title="Waiting for the seller to approve">Deletion requested</span>';
+    return `<button class="btn small danger" onclick="requestInvoiceDeletion('${r.id}')" title="This purchase is a seller's invoice — the seller must approve; it is then deleted from both accounts">Request deletion</button>`;
+  }
+  return `<button class="btn small danger" onclick="deletePurchase('${r.id}')">Delete</button>`;
+}
+async function loadMyInvoiceDeleteRequests(){
+  try{
+    const snap = await db.collection('invoiceDeleteRequests').where('buyerUid', '==', currentUser.uid).where('status', '==', 'PENDING').get();
+    invDelMine = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.requestedBy === 'buyer');
+  }catch(e){ invDelMine = []; }
+}
+async function requestInvoiceDeletion(id){
+  const p = purchasesCache.find(x => x.id === id);
+  if(!p) return;
+  if(p.gstFiled){ alert(`This purchase was filed as part of the ${p.gstFiledPeriod||''} period and can't be deleted.`); return; }
+  let sellerUid = '', sellerName = p.supplierName || '';
+  if(p.orderId){
+    const o = await db.collection('marketplaceOrders').doc(p.orderId).get();
+    if(o.exists){ sellerUid = o.data().sellerUid; sellerName = o.data().sellerName || sellerName; }
+  }
+  if(!sellerUid && p.supplierId){
+    const sup = await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers').doc(p.supplierId).get();
+    if(sup.exists) sellerUid = sup.data().sellerUid || '';
+  }
+  if(!sellerUid){ alert('Could not find the seller for this purchase.'); return; }
+  const reason = prompt(`This purchase is ${sellerName}'s invoice ${p.invoiceNo || ''} — it can only be deleted after they approve. When they approve, it is removed from both accounts and the stock is reversed on both sides.\n\nEnter a reason for the seller to see:`);
+  if(reason === null) return;
+  if(!reason.trim()){ alert('A reason is required so the seller knows why.'); return; }
+  const me = await db.collection('users').doc(currentUser.uid).get();
+  const meData = me.exists ? me.data() : {};
+  try{
+    await db.collection('invoiceDeleteRequests').add({
+      requestedBy: 'buyer', buyerUid: currentUser.uid, buyerName: meData.businessName || meData.fullName || currentUser.email,
+      sellerUid, sellerName, purchaseId: id, invoiceId: p.invoiceId || p.sellerInvoiceId || '', invoiceNo: p.invoiceNo || '',
+      orderId: p.orderId || '', orderNumber: p.orderNumber || '', amount: p.grandTotal || 0, invoiceDate: p.date || '',
+      reason: reason.trim(), status: 'PENDING', createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    alert('Deletion request sent to the seller. The purchase stays until they approve.');
+  }catch(err){ alert('Could not send the request: ' + err.message); }
+  await loadMyInvoiceDeleteRequests();
+  generateReport();
+}
 async function deletePurchase(id){
   const purchase = purchasesCache.find(p => p.id === id);
+  if(purchaseIsFromSeller(purchase)) return requestInvoiceDeletion(id);   // never one-sided
   if(purchase && purchase.gstFiled){
     alert(`This purchase was filed as part of the ${purchase.gstFiledPeriod||''} period and can't be deleted.`);
     return;

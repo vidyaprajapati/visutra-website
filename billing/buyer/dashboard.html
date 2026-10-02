@@ -45,10 +45,16 @@
   </div>
 
   <div class="card" id="deleteRequestsCard" style="display:none;background:#FFF7ED;border:1.5px solid #E8A32C">
-    <h2>Invoice Deletion Requests</h2>
-    <p class="sub">A seller wants to delete an invoice from an order you accepted from them. Accepting removes your matching purchase record and reverses the stock it added — this can't be undone once accepted.</p>
-    <table><thead><tr><th>Seller</th><th>Invoice #</th><th>Order #</th><th>Reason</th><th></th></tr></thead>
+    <h2>🔔 Invoice Deletion Requests</h2>
+    <p class="sub">A seller wants to delete an invoice they issued to you. <b>Accepting deletes it from BOTH accounts at once</b> — the seller's invoice and your matching purchase — and reverses the stock on both sides. This can't be undone once accepted.</p>
+    <table><thead><tr><th>Seller</th><th>Invoice #</th><th>Date</th><th>Amount</th><th>Order #</th><th>Reason</th><th></th></tr></thead>
     <tbody id="deleteRequestsTable"></tbody></table>
+  </div>
+  <div class="card" id="payDeleteRequestsCard" style="display:none;background:#FFF7ED;border:1.5px solid #E8A32C">
+    <h2>🔔 Payment Deletion Requests</h2>
+    <p class="sub">A seller wants to remove a payment you recorded and they confirmed. Approving removes it from their Receipts and from your payments at the same time.</p>
+    <table><thead><tr><th>Seller</th><th>Date</th><th>Amount</th><th>Reason</th><th></th></tr></thead>
+    <tbody id="payDeleteRequestsTable"></tbody></table>
   </div>
 
   <div class="card">
@@ -109,6 +115,7 @@ auth.onAuthStateChanged(async user => {
 
   await loadUnmappedSkuAlert();
   await loadDeleteRequests();
+  await loadPayDeleteRequests();
   await loadOrdersToConfirm();
   await loadDashboard();
 });
@@ -294,17 +301,36 @@ async function ensurePurchaseProduct(sellerUid, item){
    is the only coordination point: accepting here does OUR half (delete the
    purchase, reverse OUR stock) in the same click, and separately signals
    the seller (via this doc's status) to do their own half on their side. */
+async function loadPayDeleteRequests(){
+  let reqs = [];
+  try{
+    const snap = await db.collection('paymentDeleteRequests').where('buyerUid', '==', currentUser.uid).where('status', '==', 'PENDING').get();
+    reqs = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.requestedBy === 'seller');
+  }catch(e){}
+  const card = document.getElementById('payDeleteRequestsCard');
+  card.style.display = reqs.length ? 'block' : 'none';
+  document.getElementById('payDeleteRequestsTable').innerHTML = reqs.map(r => `
+    <tr><td>${esc(r.sellerName || 'Seller')}</td><td>${esc(r.date || '')}</td><td>₹${fmtMoney(r.amount)}</td><td>${esc(r.reason || '')}</td>
+    <td class="row-actions"><button class="btn small primary" onclick="respondToPayDelete('${r.id}', true)">Approve — delete on both sides</button>
+    <button class="btn small danger" onclick="respondToPayDelete('${r.id}', false)">Reject</button></td></tr>`).join('');
+}
+async function respondToPayDelete(id, approve){
+  if(!confirm(approve ? 'Approve? The payment is removed from your payments and from the seller\'s Receipts.' : 'Reject? The payment stays on both sides.')) return;
+  try{ await db.collection('paymentDeleteRequests').doc(id).update({ status: approve ? 'ACCEPTED' : 'REJECTED', respondedAt: firebase.firestore.FieldValue.serverTimestamp() }); }
+  catch(err){ alert('Could not respond: ' + err.message); }
+  await loadPayDeleteRequests(); await loadDashboard();
+}
 async function loadDeleteRequests(){
   const snap = await db.collection('invoiceDeleteRequests')
     .where('buyerUid', '==', currentUser.uid).where('status', '==', 'PENDING').get();
-  const requests = snap.docs.map(d => ({id: d.id, ...d.data()}));
+  const requests = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(r => r.requestedBy !== 'buyer'); // your own requests wait on the seller
   const card = document.getElementById('deleteRequestsCard');
   if(!requests.length){ card.style.display = 'none'; return; }
   card.style.display = 'block';
   document.getElementById('deleteRequestsTable').innerHTML = requests.map(r => `
-    <tr><td>${esc(r.sellerName||'Seller')}</td><td>${esc(r.invoiceNo||'')}</td><td>${esc(r.orderNumber||'')}</td><td>${esc(r.reason||'')}</td>
+    <tr><td>${esc(r.sellerName||'Seller')}</td><td>${esc(r.invoiceNo||'')}</td><td>${esc(r.invoiceDate||'')}</td><td>${r.amount ? '₹' + fmtMoney(r.amount) : ''}</td><td>${esc(r.orderNumber||'—')}</td><td>${esc(r.reason||'')}</td>
     <td class="row-actions">
-      <button class="btn small primary" onclick="respondToDeleteRequest('${r.id}', true)">Accept</button>
+      <button class="btn small primary" onclick="respondToDeleteRequest('${r.id}', true)">Accept — delete on both sides</button>
       <button class="btn small danger" onclick="respondToDeleteRequest('${r.id}', false)">Reject</button>
     </td></tr>
   `).join('');
@@ -321,47 +347,17 @@ async function respondToDeleteRequest(requestId, accept){
     const req = reqSnap.data();
     if(req.status !== 'PENDING'){ alert('This request has already been responded to.'); await loadDeleteRequests(); return; }
 
-    if(accept){
+    // The database completes BOTH sides the moment you accept (seller's
+    // invoice → Recycle Bin + their stock back; your purchase removed + your
+    // stock back). This only checks first so you get a clear message.
+    if(accept && req.orderId){
       const orderSnap = await db.collection('marketplaceOrders').doc(req.orderId).get();
       const order = orderSnap.exists ? orderSnap.data() : null;
       if(order && order.buyerPurchaseId){
-        const purRef = db.collection('users').doc(currentUser.uid).collection('buyerPurchases').doc(order.buyerPurchaseId);
-        const purSnap = await purRef.get();
-        if(purSnap.exists){
-          const purchase = purSnap.data();
-          if(purchase.gstFiled){
-            alert(`Can't accept — this purchase was already filed as part of the ${purchase.gstFiledPeriod||''} GST return on your side. Contact the seller directly to resolve this.`);
-            return;
-          }
-          for(const li of (purchase.items || [])){
-            // Legacy field — only present on purchases created before the
-            // stock-tracking redesign, which pointed at the shared seller
-            // Products collection. Left as-is purely so old data still
-            // reverses correctly; nothing new ever sets this field anymore.
-            if(li.linkedProductId){
-              await db.collection('users').doc(currentUser.uid).collection('products').doc(li.linkedProductId).update({
-                stock: firebase.firestore.FieldValue.increment(-li.qty)
-              }).catch(err => console.error(`Stock reversal failed for ${li.linkedProductId}:`, err));
-              await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
-                type: 'purchase-in', productId: li.linkedProductId, qty: -li.qty, date: (purchase && purchase.date) || new Date().toISOString().slice(0,10),
-                note: `Reversed: seller deleted invoice ${req.invoiceNo||''} (order ${req.orderNumber||''})`,
-                createdAt: firebase.firestore.FieldValue.serverTimestamp()
-              });
-            }
-            // Current field — reverses the buyer-only Buyer SKU Master stock.
-            if(li.linkedSkuMappingId){
-              await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(li.linkedSkuMappingId).update({
-                stock: firebase.firestore.FieldValue.increment(-li.qty),
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-              }).catch(err => console.error(`Stock reversal failed for mapping ${li.linkedSkuMappingId}:`, err));
-              await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
-                type: 'purchase-in', mappingId: li.linkedSkuMappingId, productName: li.name, qty: -li.qty, date: (purchase && purchase.date) || new Date().toISOString().slice(0,10),
-                note: `Reversed: seller deleted invoice ${req.invoiceNo||''} (order ${req.orderNumber||''})`,
-                createdAt: firebase.firestore.FieldValue.serverTimestamp()
-              });
-            }
-          }
-          await purRef.delete();
+        const purSnap = await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').doc(order.buyerPurchaseId).get();
+        if(purSnap.exists && purSnap.data().gstFiled){
+          alert(`Can't accept — this purchase was already filed as part of the ${purSnap.data().gstFiledPeriod||''} GST return on your side. Contact the seller directly to resolve this.`);
+          return;
         }
       }
     }

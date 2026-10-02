@@ -52,7 +52,7 @@
 
   <div class="card">
     <h2>Payment History</h2>
-    <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Mode</th><th>Note</th><th>Status</th></tr></thead>
+    <table><thead><tr><th>Date</th><th>Supplier</th><th>Amount</th><th>Mode</th><th>Note</th><th>Status</th><th></th></tr></thead>
     <tbody id="paymentsTable"></tbody></table>
   </div>
 
@@ -127,12 +127,61 @@ async function loadSuppliers(){
 async function loadPayments(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('buyerPayments').orderBy('date','desc').limit(100).get();
   paymentsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => !p.deleted);
+  try{
+    const r = await db.collection('paymentDeleteRequests').where('buyerUid', '==', currentUser.uid).where('status', '==', 'PENDING').get();
+    payDeletePending = r.docs.map(d => d.data());
+  }catch(e){ payDeletePending = []; }
   document.getElementById('paymentsTable').innerHTML = paymentsCache.map(p => {
     const status = p.status === 'PENDING_SELLER_CONFIRMATION'
       ? '<span class="badge">Awaiting seller confirmation</span>'
-      : (p.status === 'CONFIRMED' ? '<span class="badge">Confirmed</span>' : '');
-    return `<tr><td>${esc(p.date)}</td><td>${esc(p.supplierName)}</td><td>₹${fmtMoney(p.amount)}</td><td>${esc(p.mode||'')}</td><td>${esc(p.note||'')}</td><td>${status}</td></tr>`;
-  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No payments recorded yet.</td></tr>';
+      : (p.status === 'CONFIRMED' ? '<span class="badge ok">Confirmed</span>' : '');
+    let action;
+    if(payDeletePending.some(q => q.buyerPaymentId === p.id)) action = '<span class="badge warn">Deletion requested</span>';
+    else if(p.status === 'PENDING_SELLER_CONFIRMATION') action = `<button class="btn small danger" onclick="cancelPayment('${p.id}')">Cancel</button>`;
+    else if(p.status === 'CONFIRMED') action = `<button class="btn small danger" onclick="requestPaymentDeletion('${p.id}')">Request deletion</button>`;
+    else action = `<button class="btn small danger" onclick="deleteOwnPayment('${p.id}')">Delete</button>`;
+    return `<tr><td>${esc(p.date)}</td><td>${esc(p.supplierName)}</td><td>₹${fmtMoney(p.amount)}</td><td>${esc(p.mode||'')}</td><td>${esc(p.note||'')}</td><td>${status}</td><td class="row-actions">${action}</td></tr>`;
+  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No payments recorded yet.</td></tr>';
+}
+/* Removing a payment:
+   - waiting for the seller  → Cancel (removed at once, seller's request withdrawn)
+   - confirmed by the seller → Request deletion; when the seller approves, it is
+     removed from BOTH accounts (your payment + their Receipt) at the same time
+   - paid to an off-platform supplier → Delete (only your records) */
+let payDeletePending = [];
+async function cancelPayment(id){
+  if(!confirm('Cancel this payment? The seller\'s confirmation request is withdrawn and the payment is removed.')) return;
+  try{
+    const snap = await db.collection('paymentConfirmations').where('buyerUid', '==', currentUser.uid).where('buyerPaymentId', '==', id).get();
+    const pending = snap.docs.find(d => d.data().status === 'PENDING');
+    if(pending) await db.collection('paymentConfirmations').doc(pending.id).update({ status: 'CANCELLED', respondedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    else await db.collection('users').doc(currentUser.uid).collection('buyerPayments').doc(id).update({ deleted: true });
+  }catch(err){ alert('Could not cancel: ' + err.message); }
+  await loadPayments();
+}
+async function requestPaymentDeletion(id){
+  const p = paymentsCache.find(x => x.id === id);
+  if(!p) return;
+  const supplier = suppliersCache.find(s => s.id === p.supplierId) || {};
+  const sellerUid = p.sellerUid || supplier.sellerUid;
+  if(!sellerUid){ return deleteOwnPayment(id); }
+  const reason = prompt(`This ₹${fmtMoney(p.amount)} payment was confirmed by ${p.supplierName} — it can only be removed after they approve. It is then removed from both accounts.\n\nEnter a reason for the seller to see:`);
+  if(reason === null) return;
+  if(!reason.trim()){ alert('A reason is required so the seller knows why.'); return; }
+  try{
+    await db.collection('paymentDeleteRequests').add({
+      requestedBy: 'buyer', buyerUid: currentUser.uid, buyerName, sellerUid, sellerName: p.supplierName || '',
+      buyerPaymentId: id, receiptId: p.receiptId || '', amount: p.amount, date: p.date, reason: reason.trim(), status: 'PENDING',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    showMsg('Deletion request sent to the seller. The payment stays until they approve.', true);
+  }catch(err){ alert('Could not send the request: ' + err.message); }
+  await loadPayments();
+}
+async function deleteOwnPayment(id){
+  if(!confirm('Delete this payment from your records?')) return;
+  await db.collection('users').doc(currentUser.uid).collection('buyerPayments').doc(id).update({ deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  await loadPayments();
 }
 async function savePaymentEntry(){
   const supplierId = document.getElementById('payEntrySupplier').value;
@@ -151,7 +200,7 @@ async function savePaymentEntry(){
       // real payment on either side — see finalizeRespondedConfirmations()
       // for how this resolves once they respond.
       const payRef = await db.collection('users').doc(currentUser.uid).collection('buyerPayments').add({
-        supplierId, supplierName: supplier.name, date, amount, mode, note,
+        supplierId, supplierName: supplier.name, date, amount, mode, note, sellerUid: supplier.sellerUid,
         status: 'PENDING_SELLER_CONFIRMATION',
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
