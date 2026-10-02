@@ -71,6 +71,8 @@ auth.onAuthStateChanged(async user => {
     await loadPayments();
     await loadReceipts();
     await loadPaymentConfirmations();
+    await loadPaymentDeleteRequests();
+    await loadBuyerInvoiceDeleteRequests();
     await loadSkuMappings();
     await loadStockMovements();
     await loadLabelSkuQueue();
@@ -1491,6 +1493,32 @@ async function loadPaymentConfirmations(){
 // never ran Link Buyer for them — same idea as ensureSupplierForSeller on
 // the buyer's side, just the other direction, so a receipt always has
 // somewhere correct to attach to.
+/* Payment deletion requests (either side asks, the other approves). */
+let paymentDeleteRequestsCache = [];
+async function loadPaymentDeleteRequests(){
+  try{
+    const snap = await db.collection('paymentDeleteRequests').where('sellerUid', '==', currentUser.uid).where('status', '==', 'PENDING').get();
+    paymentDeleteRequestsCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }catch(e){ paymentDeleteRequestsCache = []; }
+  const fromBuyers = paymentDeleteRequestsCache.filter(r => r.requestedBy === 'buyer');
+  const card = document.getElementById('paymentDeleteCard');
+  if(!card) return;
+  card.classList.toggle('hidden', !fromBuyers.length);
+  document.getElementById('paymentDeleteTable').innerHTML = fromBuyers.map(r => `
+    <tr><td>${esc(r.buyerName || 'Buyer')}</td><td>${esc(r.date || '')}</td><td>₹${fmtMoney(r.amount)}</td><td>${esc(r.reason || '')}</td>
+    <td class="row-actions">
+      <button class="btn small primary" onclick="respondToPaymentDelete('${r.id}', true)">Approve — delete on both sides</button>
+      <button class="btn small danger" onclick="respondToPaymentDelete('${r.id}', false)">Reject</button>
+    </td></tr>`).join('');
+}
+async function respondToPaymentDelete(reqId, approve){
+  if(!confirm(approve ? 'Approve? The payment is removed from your Receipts and from the buyer\'s payments.' : 'Reject this request? The payment stays on both sides.')) return;
+  try{
+    await db.collection('paymentDeleteRequests').doc(reqId).update({ status: approve ? 'ACCEPTED' : 'REJECTED', respondedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  }catch(err){ alert('Could not respond: ' + err.message); }
+  await loadPaymentDeleteRequests();
+  await loadReceipts();
+}
 async function ensureCustomerForBuyer(buyerUid, buyerName, buyerEmail){
   const existing = customersCache.find(c => c.linkedBuyerUid === buyerUid);
   if(existing) return existing.id;
@@ -1514,22 +1542,18 @@ async function respondToPaymentConfirmation(confirmId, approve){
     const req = reqSnap.data();
     if(req.status !== 'PENDING'){ alert('This request has already been responded to.'); await loadPaymentConfirmations(); return; }
 
+    // Approving: the database creates your Receipt AND marks the buyer's
+    // payment Confirmed in the same step (both sides at once).
+    const update = { status: approve ? 'APPROVED' : 'REJECTED', respondedAt: firebase.firestore.FieldValue.serverTimestamp() };
     if(approve){
       const customerId = await ensureCustomerForBuyer(req.buyerUid, req.buyerName, req.buyerEmail);
       await loadCustomers(); // pick up a possibly-just-created customer before crediting it
       const customer = customersCache.find(c => c.id === customerId);
-      await db.collection('users').doc(currentUser.uid).collection('receipts').add({
-        customerId, customerName: customer ? customer.name : (req.buyerName || 'Buyer'),
-        date: req.date, amount: req.amount, mode: req.mode || '', note: req.note || 'Paid directly (confirmed)',
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-      await loadReceipts();
+      update.customerId = customerId;
+      update.customerName = customer ? customer.name : (req.buyerName || 'Buyer');
     }
-
-    await db.collection('paymentConfirmations').doc(confirmId).update({
-      status: approve ? 'APPROVED' : 'REJECTED',
-      respondedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    await db.collection('paymentConfirmations').doc(confirmId).update(update);
+    await loadReceipts();
     await loadPaymentConfirmations();
   }catch(err){
     alert(`Could not respond: ${err.message}`);
@@ -1593,6 +1617,25 @@ function cancelEditReceipt(){
   document.getElementById('receiptCancelEditBtn').classList.add('hidden');
 }
 async function deleteReceipt(id){
+  const rec = receiptsCache.find(r => r.id === id);
+  // A payment a VISUTRA buyer recorded and you confirmed: removing it needs
+  // their approval; when they approve it's removed from BOTH accounts.
+  if(rec && rec.sourceConfirmationId && rec.linkedBuyerUid){
+    if(paymentDeleteRequestsCache.some(r => r.receiptId === id && r.status === 'PENDING')){ alert('A deletion request for this payment is already waiting on the buyer.'); return; }
+    const reason = prompt(`This ₹${fmtMoney(rec.amount)} payment was recorded by the buyer and confirmed by you — it can only be removed after the buyer approves. It is then removed from both accounts.\n\nEnter a reason for the buyer to see:`);
+    if(reason === null) return;
+    if(!reason.trim()){ alert('A reason is required so the buyer knows why.'); return; }
+    await db.collection('paymentDeleteRequests').add({
+      requestedBy: 'seller', sellerUid: currentUser.uid, sellerName: businessData.businessName || currentUser.email,
+      buyerUid: rec.linkedBuyerUid, buyerName: rec.customerName || '', receiptId: id, buyerPaymentId: rec.buyerPaymentId || '',
+      amount: rec.amount, date: rec.date, reason: reason.trim(), status: 'PENDING',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await loadPaymentDeleteRequests();
+    renderReceiptsTable();
+    alert('Deletion request sent to the buyer. The payment stays until they approve.');
+    return;
+  }
   if(!confirm('Move this receipt to the Recycle Bin? You can restore it within 30 days.')) return;
   await db.collection('users').doc(currentUser.uid).collection('receipts').doc(id).update({
     deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -1609,7 +1652,7 @@ function renderReceiptsTable(){
       <td>₹${fmtMoney(r.amount)}</td>
       <td>${esc(r.mode||'—')}</td>
       <td>${esc(r.note||'')}</td>
-      <td class="row-actions"><button class="btn small" onclick="editReceipt('${r.id}')">Edit</button><button class="btn small danger" onclick="deleteReceipt('${r.id}')">Delete</button></td>
+      <td class="row-actions">${r.sourceConfirmationId ? '<span class="badge" title="Recorded by the buyer and confirmed by you — changes need their approval">From buyer</span> ' : `<button class="btn small" onclick="editReceipt('${r.id}')">Edit</button>`}${paymentDeleteRequestsCache.some(q => q.receiptId === r.id && q.status === 'PENDING') ? '<span class="badge warn">Deletion requested</span>' : `<button class="btn small danger" onclick="deleteReceipt('${r.id}')">Delete</button>`}</td>
     </tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No receipts recorded yet.</td></tr>';
 }
 function renderReceivablesOverview(){
@@ -2864,10 +2907,17 @@ async function loadInvoices(){
    - Has a linked, ACTIVE buyer behind it (an order-derived invoice from
      order-receive.html — sourceOrderId is set): needs the buyer's sign-off
      first, since accepting that order already moved stock on both sides. */
+/* The VISUTRA buyer an invoice belongs to (from its order, or a linked customer). */
+function invoiceLinkedBuyerUid(inv){
+  if(inv.buyerUid) return inv.buyerUid;
+  const c = customersCache.find(x => x.id === inv.customerId) || null;
+  return (c && c.linkedBuyerUid) || (inv.customer && inv.customer.linkedBuyerUid) || '';
+}
 function deleteActionCell(invoiceId, inv, req){
   if(inv.gstFiled) return `<button class="btn small" disabled title="Filed in a GST return — can't be deleted">Delete</button>`;
-  if(!inv.sourceOrderId) return `<button class="btn small danger" onclick="deleteInvoice('${invoiceId}')">Delete</button>`;
+  if(!inv.sourceOrderId && !invoiceLinkedBuyerUid(inv)) return `<button class="btn small danger" onclick="deleteInvoice('${invoiceId}')">Delete</button>`;
   if(req){
+    if(req.status === 'PENDING' && req.requestedBy === 'buyer') return `<span class="badge warn" title="Buyer's reason: ${escAttr(req.reason||'')}">Buyer asks to delete</span> <button class="btn small primary" onclick="respondToBuyerInvoiceDelete('${req.id}', true)">Approve</button> <button class="btn small danger" onclick="respondToBuyerInvoiceDelete('${req.id}', false)">Reject</button>`;
     if(req.status === 'PENDING') return `<span class="badge" title="Reason: ${escAttr(req.reason||'')}">Waiting for buyer</span>`;
     if(req.status === 'REJECTED') return `<span class="badge" title="Buyer's reason, if any: ${escAttr(req.buyerNote||'')}">Buyer declined</span> <button class="btn small danger" onclick="deleteInvoice('${invoiceId}')">Request again</button>`;
     if(req.status === 'ACCEPTED') return `<button class="btn small danger" onclick="finalizeInvoiceDeletion('${invoiceId}', '${req.id}')">Finalize Deletion</button>`;
@@ -2898,24 +2948,34 @@ async function deleteInvoice(id){
   // record with real stock on their side too, from when they accepted this
   // order — deleting the invoice unilaterally would leave their records
   // (and their stock) referring to a sale that no longer exists on yours.
-  if(inv.sourceOrderId){
+  // Invoice to a VISUTRA buyer (their order, or a linked customer): the buyer
+  // must approve; the database then deletes it on BOTH sides and reverses
+  // the stock on both sides, in one step.
+  const linkedBuyer = invoiceLinkedBuyerUid(inv);
+  if(inv.sourceOrderId || linkedBuyer){
     const existing = invoiceDeleteRequestsCache[id];
     if(existing && existing.status === 'PENDING'){ alert('A deletion request for this invoice is already waiting on the buyer.'); return; }
-    const reason = prompt('This invoice came from an accepted buyer order — deleting it needs their sign-off first, since it affects their stock too.\n\nEnter a reason for the buyer to see:');
+    const reason = prompt('This invoice is for a VISUTRA buyer — it can only be deleted after they approve. When they approve, it is removed from both accounts and the stock is reversed on both sides.\n\nEnter a reason for the buyer to see:');
     if(reason === null) return; // cancelled
     if(!reason.trim()){ alert('A reason is required so the buyer knows why.'); return; }
     try{
-      const orderSnap = await db.collection('marketplaceOrders').doc(inv.sourceOrderId).get();
-      const order = orderSnap.exists ? orderSnap.data() : null;
-      if(!order || !order.buyerUid){ alert('Could not find the original order for this invoice — it may have been altered. Contact support.'); return; }
+      let order = null;
+      if(inv.sourceOrderId){
+        const orderSnap = await db.collection('marketplaceOrders').doc(inv.sourceOrderId).get();
+        order = orderSnap.exists ? orderSnap.data() : null;
+      }
+      const buyerUid = (order && order.buyerUid) || linkedBuyer;
+      if(!buyerUid){ alert('Could not find the buyer for this invoice — it may have been altered. Contact support.'); return; }
       await db.collection('invoiceDeleteRequests').add({
         sellerUid: currentUser.uid, sellerName: businessData.businessName || currentUser.email,
-        buyerUid: order.buyerUid, buyerEmail: order.buyerEmail || '',
-        invoiceId: id, invoiceNo: inv.invoiceNo || '', orderId: inv.sourceOrderId, orderNumber: order.orderNumber || '',
+        buyerUid, buyerEmail: (order && order.buyerEmail) || (inv.customer && inv.customer.email) || '', buyerName: (inv.customer && inv.customer.name) || '',
+        requestedBy: 'seller',
+        invoiceId: id, invoiceNo: inv.invoiceNo || '', orderId: inv.sourceOrderId || '', orderNumber: (order && order.orderNumber) || '',
+        amount: inv.grandTotal || 0, invoiceDate: inv.date || '',
         reason: reason.trim(), status: 'PENDING',
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
-      showMsg('invoiceHistMsg', 'Deletion request sent to the buyer — this invoice stays as-is until they respond.', true);
+      showMsg('invoiceHistMsg', 'Deletion request sent to the buyer — they see it on every page of their account. The invoice stays until they approve.', true);
       await loadInvoices();
     }catch(err){
       alert(`Could not send the deletion request: ${err.message}`);
@@ -2940,6 +3000,31 @@ async function deleteInvoice(id){
    client has no permission to write to the buyer's data, and vice versa —
    each side only ever finalizes its own half once it sees the shared
    request reach the right status. */
+/* A buyer asked to delete one of your invoices. Approving deletes it from
+   BOTH accounts at once (your invoice → Recycle Bin + your stock back; their
+   purchase removed + their stock back) and tells the buyer. */
+async function loadBuyerInvoiceDeleteRequests(){
+  let reqs = [];
+  try{
+    const snap = await db.collection('invoiceDeleteRequests').where('sellerUid', '==', currentUser.uid).where('status', '==', 'PENDING').get();
+    reqs = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.requestedBy === 'buyer');
+  }catch(e){}
+  const card = document.getElementById('invoiceDelFromBuyerCard');
+  if(!card) return;
+  card.classList.toggle('hidden', !reqs.length);
+  document.getElementById('invoiceDelFromBuyerTable').innerHTML = reqs.map(r => `
+    <tr><td>${esc(r.buyerName || 'Buyer')}</td><td>${esc(r.invoiceNo || '')}</td><td>${esc(r.invoiceDate || '')}</td><td>${r.amount ? '₹' + fmtMoney(r.amount) : ''}</td><td>${esc(r.reason || '')}</td>
+    <td class="row-actions"><button class="btn small primary" onclick="respondToBuyerInvoiceDelete('${r.id}', true)">Approve — delete on both sides</button>
+    <button class="btn small danger" onclick="respondToBuyerInvoiceDelete('${r.id}', false)">Reject</button></td></tr>`).join('');
+}
+async function respondToBuyerInvoiceDelete(reqId, approve){
+  if(!confirm(approve ? 'Approve? The invoice is removed from your account (Recycle Bin) and from the buyer\'s purchases, and the stock is reversed on both sides.' : 'Reject? The invoice stays on both sides; the buyer is told.')) return;
+  try{
+    await db.collection('invoiceDeleteRequests').doc(reqId).update({ status: approve ? 'ACCEPTED' : 'REJECTED', respondedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  }catch(err){ alert('Could not respond: ' + err.message); }
+  await loadBuyerInvoiceDeleteRequests();
+  await loadProducts(); await loadStockMovements(); await loadInvoices();
+}
 async function finalizeInvoiceDeletion(invoiceId, requestId){
   const inv = invoicesCache[invoiceId];
   if(!inv) return;

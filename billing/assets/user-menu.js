@@ -9,9 +9,73 @@
 //                             ('' when already inside billing/, '../' when
 //                             inside billing/buyer/ or billing/seller/,
 //                             '../billing/' when called from a tools/ page)
+/* 🔔 Approvals bar — shown at the top of every Billing / Buyer page when
+   someone is waiting for YOU: a seller asking to delete an invoice or a
+   payment, a buyer asking you to confirm or delete a payment. */
+async function vtLoadApprovalBar(user, base) {
+  if (typeof db === 'undefined' || !user) return;
+  const q = async (col, field, extra) => {
+    try {
+      const snap = await db.collection(col).where(field, '==', user.uid).where('status', '==', 'PENDING').get();
+      return snap.docs.map(d => d.data()).filter(extra || (() => true));
+    } catch (e) { return []; }
+  };
+  const fromSeller = r => (r.requestedBy || 'seller') === 'seller', fromBuyer = r => r.requestedBy === 'buyer';
+  const [invDelForBuyer, invDelForSeller, payDelForBuyer, payConfirm, payDelForSeller, notes] = await Promise.all([
+    q('invoiceDeleteRequests', 'buyerUid', fromSeller),
+    q('invoiceDeleteRequests', 'sellerUid', fromBuyer),
+    q('paymentDeleteRequests', 'buyerUid', fromSeller),
+    q('paymentConfirmations', 'sellerUid'),
+    q('paymentDeleteRequests', 'sellerUid', fromBuyer),
+    db.collection('users').doc(user.uid).collection('notifications').where('read', '==', false).get()
+      .then(s => s.docs.map(d => ({ id: d.id, ...d.data() }))).catch(() => [])
+  ]);
+  const parts = [], buyerCount = invDelForBuyer.length + payDelForBuyer.length, sellerCount = invDelForSeller.length + payConfirm.length + payDelForSeller.length;
+  if (invDelForBuyer.length) parts.push(`${invDelForBuyer.length} invoice deletion request(s) from sellers`);
+  if (payDelForBuyer.length) parts.push(`${payDelForBuyer.length} payment deletion request(s) from sellers`);
+  if (invDelForSeller.length) parts.push(`${invDelForSeller.length} invoice deletion request(s) from buyers`);
+  if (payConfirm.length) parts.push(`${payConfirm.length} payment(s) from buyers to confirm`);
+  if (payDelForSeller.length) parts.push(`${payDelForSeller.length} payment deletion request(s) from buyers`);
+  notes.sort((a, b) => String(b.createdAt && b.createdAt.toMillis ? b.createdAt.toMillis() : '').localeCompare(String(a.createdAt && a.createdAt.toMillis ? a.createdAt.toMillis() : '')));
+  let bar = document.getElementById('vtApprovalBar');
+  if (!parts.length && !notes.length) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'vtApprovalBar';
+    bar.style.cssText = 'background:#FFF4E5;border-bottom:1.5px solid #F2B266;color:#7A3E00;padding:9px 18px;font-size:14px;position:relative;z-index:35';
+    const top = document.querySelector('.topbar');
+    if (top && top.parentNode) top.parentNode.insertBefore(bar, top.nextSibling); else document.body.prepend(bar);
+  }
+  const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const links = [];
+  if (buyerCount) links.push(`<a class="btn small primary" href="${base}buyer/dashboard.html">Review as buyer</a>`);
+  if (sellerCount) links.push(`<a class="btn small primary" href="${base}app.html#customer-dashboard">Review as seller</a>`);
+  bar.innerHTML =
+    (parts.length ? `<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><b>🔔 Waiting for your approval:</b> <span>${parts.join(' · ')}</span> ${links.join(' ')}</div>` : '') +
+    notes.slice(0, 6).map(n => `<div class="vt-note" style="display:flex;gap:10px;align-items:center;margin-top:${parts.length ? 6 : 0}px"><span>${esc(n.text)}</span>
+      <button class="btn small" data-note="${esc(n.id)}" onclick="vtDismissNote(this)">Dismiss</button></div>`).join('') +
+    (notes.length > 1 ? `<div style="margin-top:6px"><button class="btn small" onclick="vtDismissAllNotes()">Dismiss all ${notes.length}</button></div>` : '');
+  window.__vtBarArgs = [user, base];
+}
+async function vtDismissNote(btn) {
+  const user = (window.__vtBarArgs || [])[0];
+  if (!user) return;
+  try { await db.collection('users').doc(user.uid).collection('notifications').doc(btn.dataset.note).update({ read: true }); } catch (e) {}
+  vtLoadApprovalBar.apply(null, window.__vtBarArgs);
+}
+async function vtDismissAllNotes() {
+  const user = (window.__vtBarArgs || [])[0];
+  if (!user) return;
+  try {
+    const snap = await db.collection('users').doc(user.uid).collection('notifications').where('read', '==', false).get();
+    const batch = db.batch(); snap.docs.forEach(d => batch.update(d.ref, { read: true })); await batch.commit();
+  } catch (e) {}
+  vtLoadApprovalBar.apply(null, window.__vtBarArgs);
+}
 function mountUserMenu(mountId, user, opts) {
   opts = opts || {};
   const base = opts.basePath || '';
+  setTimeout(() => { vtLoadApprovalBar(user, base); }, 0);
   const siteRoot = base + '../'; // site root relative to wherever this page lives
   const mount = document.getElementById(mountId);
   if (!mount) return;
