@@ -632,6 +632,18 @@
         <table><thead><tr><th>Buyer</th><th>Date</th><th>Amount</th><th>Mode</th><th>Note</th><th></th></tr></thead>
         <tbody id="paymentConfirmTable"></tbody></table>
       </div>
+      <div class="card hidden" id="invoiceDelFromBuyerCard" style="background:#FFF7ED;border:1.5px solid #E8A32C">
+        <h2>🔔 Invoice Deletion Requests from Buyers</h2>
+        <p class="sub">A linked buyer wants to delete an invoice you issued to them. Approving removes it from your account (Recycle Bin) and from their purchases at the same time, and reverses the stock on both sides. They are told either way.</p>
+        <table><thead><tr><th>Buyer</th><th>Invoice #</th><th>Date</th><th>Amount</th><th>Reason</th><th></th></tr></thead>
+        <tbody id="invoiceDelFromBuyerTable"></tbody></table>
+      </div>
+      <div class="card hidden" id="paymentDeleteCard" style="background:#FFF7ED;border:1.5px solid #E8A32C">
+        <h2>Payment Deletion Requests</h2>
+        <p class="sub">A linked buyer wants to remove a payment they recorded and you confirmed. Approving removes it from your Receipts and from their payments at the same time.</p>
+        <table><thead><tr><th>Buyer</th><th>Date</th><th>Amount</th><th>Reason</th><th></th></tr></thead>
+        <tbody id="paymentDeleteTable"></tbody></table>
+      </div>
 
       <div class="card">
         <h2>All Customers — Amount Receivable</h2>
