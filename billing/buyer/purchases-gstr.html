@@ -523,6 +523,12 @@ async function markPeriodAsFiled(){
   msgEl.textContent = 'Marking period as filed…';
   msgEl.className = 'msg ok';
   try{
+    // lock the whole month(s) — also purchases added later to them
+    const pcol = db.collection('users').doc(currentUser.uid).collection('gstPeriods');
+    for(let d = new Date(reportPeriod.start.getFullYear(), reportPeriod.start.getMonth(), 1); d < reportPeriod.end; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)){
+      const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      await pcol.doc(m).set({ status: 'FILED', filedAt: firebase.firestore.FieldValue.serverTimestamp(), periodLabel: reportPeriod.label }, { merge: true });
+    }
     const col = db.collection('users').doc(currentUser.uid).collection('buyerPurchases');
     for(let i = 0; i < ids.length; i += 400){
       const batch = db.batch();
