@@ -33,6 +33,10 @@
   function fsError(err) {
     const msg = (err && (err.message || err.details || err.hint)) || String(err);
     let code = 'unknown';
+    if (/VT_LOCKED:/.test(msg)) {   // GST month lock — show the reason itself
+      const e = new Error(msg.replace(/^.*VT_LOCKED:\s*/, '').replace(/\s*CONTEXT:[\s\S]*$/, ''));
+      e.code = 'failed-precondition'; e.raw = msg; return e;
+    }
     if (/VT_CONFLICT/.test(msg)) code = 'aborted';
     else if (/VT_NOT_FOUND/.test(msg)) code = 'not-found';
     else if (/VT_DENIED|row-level security|permission denied|42501/.test(msg)) code = 'permission-denied';

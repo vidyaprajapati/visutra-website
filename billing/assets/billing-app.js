@@ -2271,7 +2271,9 @@ async function restorePayment(id){
   await loadTrash();
 }
 async function restoreInvoice(id){
-  await db.collection('users').doc(currentUser.uid).collection('invoices').doc(id).update({ deleted: false, deletedAt: null });
+  try{
+    await db.collection('users').doc(currentUser.uid).collection('invoices').doc(id).update({ deleted: false, deletedAt: null });
+  }catch(err){ alert(err.message); return; }   // e.g. its month's GSTR is already generated
   await loadInvoices();
   await loadTrash();
 }
@@ -2861,6 +2863,7 @@ async function sendInvoiceEmail(inv, invoiceId){
 let invoicesCache = {};
 let invoiceDeleteRequestsCache = {}; // invoiceId -> latest request doc (with id), for THIS seller
 async function loadInvoices(){
+  await loadGstPeriods();
   const [snap, reqSnap] = await Promise.all([
     db.collection('users').doc(currentUser.uid).collection('invoices').orderBy('createdAt','desc').limit(100).get(),
     db.collection('invoiceDeleteRequests').where('sellerUid','==',currentUser.uid).get()
@@ -2915,6 +2918,8 @@ function invoiceLinkedBuyerUid(inv){
 }
 function deleteActionCell(invoiceId, inv, req){
   if(inv.gstFiled) return `<button class="btn small" disabled title="Filed in a GST return — can't be deleted">Delete</button>`;
+  const lock = gstMonthLock(inv.date);
+  if(lock) return `<button class="btn small" disabled title="GSTR for ${esc(monthLabelOf(String(inv.date).slice(0, 7)))} is ${lock.status === 'FILED' ? 'filed' : 'generated'} — can't be deleted on either side; issue a credit note instead">🔒 GST ${lock.status === 'FILED' ? 'filed' : 'generated'}</button>`;
   if(!inv.sourceOrderId && !invoiceLinkedBuyerUid(inv)) return `<button class="btn small danger" onclick="deleteInvoice('${invoiceId}')">Delete</button>`;
   if(req){
     if(req.status === 'PENDING' && req.requestedBy === 'buyer') return `<span class="badge warn" title="Buyer's reason: ${escAttr(req.reason||'')}">Buyer asks to delete</span> <button class="btn small primary" onclick="respondToBuyerInvoiceDelete('${req.id}', true)">Approve</button> <button class="btn small danger" onclick="respondToBuyerInvoiceDelete('${req.id}', false)">Reject</button>`;
@@ -2955,6 +2960,7 @@ async function deleteInvoice(id){
   if(inv.sourceOrderId || linkedBuyer){
     const existing = invoiceDeleteRequestsCache[id];
     if(existing && existing.status === 'PENDING'){ alert('A deletion request for this invoice is already waiting on the buyer.'); return; }
+    if(gstMonthLock(inv.date)){ alert(`GSTR for ${monthLabelOf(String(inv.date).slice(0, 7))} is already generated — this invoice can't be deleted on either side. Issue a credit note instead.`); return; }
     const reason = prompt('This invoice is for a VISUTRA buyer — it can only be deleted after they approve. When they approve, it is removed from both accounts and the stock is reversed on both sides.\n\nEnter a reason for the buyer to see:');
     if(reason === null) return; // cancelled
     if(!reason.trim()){ alert('A reason is required so the buyer knows why.'); return; }
@@ -2985,10 +2991,13 @@ async function deleteInvoice(id){
 
   // Plain invoice, no order behind it — nobody else's stock depends on it.
   if(!confirm('Move this invoice to the Recycle Bin? Its stock will be reversed. You can restore it within 30 days. Note: this does not cancel or affect any GST filing already submitted using it — issue a credit note for that instead.')) return;
+  try{
+    // mark deleted first: if its GST month is locked the database refuses, and no stock moves
+    await db.collection('users').doc(currentUser.uid).collection('invoices').doc(id).update({
+      deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }catch(err){ alert(err.message); return; }
   await reverseStockForInvoiceItems(inv.items, `Reversed: deleted invoice ${inv.invoiceNo||''}`);
-  await db.collection('users').doc(currentUser.uid).collection('invoices').doc(id).update({
-    deleted: true, deletedAt: firebase.firestore.FieldValue.serverTimestamp()
-  });
   await loadProducts();
   await loadStockMovements();
   await loadInvoices();
@@ -3182,6 +3191,10 @@ async function generateGstr1(){
   // Return period for the GST files: MMYYYY of the period's LAST month
   // (monthly = that month; quarterly/QRMP = the quarter's last month, as GSTN requires).
   const lastDay = new Date(end.getTime() - 864e5);
+  gstr1PeriodMonths = [];
+  for(let d = new Date(start.getFullYear(), start.getMonth(), 1); d < end; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)){
+    gstr1PeriodMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
   gstr1PeriodTag = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}`;
   gstr1PeriodLabel = period.label || period.fileTag;
   const invoices = gstr1AllPeriodInvoices.filter(inv => !inv.deleted);
@@ -3298,7 +3311,58 @@ async function generateGstr1(){
 /* ================= GST filing (shared engine: assets/gst-returns.js) =================
    GSTR-1 JSON/Excel in the current portal format, GSTR-3B summary, GSTR-2B
    reconciliation. The report tables above stay as the on-screen preview. */
-let gstr1AllPeriodInvoices = [], gstr1PeriodTag = '', gstr1PeriodLabel = '', gstRes1 = null, gstRes3b = null;
+let gstr1AllPeriodInvoices = [], gstr1PeriodTag = '', gstr1PeriodLabel = '', gstRes1 = null, gstRes3b = null, gstr1PeriodMonths = [];
+/* ---------- GST month lock ----------
+   Generating the GSTR-1/3B file for a period locks its month(s) (GENERATED);
+   "Mark as filed" makes it permanent (FILED). Invoices dated in a locked
+   month can't be deleted or restored — on either side; the database enforces
+   it too. A GENERATED month can be re-opened before filing on the portal. */
+let gstPeriodsCache = {};
+async function loadGstPeriods(){
+  try{
+    const snap = await db.collection('users').doc(currentUser.uid).collection('gstPeriods').get();
+    gstPeriodsCache = {}; snap.docs.forEach(d => { gstPeriodsCache[d.id] = d.data(); });
+  }catch(e){ gstPeriodsCache = {}; }
+}
+function gstMonthLock(date){ const m = String(date || '').slice(0, 7); const p = gstPeriodsCache[m]; return p && (p.status === 'GENERATED' || p.status === 'FILED') ? p : null; }
+function monthLabelOf(ym){ const [y, m] = ym.split('-'); return new Date(+y, +m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }); }
+async function lockGstMonths(status){
+  if(!gstr1PeriodMonths.length) return;
+  const col = db.collection('users').doc(currentUser.uid).collection('gstPeriods');
+  for(const m of gstr1PeriodMonths){
+    const cur = gstPeriodsCache[m];
+    if(cur && cur.status === 'FILED') continue;                     // already permanent
+    if(cur && cur.status === 'GENERATED' && status === 'GENERATED') continue;
+    const data = status === 'FILED'
+      ? { status: 'FILED', filedAt: firebase.firestore.FieldValue.serverTimestamp(), periodLabel: gstr1PeriodLabel }
+      : { status: 'GENERATED', generatedAt: firebase.firestore.FieldValue.serverTimestamp(), periodLabel: gstr1PeriodLabel };
+    await col.doc(m).set(data, { merge: true });
+  }
+  await loadGstPeriods();
+  renderGstLockBox();
+  if(typeof loadInvoices === 'function') loadInvoices();
+}
+function renderGstLockBox(){
+  const box = document.getElementById('gstLockBox');
+  if(!box) return;
+  const locks = gstr1PeriodMonths.map(m => [m, gstPeriodsCache[m]]).filter(([, p]) => p);
+  if(!locks.length){ box.innerHTML = '<p class="sub" style="margin:0 0 10px">🔓 Not locked yet. Downloading the GSTR-1 or GSTR-3B file below locks the month(s): invoices dated in them can then no longer be deleted or restored — on your side or the buyer\'s.</p>'; return; }
+  const filed = locks.every(([, p]) => p.status === 'FILED');
+  box.innerHTML = `<div class="box" style="margin-bottom:12px;border-color:${filed ? '#BFE3CB' : '#F2D18B'};background:${filed ? '#F1FAF4' : '#FFF8E6'}">
+    🔒 <b>${locks.map(([m, p]) => `${monthLabelOf(m)}: ${p.status === 'FILED' ? 'filed' : 'GSTR generated'}`).join(' · ')}</b> — invoices in ${locks.length > 1 ? 'these months' : 'this month'} can't be deleted or restored on either side (issue a credit note to correct a filed invoice).
+    ${filed ? '' : ' <button class="btn small" onclick="reopenGstPeriod()">Re-open (only if not yet filed on the GST portal)</button>'}</div>`;
+}
+async function reopenGstPeriod(){
+  const open = gstr1PeriodMonths.filter(m => gstPeriodsCache[m] && gstPeriodsCache[m].status === 'GENERATED');
+  if(!open.length) return;
+  const label = open.map(monthLabelOf).join(', ');
+  const typed = prompt(`Re-open ${label}? Only do this if you have NOT filed this return on the GST portal yet.\n\nType RE-OPEN to confirm:`);
+  if(typed === null) return;
+  if(typed.trim().toUpperCase() !== 'RE-OPEN'){ alert('Not re-opened (type RE-OPEN exactly).'); return; }
+  try{ for(const m of open) await db.collection('users').doc(currentUser.uid).collection('gstPeriods').doc(m).delete(); }
+  catch(err){ alert('Could not re-open: ' + err.message); }
+  await loadGstPeriods(); renderGstLockBox(); loadInvoices();
+}
 function gstBusiness(){
   const gstin = ((document.getElementById('bizGstin') || {}).value || (typeof businessData !== 'undefined' && businessData.gstin) || '').trim().toUpperCase();
   const stateCode = String((typeof businessData !== 'undefined' && businessData.stateCode) || gstin.slice(0, 2) || '').padStart(2, '0');
@@ -3351,6 +3415,7 @@ function renderGstFiling(){
     <tr style="font-weight:700"><td>Approx. tax payable in cash</td><td></td><td>₹${fmtMoney(net[0])}</td><td>₹${fmtMoney(net[1])}</td><td>₹${fmtMoney(net[2])}</td></tr></tbody></table>
     <p class="sub" style="margin-top:6px">3.2 inter-state supplies to unregistered persons: ${j.inter_sup.unreg_details.length} state(s). ITC here is from your purchase entries — claim only what the GSTR-2B reconciliation below shows as matched.</p>`;
   document.getElementById('gstFilingCard').classList.remove('hidden');
+  loadGstPeriods().then(renderGstLockBox);
 }
 function gstFileTag(){ const biz = gstBusiness(); return `${biz.gstin || 'GSTIN'}_${VTGst.fpOf(gstr1PeriodTag)}`; }
 function downloadGstr1Json(){
@@ -3358,13 +3423,15 @@ function downloadGstr1Json(){
   const errs = gstRes1.issues.filter(i => i.level === 'error').length;
   if(errs && !confirm(`${errs} problem(s) would make the GST portal reject this file (see "Check before filing"). Download anyway?`)) return;
   VTGst.downloadJson(gstRes1.json, `GSTR1_${gstFileTag()}.json`);
+  lockGstMonths('GENERATED');
 }
 function downloadGstr1Excel(){
   if(!gstRes1) return;
   XLSX.writeFile(VTGst.gstr1Workbook(XLSX, gstRes1), `GSTR1_${gstFileTag()}.xlsx`);
+  lockGstMonths('GENERATED');
 }
-function downloadGstr3bJson(){ if(gstRes3b) VTGst.downloadJson(gstRes3b.json, `GSTR3B_${gstFileTag()}.json`); }
-function downloadGstr3bExcel(){ if(gstRes3b) XLSX.writeFile(VTGst.gstr3bWorkbook(XLSX, gstRes3b, { periodLabel: gstr1PeriodLabel }), `GSTR3B_${gstFileTag()}.xlsx`); }
+function downloadGstr3bJson(){ if(gstRes3b){ VTGst.downloadJson(gstRes3b.json, `GSTR3B_${gstFileTag()}.json`); lockGstMonths('GENERATED'); } }
+function downloadGstr3bExcel(){ if(gstRes3b){ XLSX.writeFile(VTGst.gstr3bWorkbook(XLSX, gstRes3b, { periodLabel: gstr1PeriodLabel }), `GSTR3B_${gstFileTag()}.xlsx`); lockGstMonths('GENERATED'); } }
 async function readGst2bFile(file){
   const name = file.name.toLowerCase();
   if(name.endsWith('.json')) return VTGst.parse2bJson(JSON.parse(await file.text()));
@@ -3422,6 +3489,7 @@ async function markPeriodAsFiled(){
 
   showMsg('gstrMarkFiledMsg', 'Marking period as filed…', true);
   try{
+    await lockGstMonths('FILED');   // the whole month(s), incl. invoices added later
     const invCol = db.collection('users').doc(currentUser.uid).collection('invoices');
     const purCol = db.collection('users').doc(currentUser.uid).collection('purchases');
     const allOps = [
