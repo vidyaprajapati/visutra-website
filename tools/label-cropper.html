@@ -726,6 +726,9 @@ function renderSizeSettings(){
 }
 function updateLabelStockHint(){
   const el = document.getElementById('vlcLabelStockHint');
+  try{ if(typeof lastDetectedRows !== 'undefined' && lastDetectedRows && lastDetectedRows.length){
+    if(getRole() === 'seller') renderSellerStockPanel(lastDetectedRows); else renderStockPanel(lastDetectedRows);
+  } }catch(e){}
   if(!el) return;
   const key = document.getElementById('vlcOutSize').value;
   if(!cropperUser){ el.textContent = ''; return; }
@@ -1635,11 +1638,35 @@ drop.addEventListener('drop', e=>{
   if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
 });
 fileInput.addEventListener('change', e=>{
-  if(e.target.files.length) handleFile(e.target.files[0]);
+  const f = e.target.files.length ? e.target.files[0] : null;
+  // Reset so choosing the SAME file again (e.g. after switching platform or
+  // margins) fires again — browsers only react when the selection changes.
+  e.target.value = '';
+  if(f) handleFile(f);
 });
 
+/* Upload: each new file gets a number; an older file still being read stops
+   as soon as a newer one arrives (so two files never mix). Any error is
+   shown instead of leaving the page half-loaded. */
+let fileLoadSeq = 0;
 async function handleFile(file){
-  if(file.type !== 'application/pdf'){ alert('Please upload a PDF file.'); return; }
+  const isPdf = file && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '') || file.type === '' || file.type === 'application/octet-stream');
+  if(!isPdf){ alert('Please upload a PDF file.'); return; }
+  const mySeq = ++fileLoadSeq;
+  const status = document.getElementById('vlcStatus');
+  try{
+    status.textContent = 'Reading file…'; status.style.color = '';
+    await handleFileInner(file, () => mySeq !== fileLoadSeq);
+    if(mySeq === fileLoadSeq && status.textContent === 'Reading file…') status.textContent = '';
+  }catch(err){
+    if(mySeq !== fileLoadSeq) return;           // a newer file replaced it
+    console.error('Label file could not be read:', err);
+    status.textContent = `Could not read "${file.name}": ${err && err.message ? err.message : err}. Try again, or download the label PDF again from the marketplace.`;
+    status.style.color = '#9E3608';
+    document.getElementById('vlcProcessBtn').disabled = true;
+  }
+}
+async function handleFileInner(file, stale){
   pdfFile = file;
   document.getElementById('vlcFilename').textContent = file.name;
   pdfBytes = new Uint8Array(await file.arrayBuffer());
@@ -1655,6 +1682,7 @@ async function handleFile(file){
   document.getElementById('vlcSendGateWrap').style.display = 'none';
   document.getElementById('vlcSendGateNote').style.display = 'none';
   await renderPreview();
+  if(stale()) return;
   // SKU detection always runs on upload, independent of the "print SKU on
   // label" checkboxes below — those checkboxes only control whether the
   // SKU gets stamped onto the OUTPUT pdf; the Detected SKUs panel here is
@@ -1662,16 +1690,19 @@ async function handleFile(file){
   if(currentPlatform === 'meesho'){
     document.getElementById('vlcStatus').textContent = 'Detecting courier partners & SKUs…';
     await detectCouriers();
+    if(stale()) return;
     document.getElementById('vlcStatus').textContent = '';
   }
   if(currentPlatform === 'amazon'){
     document.getElementById('vlcStatus').textContent = 'Reading SKUs from invoice pages…';
     await detectAmazonSkus();
+    if(stale()) return;
     document.getElementById('vlcStatus').textContent = '';
   }
   if(currentPlatform === 'flipkart'){
     document.getElementById('vlcStatus').textContent = 'Reading SKUs from labels…';
     await detectFlipkartSkus();
+    if(stale()) return;
     document.getElementById('vlcStatus').textContent = '';
   }
   // Custom tab — or the chosen tab's own reader found nothing — auto-detect
@@ -1679,6 +1710,7 @@ async function handleFile(file){
   if(isUsingGenericDetection()){
     document.getElementById('vlcStatus').textContent = 'Auto-detecting SKUs (Amazon / Flipkart / Meesho)…';
     await detectGenericSkus();
+    if(stale()) return;
     document.getElementById('vlcStatus').textContent = '';
   }
   const detected = getDetectedByPage();
@@ -1855,12 +1887,12 @@ function renderStockPanel(rows){
     const stock = m.stock || 0;
     const reorder = m.reorderLevel || 0;
     const low = reorder > 0 && stock <= reorder;
-    const pkg = findPackaging(m.sellerId, m.productId);
+    const pkg = VLS.pkgForPlatform(findPackaging(m.sellerId, m.productId), r.marketplace);
     const psz = pkg ? packagingSizesCache.find(x => x.id === pkg.packagingSizeId) : null;
     const lsz = pkg ? labelSizesCache.find(x => x.id === pkg.labelSizeId) : null;
     const sizeSelect = (kind, list, currentId) => {
       const opts = list.filter(z => isSizeActive(z) || z.id === currentId);
-      return `<select onchange="saveBuyerSizeAssign('${escapeAttr(m.id)}','${kind}',this.value)" style="padding:4px;font-size:12px;max-width:160px">
+      return `<select onchange="saveBuyerSizeAssign('${escapeAttr(m.id)}','${kind}',this.value,'${escapeAttr(r.marketplace)}')" style="padding:4px;font-size:12px;max-width:160px">
         <option value="">— none —</option>${opts.map(z => `<option value="${escapeHtml(z.id)}"${z.id === currentId ? ' selected' : ''}>${escapeHtml(z.name)} (${z.stock||0})${isSizeActive(z) ? '' : ' — inactive'}</option>`).join('')}
       </select>`;
     };
@@ -1871,8 +1903,8 @@ function renderStockPanel(rows){
       <td>${r.qty}</td>
       <td>${escapeHtml(m.productName)}${linked}</td>
       <td><b>${stock}</b>${low ? ' <span style="color:#9E3608">⚠ reorder</span>' : ''}</td>
-      <td>${sizeSelect('packagingSizeId', packagingSizesCache, pkg ? pkg.packagingSizeId : '')}${psz && (psz.stock||0) <= (psz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : ''}</td>
-      <td>${sizeSelect('labelSizeId', labelSizesCache, pkg ? pkg.labelSizeId : '')}${lsz && (lsz.stock||0) <= (lsz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : ''}</td>
+      <td>${sizeSelect('packagingSizeId', packagingSizesCache, pkg ? pkg.packagingSizeId : '')}${psz && (psz.stock||0) <= (psz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : ''}${platformTag(r.marketplace, pkg && pkg.fromPlatform.packaging)}</td>
+      <td>${paperLabelCell() || (sizeSelect('labelSizeId', labelSizesCache, pkg ? pkg.labelSizeId : '') + (lsz && (lsz.stock||0) <= (lsz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : '') + platformTag(r.marketplace, pkg && pkg.fromPlatform.label))}</td>
     </tr>`;
   }).join('');
   panelEl.style.display = 'block';
@@ -1949,18 +1981,16 @@ async function saveBuyerMapping(i){
 }
 /* Packing / label size for a buyer product — same record Buyer SKU Master's
    "Assign Sizes to a Product" uses (buyerProductPackaging/{sellerId}_{productId}). */
-async function saveBuyerSizeAssign(mappingId, field, sizeId){
+async function saveBuyerSizeAssign(mappingId, field, sizeId, marketplace){
   const m = mappingsCache.find(x => x.id === mappingId);
   if(!m || !cropperUser) return;
   try{
-    await db.collection('users').doc(cropperUser.uid).collection('buyerProductPackaging').doc(`${m.sellerId}_${m.productId}`).set({
-      sellerUid: m.sellerId, sellerName: m.sellerName || '', productId: m.productId, productName: m.productName,
-      [field]: sizeId || null,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    await savePlatformSize(cropperUser.uid, `${m.sellerId}_${m.productId}`,
+      { sellerUid: m.sellerId, sellerName: m.sellerName || '', productId: m.productId, productName: m.productName },
+      findPackaging(m.sellerId, m.productId), field, sizeId, marketplace);
     await loadPackaging();
     renderStockPanel(lastDetectedRows);
-    buyerMsg(`${field === 'packagingSizeId' ? 'Packing' : 'Label'} size saved for ${m.productName}.`, true);
+    buyerMsg(`${field === 'packagingSizeId' ? 'Packing' : 'Label'} size saved for ${m.productName} on ${marketplace || 'all platforms'}.`, true);
   }catch(err){ buyerMsg('Could not save: ' + (err.code || err.message), false); }
 }
 
@@ -2022,12 +2052,12 @@ function renderSellerStockPanel(rows){
     const reorder = p.reorderLevel || 0;
     const low = reorder > 0 ? stock <= reorder : stock <= 0;
     const short = stock < r.qty;
-    const pkg = findPackaging(cropperUser.uid, res.productId);
+    const pkg = VLS.pkgForPlatform(findPackaging(cropperUser.uid, res.productId), r.marketplace);
     const psz = pkg ? packagingSizesCache.find(x => x.id === pkg.packagingSizeId) : null;
     const lsz = pkg ? labelSizesCache.find(x => x.id === pkg.labelSizeId) : null;
     const sizeSelect = (kind, list, currentId) => {
       const opts = list.filter(z => isSizeActive(z) || z.id === currentId);
-      return `<select onchange="saveSellerSizeAssign('${escapeAttr(res.productId)}','${kind}',this.value)" style="padding:4px;font-size:12px;max-width:160px">
+      return `<select onchange="saveSellerSizeAssign('${escapeAttr(res.productId)}','${kind}',this.value,'${escapeAttr(r.marketplace)}')" style="padding:4px;font-size:12px;max-width:160px">
         <option value="">— none —</option>${opts.map(z => `<option value="${escapeHtml(z.id)}"${z.id === currentId ? ' selected' : ''}>${escapeHtml(z.name)} (${z.stock||0})${isSizeActive(z) ? '' : ' — inactive'}</option>`).join('')}
       </select>`;
     };
@@ -2037,32 +2067,40 @@ function renderSellerStockPanel(rows){
       <td>${r.qty}</td>
       <td>${escapeHtml(res.productName)}</td>
       <td><b>${stock}</b>${short ? ' <span style="color:#9E3608">⚠ less than this file needs</span>' : (low ? ' <span style="color:#9E3608">⚠ reorder</span>' : '')}</td>
-      <td>${sizeSelect('packagingSizeId', packagingSizesCache, pkg ? pkg.packagingSizeId : '')}${psz && (psz.stock||0) <= (psz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : ''}</td>
-      <td>${sizeSelect('labelSizeId', labelSizesCache, pkg ? pkg.labelSizeId : '')}${lsz && (lsz.stock||0) <= (lsz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : ''}</td>
+      <td>${sizeSelect('packagingSizeId', packagingSizesCache, pkg ? pkg.packagingSizeId : '')}${psz && (psz.stock||0) <= (psz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : ''}${platformTag(r.marketplace, pkg && pkg.fromPlatform.packaging)}</td>
+      <td>${paperLabelCell() || (sizeSelect('labelSizeId', labelSizesCache, pkg ? pkg.labelSizeId : '') + (lsz && (lsz.stock||0) <= (lsz.minQty||0) ? ' <span style="color:#9E3608">⚠</span>' : '') + platformTag(r.marketplace, pkg && pkg.fromPlatform.label))}</td>
     </tr>`;
   }).join('');
   panelEl.style.display = 'block';
+}
+/* Save a packing / label size for ONE platform (byPlatform.<MK>). The first
+   time a product gets a size it also becomes its default, so the other
+   platforms have something until you set theirs. */
+async function savePlatformSize(uid, docId, base, current, field, sizeId, marketplace){
+  const mk = String(marketplace || '').toUpperCase();
+  const nameField = field === 'packagingSizeId' ? 'packagingSizeName' : 'labelSizeName';
+  const name = sizeNameOf(field === 'packagingSizeId' ? 'buyerPackagingSizes' : 'buyerLabelSizes', sizeId) || '';
+  const data = Object.assign({}, base, { updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  if(mk) data.byPlatform = { [mk]: { [field]: sizeId || null, [nameField]: name } };
+  if(!mk || !current || !current[field]){ data[field] = sizeId || null; data[nameField] = name; }
+  await db.collection('users').doc(uid).collection('buyerProductPackaging').doc(docId).set(data, { merge: true });
 }
 /* Seller-side packing/label size for one of your Billing products — saved
    here so the Seller section never has to go into Buyer SKU Master.
    (Label size is only used when the Output paper size has no active label
    stock; otherwise the printer-size stock is used.) */
-async function saveSellerSizeAssign(productId, field, sizeId){
+async function saveSellerSizeAssign(productId, field, sizeId, marketplace){
   const msg = document.getElementById('vlcSellerStockMsg');
   const product = sellerProductsCache.find(p => p.id === productId);
   if(!product || !cropperUser) return;
   const uid = cropperUser.uid;
   const docId = `${uid}_${productId}`;
   try{
-    await db.collection('users').doc(uid).collection('buyerProductPackaging').doc(docId).set({
-      sellerUid: uid, sellerName: 'Seller (my Billing products)', productId, productName: product.name,
-      [field]: sizeId || null,
-      [field === 'packagingSizeId' ? 'packagingSizeName' : 'labelSizeName']: sizeNameOf(field === 'packagingSizeId' ? 'buyerPackagingSizes' : 'buyerLabelSizes', sizeId) || '',
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    await savePlatformSize(uid, docId, { sellerUid: uid, sellerName: 'Seller (my Billing products)', productId, productName: product.name },
+      findPackaging(uid, productId), field, sizeId, marketplace);
     await loadPackaging();
     renderSellerStockPanel(lastDetectedRows);
-    msg.textContent = `${field === 'packagingSizeId' ? 'Packing' : 'Label'} size saved for ${product.name}.`;
+    msg.textContent = `${field === 'packagingSizeId' ? 'Packing' : 'Label'} size saved for ${product.name} on ${marketplace || 'all platforms'}.`;
     msg.style.color = '#0A5C4F';
   }catch(err){
     msg.textContent = 'Could not save: ' + (err.code || err.message); msg.style.color = '#9E3608';
@@ -2172,6 +2210,7 @@ async function sendToLabelOrder(){
   markSentToOrder(fileSignatureFor(pdfFile ? pdfFile.name : '', lastDetectedRows));
   applyDownloadGate();
 }
+let previewRenderTask = null;
 async function renderPreview(){
   const mount = document.getElementById('vlcPreviewMount');
   mount.innerHTML = '';
@@ -2182,6 +2221,9 @@ async function renderPreview(){
   wrap.appendChild(canvas);
   mount.appendChild(wrap);
 
+  // A newer upload cancels a preview still drawing (otherwise two renders on
+  // one canvas leave it blank).
+  if(previewRenderTask){ try{ previewRenderTask.cancel(); }catch(e){} previewRenderTask = null; }
   const loadingTask = pdfjsLib.getDocument({ data: pdfBytes.slice() });
   pdfJsDoc = await loadingTask.promise;
   const page = await pdfJsDoc.getPage(1);
@@ -2189,7 +2231,10 @@ async function renderPreview(){
   canvas.width = viewport.width; canvas.height = viewport.height;
   pageAspect = viewport.width / viewport.height;
   const ctx = canvas.getContext('2d');
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  previewRenderTask = page.render({ canvasContext: ctx, viewport });
+  try{ await previewRenderTask.promise; }
+  catch(err){ if(err && err.name === 'RenderingCancelledException') return; throw err; }
+  finally{ previewRenderTask = null; }
 
   drawCropOverlay(wrap, canvas);
 }
@@ -2275,12 +2320,25 @@ function collectExportItems(pageIndexOrder){
 }
 /* Packaging assignment (buyerProductPackaging) for one item, per role. */
 function packagingForItem(item, role){
+  // The sizes for THIS label's platform (a product may use different packing /
+  // labels on Meesho vs Flipkart vs Amazon), falling back to its default.
   if(role === 'seller'){
     const res = resolveSellerProduct(item.marketplace, item.sku);
-    return res ? findPackaging(cropperUser.uid, res.productId) : null;
+    return res ? VLS.pkgForPlatform(findPackaging(cropperUser.uid, res.productId), item.marketplace) : null;
   }
   const mapping = findMapping(item.marketplace, item.sku);
-  return mapping ? findPackaging(mapping.sellerId, mapping.productId) : null;
+  return mapping ? VLS.pkgForPlatform(findPackaging(mapping.sellerId, mapping.productId), item.marketplace) : null;
+}
+/* Label column: when the chosen Output paper size has active label stock,
+   THAT label is what gets deducted — show it instead of a product setting. */
+function paperLabelCell(){
+  const key = document.getElementById('vlcOutSize').value;
+  if(key === 'native') return null;
+  const d = activeLabelForPaper(key);
+  return d ? `<span title="Printing on this paper — its label stock is used for every label" style="font-size:12px">🖨 ${escapeHtml(d.name)} <span style="color:var(--ink-soft)">(${d.stock||0}, printer paper)</span></span>` : null;
+}
+function platformTag(mk, fromPlatform){
+  return `<div style="font-size:10.5px;color:var(--ink-soft)">${fromPlatform ? 'for ' + escapeHtml(mk) + ' only' : 'default · change = ' + escapeHtml(mk) + ' only'}</div>`;
 }
 function sizeNameOf(col, id){
   const list = col === 'buyerLabelSizes' ? labelSizesCache : packagingSizesCache;
