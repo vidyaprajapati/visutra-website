@@ -255,6 +255,13 @@
       ['No. of Invoices', '', 'Total Inv Value', '', '', '', 'Total Taxable Value', 'Total Cess', ''],
       [uniq(R.b2cl, 0), '', r2(sum([...new Map(R.b2cl.map(r => [r[0], r[2]])).values()], v => v)), '', '', '', colSum(R.b2cl, 6), colSum(R.b2cl, 7), ''],
       ['Invoice Number', 'Invoice date', 'Invoice Value', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount', 'E-Commerce GSTIN'], R.b2cl), 'b2cl');
+    if (R.cdnr && R.cdnr.length) XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary For CDNR(9B)',
+      ['No. of Recipients', '', 'No. of Notes', '', '', '', '', '', 'Total Note Value', '', '', 'Total Taxable Value', 'Total Cess'],
+      [uniq(R.cdnr, 0), '', uniq(R.cdnr, 2), '', '', '', '', '', r2(sum([...new Map(R.cdnr.map(r => [r[2], r[8]])).values()], v => v)), '', '', colSum(R.cdnr, 11), colSum(R.cdnr, 12)],
+      ['GSTIN/UIN of Recipient', 'Receiver Name', 'Note Number', 'Note Date', 'Note Type', 'Place Of Supply', 'Reverse Charge', 'Note Supply Type', 'Note Value', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount'], R.cdnr), 'cdnr');
+    if (R.cdnur && R.cdnur.length) XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary For CDNUR(9B)',
+      ['', 'No. of Notes', '', '', '', 'Total Note Value', '', '', 'Total Taxable Value', 'Total Cess'], ['', uniq(R.cdnur, 1), '', '', '', colSum(R.cdnur, 5), '', '', colSum(R.cdnur, 8), colSum(R.cdnur, 9)],
+      ['UR Type', 'Note Number', 'Note Date', 'Note Type', 'Place Of Supply', 'Note Value', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount'], R.cdnur), 'cdnur');
     XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary For B2CS(7)',
       ['', '', '', '', 'Total Taxable Value', 'Total Cess', ''], ['', '', '', '', colSum(R.b2cs, 4), colSum(R.b2cs, 5), ''],
       ['Type', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount', 'E-Commerce GSTIN'], R.b2cs), 'b2cs');
@@ -452,6 +459,190 @@
     return { rows: res, summary };
   }
 
+  /* ======================= Amazon "GST Ready-to-File" report =======================
+     Amazon now gives ONE Excel per period (no CSVs) laid out like the GSTN
+     offline template: sheets B2B · B2B CN (cdnr) · B2CL CN (cdnur) · B2C Large ·
+     B2C Small (already summed per state, net of credit notes) · HSN Summary.
+     parseReadyWorkbook() reads it; mergeReadyReport() adds it to a GSTR-1
+     built from the other sources (Flipkart / Meesho / Billing). */
+  function isReadyWorkbook(wb) {
+    const names = wb.SheetNames.map(n => n.toLowerCase());
+    return names.includes('b2c small') && names.some(n => n.startsWith('hsn')) && names.includes('b2b');
+  }
+  function parseReadyWorkbook(XLSX, wb, fileName) {
+    const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(/[₹,\s]/g, '')); return isFinite(n) ? n : 0; };
+    const posOf = v => { const m = String(v || '').match(/^\s*(\d{1,2})/); return m ? m[1].padStart(2, '0') : ''; };
+    const dateOf = v => {
+      if (typeof v === 'number') return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 10);
+      const s = String(v || '').trim();
+      let m = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+      if (m) return `${m[3]}-${String(MON.findIndex(x => x.toLowerCase() === m[2].toLowerCase()) + 1).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+      m = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+      if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+      return s.slice(0, 10);
+    };
+    const sheet = name => {
+      const sn = wb.SheetNames.find(n => n.toLowerCase().trim() === name);
+      if (!sn) return [];
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '' });
+      const hi = rows.findIndex((r, i) => i >= 2 && r.filter(c => String(c).trim()).length >= 3 && /[a-z]/i.test(String(r[0] || r[1])) && !/^summary/i.test(String(r[0])) && !/^no\. of/i.test(String(r[0] || r[1])));
+      return hi < 0 ? [] : rows.slice(hi + 1).filter(r => r.some(c => String(c).trim() !== ''));
+    };
+    let gstin = '';
+    const g = wb.SheetNames.find(n => n.toLowerCase() === 'gstin');
+    if (g) { const rows = XLSX.utils.sheet_to_json(wb.Sheets[g], { header: 1, defval: '' }); const hit = rows.flat().find(c => GSTIN_RE.test(String(c).trim())); gstin = hit ? String(hit).trim() : ''; }
+    const r = {
+      gstin, fileName: fileName || '',
+      b2b: sheet('b2b').map(c => ({ ctin: String(c[0]).trim().toUpperCase(), name: c[1], inum: String(c[2]).trim(), idt: dateOf(c[3]), val: num(c[4]), pos: posOf(c[5]), rchrg: String(c[6]).toUpperCase() === 'Y', etin: String(c[9] || '').trim(), rt: num(c[10]), txval: num(c[11]), cess: num(c[12]) })).filter(x => x.ctin && x.inum),
+      cdnr: sheet('b2b cn (cdnr)').map(c => ({ ctin: String(c[0]).trim().toUpperCase(), name: c[1], ntnum: String(c[2]).trim(), ntdt: dateOf(c[3]), ntty: String(c[4]).trim().toUpperCase() === 'D' ? 'D' : 'C', pos: posOf(c[5]), rchrg: String(c[6]).toUpperCase() === 'Y', val: num(c[8]), rt: num(c[10]), txval: num(c[11]), cess: num(c[12]), origInv: String(c[13] || ''), origDate: dateOf(c[14]), reason: String(c[15] || '') })).filter(x => x.ctin && x.ntnum),
+      cdnur: sheet('b2cl cn (cdnur)').map(c => ({ typ: String(c[0]).trim() || 'B2CL', ntnum: String(c[1]).trim(), ntdt: dateOf(c[2]), ntty: String(c[3]).trim().toUpperCase() === 'D' ? 'D' : 'C', pos: posOf(c[4]), val: num(c[5]), rt: num(c[7]), txval: num(c[8]), cess: num(c[9]) })).filter(x => x.ntnum),
+      b2cl: sheet('b2c large').map(c => ({ inum: String(c[0]).trim(), idt: dateOf(c[1]), val: num(c[2]), pos: posOf(c[3]), rt: num(c[5]), txval: num(c[6]), cess: num(c[7]), etin: String(c[8] || '').trim() })).filter(x => x.inum),
+      b2cs: sheet('b2c small').map(c => ({ typ: String(c[0]).trim(), pos: posOf(c[1]), rt: num(c[3]), txval: num(c[4]), cess: num(c[5]), etin: String(c[6] || '').trim() })).filter(x => x.pos),
+      hsn: sheet(wb.SheetNames.find(n => /^hsn/i.test(n)).toLowerCase().trim()).map(c => ({ hsn: String(c[0]).trim(), desc: String(c[1] || ''), uqc: String(c[2] || 'OTH').trim().toUpperCase().split('-')[0], qty: num(c[3]), rt: num(c[4]), val: num(c[5]), txval: num(c[6]), iamt: num(c[7]), camt: num(c[8]), samt: num(c[9]), cess: num(c[10]) })).filter(x => x.hsn)
+    };
+    // period: from the file name ("…JULY-SEPTEMBER-2026…") or the latest date in it
+    const MONTHS = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER'];
+    const fm = String(fileName || '').toUpperCase().match(/([A-Z]+)-(?:([A-Z]+)-)?(\d{4})/);
+    if (fm && MONTHS.includes(fm[1])) {
+      const last = MONTHS.indexOf(fm[2] && MONTHS.includes(fm[2]) ? fm[2] : fm[1]) + 1;
+      r.period = `${fm[3]}-${String(last).padStart(2, '0')}`;
+      r.periodFirst = `${fm[3]}-${String(MONTHS.indexOf(fm[1]) + 1).padStart(2, '0')}`;
+    } else {
+      const dates = [...r.b2b.map(x => x.idt), ...r.cdnr.map(x => x.ntdt), ...r.b2cl.map(x => x.idt)].filter(Boolean).sort();
+      r.period = dates.length ? dates[dates.length - 1].slice(0, 7) : '';
+    }
+    return r;
+  }
+
+  // Add one or more parsed Amazon reports to a buildGstr1() result (in place).
+  function mergeReadyReport(res, readyList, opts) {
+    const J = res.json, R = res.rows, seller = String(opts.stateCode || '').padStart(2, '0');
+    const iss = res.issues, warn = (m, ref) => iss.push({ level: 'warn', msg: m, ref: ref || '' });
+    const itm = (rt, txval, cess, inter) => { const t = taxSplit(txval, rt, inter); return { num: itemNum(rt), itm_det: Object.assign({ txval: r2(txval), rt }, inter ? { iamt: t.iamt } : { camt: t.camt, samt: t.samt }, { csamt: r2(cess) }) }; };
+    const eco = {};
+    const addEco = (etin, txval, rt, inter, cess, sign) => {
+      if (!etin) return;
+      const t = taxSplit(txval, rt, inter); const e = eco[etin] = eco[etin] || { etin, suppval: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 };
+      e.suppval += sign * txval; e.igst += sign * t.iamt; e.cgst += sign * t.camt; e.sgst += sign * t.samt; e.cess += sign * cess;
+    };
+    readyList.forEach(rd => {
+      if (opts.gstin && rd.gstin && rd.gstin !== String(opts.gstin).toUpperCase()) warn(`Amazon report "${rd.fileName}" is for GSTIN ${rd.gstin}, not ${opts.gstin}.`);
+      // B2B — group rate lines into invoices
+      const b2b = {};
+      rd.b2b.forEach(x => {
+        const k = x.ctin + '|' + x.inum;
+        if (!b2b[k]) b2b[k] = { ctin: x.ctin, inv: { inum: x.inum.slice(0, 16), idt: ddmmyyyy(x.idt), val: r2(x.val), pos: x.pos, rchrg: x.rchrg ? 'Y' : 'N', inv_typ: 'R', itms: [] }, etin: x.etin };
+        if (x.etin) b2b[k].inv.etin = x.etin;
+        b2b[k].inv.itms.push(itm(x.rt, x.txval, x.cess, x.pos !== seller));
+        R.b2b.push([x.ctin, x.name || '', x.inum, ddMonyyyy(x.idt), r2(x.val), posLabel(x.pos), x.rchrg ? 'Y' : 'N', '', 'Regular B2B', x.etin || '', x.rt, r2(x.txval), r2(x.cess)]);
+        addEco(x.etin, x.txval, x.rt, x.pos !== seller, x.cess, 1);
+        if (!gstinOk(x.ctin)) iss.push({ level: 'error', msg: `Buyer GSTIN "${x.ctin}" in Amazon's B2B sheet is not valid.`, ref: x.inum });
+      });
+      Object.values(b2b).forEach(({ ctin, inv }) => {
+        J.b2b = J.b2b || []; let c = J.b2b.find(e => e.ctin === ctin);
+        if (!c) J.b2b.push(c = { ctin, inv: [] });
+        c.inv.push(inv);
+      });
+      // B2CL — by place of supply
+      rd.b2cl.forEach(x => {
+        J.b2cl = J.b2cl || []; let p = J.b2cl.find(e => e.pos === x.pos); if (!p) J.b2cl.push(p = { pos: x.pos, inv: [] });
+        let inv = p.inv.find(i => i.inum === x.inum);
+        if (!inv) p.inv.push(inv = Object.assign({ inum: x.inum.slice(0, 16), idt: ddmmyyyy(x.idt), val: r2(x.val), itms: [] }, x.etin ? { etin: x.etin } : {}));
+        inv.itms.push({ num: itemNum(x.rt), itm_det: { txval: r2(x.txval), rt: x.rt, iamt: taxSplit(x.txval, x.rt, true).iamt, csamt: r2(x.cess) } });
+        R.b2cl.push([x.inum, ddMonyyyy(x.idt), r2(x.val), posLabel(x.pos), '', x.rt, r2(x.txval), r2(x.cess), x.etin || '']);
+        addEco(x.etin, x.txval, x.rt, true, x.cess, 1);
+      });
+      // B2CS — already summed and net of credit notes; merge with other sources
+      rd.b2cs.forEach(x => {
+        const inter = x.pos !== seller, t = taxSplit(x.txval, x.rt, inter);
+        J.b2cs = J.b2cs || [];
+        let e = J.b2cs.find(z => z.pos === x.pos && z.rt === x.rt && (z.etin || '') === (x.etin || '') && z.sply_ty === (inter ? 'INTER' : 'INTRA'));
+        if (!e) J.b2cs.push(e = Object.assign({ sply_ty: inter ? 'INTER' : 'INTRA', pos: x.pos, typ: x.etin ? 'E' : 'OE' }, x.etin ? { etin: x.etin } : {}, { txval: 0, rt: x.rt }, inter ? { iamt: 0 } : { camt: 0, samt: 0 }, { csamt: 0 }));
+        e.txval = r2(e.txval + x.txval); e.csamt = r2(e.csamt + x.cess);
+        if (inter) e.iamt = r2(e.iamt + t.iamt); else { e.camt = r2(e.camt + t.camt); e.samt = r2(e.samt + t.samt); }
+        R.b2cs.push([x.etin ? 'E' : 'OE', posLabel(x.pos), '', x.rt, r2(x.txval), r2(x.cess), x.etin || '']);
+        addEco(x.etin, x.txval, x.rt, inter, x.cess, 1);
+      });
+      // CDNR (registered buyers) and CDNUR (B2CL) credit / debit notes
+      rd.cdnr.forEach(x => {
+        J.cdnr = J.cdnr || []; let c = J.cdnr.find(e => e.ctin === x.ctin); if (!c) J.cdnr.push(c = { ctin: x.ctin, nt: [] });
+        let nt = c.nt.find(n => n.nt_num === x.ntnum);
+        if (!nt) c.nt.push(nt = { ntty: x.ntty, nt_num: x.ntnum.slice(0, 16), nt_dt: ddmmyyyy(x.ntdt), val: r2(x.val), pos: x.pos, rchrg: x.rchrg ? 'Y' : 'N', inv_typ: 'R', itms: [] });
+        nt.itms.push(itm(x.rt, x.txval, x.cess, x.pos !== seller));
+        (R.cdnr = R.cdnr || []).push([x.ctin, x.name || '', x.ntnum, ddMonyyyy(x.ntdt), x.ntty, posLabel(x.pos), x.rchrg ? 'Y' : 'N', 'Regular B2B', r2(x.val), '', x.rt, r2(x.txval), r2(x.cess)]);
+        addEco((rd.b2b.find(b => b.inum === x.origInv) || rd.b2b[0] || {}).etin, x.txval, x.rt, x.pos !== seller, x.cess, x.ntty === 'C' ? -1 : 1);
+      });
+      rd.cdnur.forEach(x => {
+        J.cdnur = J.cdnur || [];
+        let nt = J.cdnur.find(n => n.nt_num === x.ntnum);
+        if (!nt) J.cdnur.push(nt = { typ: x.typ === 'EXPWP' || x.typ === 'EXPWOP' ? x.typ : 'B2CL', ntty: x.ntty, nt_num: x.ntnum.slice(0, 16), nt_dt: ddmmyyyy(x.ntdt), val: r2(x.val), pos: x.pos, itms: [] });
+        nt.itms.push({ num: itemNum(x.rt), itm_det: { txval: r2(x.txval), rt: x.rt, iamt: taxSplit(x.txval, x.rt, true).iamt, csamt: r2(x.cess) } });
+        (R.cdnur = R.cdnur || []).push([nt.typ, x.ntnum, ddMonyyyy(x.ntdt), x.ntty, posLabel(x.pos), r2(x.val), '', x.rt, r2(x.txval), r2(x.cess)]);
+      });
+      // HSN — Amazon gives one combined summary; the portal needs B2B and B2C
+      // apart. The B2B invoices' net value (minus credit notes to them) goes to
+      // HSN-B2B under the main HSN; the rest stays in HSN-B2C.
+      const b2bNet = {};   // rate → { txval, iamt, camt, samt, cess, n }
+      rd.b2b.forEach(x => { const t = taxSplit(x.txval, x.rt, x.pos !== seller), e = b2bNet[x.rt] = b2bNet[x.rt] || { txval: 0, iamt: 0, camt: 0, samt: 0, cess: 0 }; e.txval += x.txval; e.iamt += t.iamt; e.camt += t.camt; e.samt += t.samt; e.cess += x.cess; });
+      rd.cdnr.forEach(x => { const sg = x.ntty === 'C' ? -1 : 1, t = taxSplit(x.txval, x.rt, x.pos !== seller), e = b2bNet[x.rt] = b2bNet[x.rt] || { txval: 0, iamt: 0, camt: 0, samt: 0, cess: 0 }; e.txval += sg * x.txval; e.iamt += sg * t.iamt; e.camt += sg * t.camt; e.samt += sg * t.samt; e.cess += sg * x.cess; });
+      const addHsn = (arrName, h) => {
+        J.hsn = J.hsn || { hsn_b2b: [] }; const arr = J.hsn[arrName] = J.hsn[arrName] || [];
+        let e = arr.find(z => z.hsn_sc === h.hsn_sc && z.uqc === h.uqc && z.rt === h.rt);
+        if (!e) arr.push(e = { hsn_sc: h.hsn_sc, num: arr.length + 1, desc: h.desc, uqc: h.uqc, qty: 0, rt: h.rt, txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 });
+        ['qty', 'txval', 'iamt', 'camt', 'samt', 'csamt'].forEach(k => { e[k] = r2(e[k] + (h[k] || 0)); });
+        (arrName === 'hsn_b2b' ? R.hsnB2B : R.hsnB2C).push([h.hsn_sc, h.desc, h.uqc + '-' + (UQC[h.uqc] || 'OTHERS'), r2(h.qty), r2(h.txval + h.iamt + h.camt + h.samt + h.csamt), h.rt, r2(h.txval), r2(h.iamt), r2(h.camt), r2(h.samt), r2(h.csamt)]);
+      };
+      const hsnByRate = {};
+      rd.hsn.forEach(h => { (hsnByRate[h.rt] = hsnByRate[h.rt] || []).push(Object.assign({}, h)); });
+      Object.keys(hsnByRate).forEach(rtKey => {
+        const rt = Number(rtKey), list = hsnByRate[rtKey].sort((a, b) => b.txval - a.txval), main = list[0], b = b2bNet[rt];
+        list.forEach(h => {
+          let share = 0;
+          if (h === main && b && b.txval > 0) share = Math.min(1, b.txval / (h.txval || 1));
+          const b2bPart = share ? { txval: Math.min(b.txval, h.txval), iamt: b.iamt, camt: b.camt, samt: b.samt, csamt: b.cess, qty: Math.round(h.qty * share) } : null;
+          const uqc = UQC[h.uqc] ? h.uqc : uqcCode(h.uqc);
+          if (b2bPart) addHsn('hsn_b2b', Object.assign({ hsn_sc: h.hsn, desc: h.desc, uqc, rt }, b2bPart));
+          const rest = { hsn_sc: h.hsn, desc: h.desc, uqc, rt, qty: h.qty - (b2bPart ? b2bPart.qty : 0), txval: h.txval - (b2bPart ? b2bPart.txval : 0),
+            iamt: h.iamt - (b2bPart ? b2bPart.iamt : 0), camt: h.camt - (b2bPart ? b2bPart.camt : 0), samt: h.samt - (b2bPart ? b2bPart.samt : 0), csamt: h.cess - (b2bPart ? b2bPart.csamt : 0) };
+          if (r2(rest.txval) !== 0 || r2(rest.qty) !== 0) addHsn('hsn_b2c', rest);
+        });
+        if (b && b.txval > 0) warn(`Amazon's HSN summary isn't split B2B/B2C — the B2B invoices' net value (₹${r2(b.txval)}) was put under HSN ${main.hsn} (B2B) and the rest under B2C. Check this matches your products.`);
+      });
+      if ([...rd.b2b, ...rd.b2cs, ...rd.hsn].length && [...rd.b2b, ...rd.b2cs, ...rd.hsn].every(x => !x.rt)) {
+        warn(`Every line in Amazon's report is at 0% GST. HSN ${rd.hsn.map(h => h.hsn).join(', ')} is normally taxable (e.g. 63049291 = 5%). Confirm the tax code on your Amazon listings with your CA before filing — the file is built exactly as Amazon reports it.`);
+      }
+      warn(`Amazon's report has no "Documents issued" (Table 13) data — add your Amazon invoice and credit-note number ranges on the portal (Amazon Seller Central → Reports → Tax Document Library / MTR).`);
+      if (opts.period && rd.period && opts.period !== rd.period) warn(`Amazon report "${rd.fileName}" is for the period ending ${rd.period}, but you chose ${opts.period}.`);
+    });
+    // Table 14 — supplies through Amazon (net of credit notes)
+    const ecoArr = Object.values(eco).filter(e => r2(e.suppval));
+    if (ecoArr.length) {
+      J.supeco = J.supeco || { clttx: [] };
+      ecoArr.forEach(e => {
+        let c = J.supeco.clttx.find(z => z.etin === e.etin);
+        if (!c) J.supeco.clttx.push(c = { etin: e.etin, suppval: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 });
+        ['suppval', 'igst', 'cgst', 'sgst', 'cess'].forEach(k => { c[k] = r2(c[k] + e[k]); });
+      });
+    }
+    if (J.hsn) Object.keys(J.hsn).forEach(k => J.hsn[k].forEach((h, i) => { h.num = i + 1; }));
+    // refresh counts / totals
+    res.counts.b2b = (J.b2b || []).reduce((a, x) => a + x.inv.length, 0);
+    res.counts.b2cl = (J.b2cl || []).reduce((a, x) => a + x.inv.length, 0);
+    res.counts.b2cs = (J.b2cs || []).length;
+    res.counts.cdnr = (J.cdnr || []).reduce((a, x) => a + x.nt.length, 0);
+    res.counts.cdnur = (J.cdnur || []).length;
+    res.counts.hsnB2B = ((J.hsn || {}).hsn_b2b || []).length; res.counts.hsnB2C = ((J.hsn || {}).hsn_b2c || []).length;
+    const tot = { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 };
+    const addT = (d, sg) => { tot.taxable += sg * (d.txval || 0); tot.igst += sg * (d.iamt || 0); tot.cgst += sg * (d.camt || 0); tot.sgst += sg * (d.samt || 0); tot.cess += sg * (d.csamt || 0); };
+    (J.b2b || []).forEach(c => c.inv.forEach(i => i.itms.forEach(t => addT(t.itm_det, 1))));
+    (J.b2cl || []).forEach(c => c.inv.forEach(i => i.itms.forEach(t => addT(t.itm_det, 1))));
+    (J.b2cs || []).forEach(x => addT(x, 1));
+    (J.cdnr || []).forEach(c => c.nt.forEach(n => n.itms.forEach(t => addT(t.itm_det, n.ntty === 'C' ? -1 : 1))));
+    (J.cdnur || []).forEach(n => n.itms.forEach(t => addT(t.itm_det, n.ntty === 'C' ? -1 : 1)));
+    Object.keys(tot).forEach(k => { res.totals[k] = r2(tot[k]); });
+    return res;
+  }
+
   function downloadJson(obj, fileName) {
     const blob = new Blob([JSON.stringify(obj)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -463,6 +654,6 @@
   global.VTGst = {
     STATES, UQC, VALID_RATES, stateName, posLabel, uqcCode, uqcLabel, ddmmyyyy, ddMonyyyy, fpOf, gstinOk, taxSplit, r2,
     validate, buildGstr1, gstr1Workbook, buildGstr3b, gstr3bWorkbook, netPayable,
-    parse2bJson, parse2bWorkbook, reconcile, downloadJson
+    parse2bJson, parse2bWorkbook, reconcile, downloadJson, isReadyWorkbook, parseReadyWorkbook, mergeReadyReport
   };
 })(typeof window !== 'undefined' ? window : globalThis);
