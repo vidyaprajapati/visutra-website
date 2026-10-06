@@ -159,18 +159,21 @@
     const pending = Object.values(snap.data().pending || {}).map(p => ({
       ...p, key: p.key || p.sellerHash, packKey: p.packKey || p.packHash   // older queue entries
     }));
-    const stickerLabels = new Set();
+    const stickersBySize = {};   // label size → shipment labels (each label's own platform)
     for(const it of pending){
       const r = opts.buyerMapping
         ? await buyerProductOnce(uid, it, opts.buyerMapping, 'queue')
         : await sellerProductOnce(uid, it, product, 'queue');
       if(r === 'deducted'){ out.labels++; out.units += it.qty; } else out.already++;
-      if(pkg && pkg.packagingSizeId && await packingOnce(uid, it, pkg.packagingSizeId, sizeName('buyerPackagingSizes', pkg.packagingSizeId), `Catch-up — ${it.marketplace} ${it.sku}`)) out.packing++;
-      if(pkg && pkg.labelSizeId && !it.labelDone) stickerLabels.add(it.packKey || it.key);
+      const ip = pkgForPlatform(pkg, it.marketplace);   // sizes for THIS label's platform
+      if(ip && ip.packagingSizeId && await packingOnce(uid, it, ip.packagingSizeId, sizeName('buyerPackagingSizes', ip.packagingSizeId), `Catch-up — ${it.marketplace} ${it.sku}`)) out.packing++;
+      if(ip && ip.labelSizeId && !it.labelDone) (stickersBySize[ip.labelSizeId] = stickersBySize[ip.labelSizeId] || new Set()).add(it.packKey || it.key);
     }
-    if(stickerLabels.size){
-      await adjustSize(uid, 'buyerLabelSizes', pkg.labelSizeId, -stickerLabels.size, { sizeName: sizeName('buyerLabelSizes', pkg.labelSizeId), type: 'catch-up', note: `${product.name} — labels printed while unmapped` });
-      out.stickers = stickerLabels.size;
+    out.stickers = 0;
+    for(const sizeId of Object.keys(stickersBySize)){
+      const n = stickersBySize[sizeId].size;
+      await adjustSize(uid, 'buyerLabelSizes', sizeId, -n, { sizeName: sizeName('buyerLabelSizes', sizeId), type: 'catch-up', note: `${product.name} — labels printed while unmapped` });
+      out.stickers += n;
     }
     await ref.delete();
     return out;
@@ -507,5 +510,19 @@
       <td>${badge(r.status)}</td></tr>`).join('');
   }
 
-  global.VLS = { reconAggregator, reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce };
+  /* Packing / label size can differ per platform (e.g. Meesho = small bag +
+     3×5 label, Flipkart = 10×12 bag + 4×6 label). The packaging record keeps
+     a default (packagingSizeId / labelSizeId) plus byPlatform.{MEESHO|…}
+     overrides; this returns the sizes to use for one marketplace. */
+  function pkgForPlatform(pkg, marketplace){
+    if(!pkg) return null;
+    const o = (pkg.byPlatform && marketplace && pkg.byPlatform[String(marketplace).toUpperCase()]) || {};
+    return Object.assign({}, pkg, {
+      packagingSizeId: o.packagingSizeId !== undefined && o.packagingSizeId !== null ? o.packagingSizeId : pkg.packagingSizeId,
+      labelSizeId: o.labelSizeId !== undefined && o.labelSizeId !== null ? o.labelSizeId : pkg.labelSizeId,
+      fromPlatform: { packaging: o.packagingSizeId != null, label: o.labelSizeId != null }
+    });
+  }
+
+  global.VLS = { pkgForPlatform, reconAggregator, reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce };
 })(window);
