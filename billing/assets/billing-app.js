@@ -2669,7 +2669,7 @@ async function saveAndGenerate(sendEmail){
           unit: li.unit || 'PCS', hsn: li.hsn || '', qty: li.qty, rate: li.rate || 0, gstRate: li.gstRate || 0,
           taxable: li.taxable || 0, gstAmt: fix2((li.taxable||0) * (li.gstRate||0) / 100), total: fix2((li.taxable||0) * (1 + (li.gstRate||0)/100))
         })),
-        invoiceId: ref.id, invoiceNo,
+        invoiceId: ref.id, invoiceNo, invoiceDate: dateVal,   // bill date → buyer's purchase, stock & GST
         invoiceSummary: { subtotal: totals.subtotal, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, grandTotal: totals.grand },
         buyerBusiness: { businessName: customer.name, gstin: customer.gstin, address: customer.address, state: customer.state, stateCode: customer.stateCode, email: customer.email },
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
