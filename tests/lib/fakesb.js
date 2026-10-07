@@ -76,6 +76,11 @@ function makeClient(getIdentity, stats) {
       if (name === 'vt_commit') { sql = 'select public.vt_commit($1::jsonb, $2::jsonb) as r'; params = [JSON.stringify(args.ops), JSON.stringify(args.pre || [])]; }
       else if (name === 'vt_get_public') { sql = 'select public.vt_get_public($1) as r'; params = [args.p_path]; }
       else if (name === 'vt_export_mine') { sql = 'select coalesce(json_agg(d), \'[]\') as r from public.vt_export_mine() d'; params = []; }
+      else if (/^[a-z_][a-z0-9_]*$/.test(name)) {   // any other database function, like Supabase's /rpc/<name>
+        const keys = Object.keys(args || {});
+        sql = `select public.${name}(${keys.map((k, i) => `${k} => $${i + 1}`).join(', ')}) as r`;
+        params = keys.map(k => (args[k] !== null && typeof args[k] === 'object') ? JSON.stringify(args[k]) : args[k]);
+      }
       else return Promise.resolve({ data: null, error: { message: 'unknown rpc ' + name } });
       return asUser(getIdentity(), c => c.query(sql, params)).then(r => ({ data: r.rows[0].r, error: null }), e => ({ data: null, error: { message: e.message } }));
     },
