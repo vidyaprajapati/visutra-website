@@ -484,7 +484,7 @@
     const sheet = name => {
       const sn = wb.SheetNames.find(n => n.toLowerCase().trim() === name);
       if (!sn) return [];
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '' });
+      const rows = XLSX.utils.sheet_to_json(fixSheetRange(XLSX, wb.Sheets[sn]), { header: 1, defval: '' });
       const hi = rows.findIndex((r, i) => i >= 2 && r.filter(c => String(c).trim()).length >= 3 && /[a-z]/i.test(String(r[0] || r[1])) && !/^summary/i.test(String(r[0])) && !/^no\. of/i.test(String(r[0] || r[1])));
       return hi < 0 ? [] : rows.slice(hi + 1).filter(r => r.some(c => String(c).trim() !== ''));
     };
@@ -514,19 +514,93 @@
     return r;
   }
 
-  // Add one or more parsed Amazon reports to a buildGstr1() result (in place).
+  /* ======================= Flipkart "Report for GSTR-1 and GSTR-8" =======================
+     Sheets named by GSTR-1 section: 5B (B2CL) · 7(A)(2) (intra-state B2C,
+     net of returns) · 7(B)(2) (inter-state B2C per state, ISO codes like
+     IN-KA) · 13 (invoice series) · 12 (HSN) · GSTR-8 section 3 (Flipkart's
+     GSTIN + net value, i.e. Table 14) · 10A/10B (amendments). Parsed into the
+     same shape as the Amazon report so mergeReadyReport() handles both. */
+  const ISO_TO_GST = { JK:'01', HP:'02', PB:'03', CH:'04', UT:'05', UK:'05', HR:'06', DL:'07', RJ:'08', UP:'09', BR:'10', SK:'11', AR:'12', NL:'13',
+    MN:'14', MZ:'15', TR:'16', ML:'17', AS:'18', WB:'19', JH:'20', OR:'21', OD:'21', CT:'22', CG:'22', MP:'23', GJ:'24', DN:'26', DD:'26', DH:'26',
+    MH:'27', KA:'29', GA:'30', LD:'31', KL:'32', TN:'33', PY:'34', AN:'35', TS:'36', TG:'36', AP:'37', LA:'38' };
+  function stateCodeOf(code, name) {
+    const iso = String(code || '').toUpperCase().replace(/^IN-/, '').trim();
+    if (ISO_TO_GST[iso]) return ISO_TO_GST[iso];
+    if (/^\d{1,2}$/.test(iso)) return iso.padStart(2, '0');
+    const n = String(name || '').toLowerCase().replace(/[^a-z]/g, '');
+    const hit = Object.keys(STATES).find(k => STATES[k].toLowerCase().replace(/[^a-z]/g, '') === n
+      || (n === 'odisha' && k === '21') || (n === 'telangana' && k === '36') || (n === 'andhrapradesh' && k === '37'));
+    return hit || '';
+  }
+  /* Some marketplace files declare a wrong sheet size (Flipkart's say "A1:N1"
+     even with data below), and SheetJS only reads the declared range —
+     re-measure each sheet from the cells actually present. */
+  function fixSheetRange(XLSX, ws) {
+    if (!ws) return ws;
+    let maxR = 0, maxC = 0, any = false;
+    Object.keys(ws).forEach(k => {
+      if (k[0] === '!') return;
+      const a = XLSX.utils.decode_cell(k);
+      if (a.r > maxR) maxR = a.r; if (a.c > maxC) maxC = a.c; any = true;
+    });
+    if (any) ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } });
+    return ws;
+  }
+  function isFlipkartGstWorkbook(wb) {
+    const names = wb.SheetNames.map(n => n.toLowerCase());
+    return names.some(n => n.startsWith('section 7(b)(2)')) && names.some(n => n.startsWith('section 12'));
+  }
+  function parseFlipkartGstWorkbook(XLSX, wb, fileName) {
+    const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(/[₹,\s]/g, '')); return isFinite(n) ? n : 0; };
+    const rowsOf = prefix => {
+      const sn = wb.SheetNames.find(n => n.toLowerCase().startsWith(prefix));
+      if (!sn) return [];
+      return XLSX.utils.sheet_to_json(fixSheetRange(XLSX, wb.Sheets[sn]), { header: 1, defval: '' }).slice(1).filter(r => r.some(c => String(c).trim() !== ''));
+    };
+    const dateOf = v => {
+      if (typeof v === 'number') return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 10);
+      const s = String(v || '').trim(); let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return m[0];
+      m = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/); return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : s;
+    };
+    const gstr8 = rowsOf('section 3 in gstr-8');
+    const etin = gstr8.length ? String(gstr8[0][2] || '').trim().toUpperCase() : '';
+    const gstin = String((gstr8[0] || rowsOf('section 12')[0] || rowsOf('section 7(b)(2)')[0] || [''])[0] || '').trim().toUpperCase();
+    const r = { source: 'Flipkart', fileName: fileName || '', gstin, period: '', b2b: [], cdnr: [], cdnur: [], b2cl: [], b2cs: [], hsn: [], docs: [], amendments: 0 };
+    // 5B — B2C Large (inter-state, per invoice)
+    rowsOf('section 5b').forEach(c => r.b2cl.push({ inum: String(c[2]).trim(), idt: dateOf(c[3]), val: num(c[4]), pos: stateCodeOf('', c[1]), rt: num(c[5]), txval: num(c[6]), cess: num(c[9]), etin, tax: { iamt: r2(num(c[7])), camt: 0, samt: 0 } }));
+    // 7(A)(2) — intra-state B2C (aggregate taxable is already net of returns); pos = own state
+    rowsOf('section 7(a)(2)').forEach(c => r.b2cs.push({ typ: 'E', pos: String(gstin).slice(0, 2), rt: r2(num(c[4]) + num(c[6])), txval: r2(num(c[3])), cess: num(c[9]), etin, intra: true, tax: { iamt: 0, camt: r2(num(c[5])), samt: r2(num(c[7])) } }));
+    // 7(B)(2) — inter-state B2C per delivered state
+    rowsOf('section 7(b)(2)').forEach(c => r.b2cs.push({ typ: 'E', pos: stateCodeOf(c[9], c[8]), stateName: String(c[8] || ''), rt: num(c[4]), txval: r2(num(c[3])), cess: num(c[7]), etin, tax: { iamt: r2(num(c[5])), camt: 0, samt: 0 } }));
+    // 12 — HSN (rate isn't given: worked out from tax ÷ taxable, snapped to a GST rate)
+    rowsOf('section 12').forEach(c => {
+      const txval = num(c[4]), tax = num(c[5]) + num(c[6]) + num(c[7]);
+      const raw = txval ? tax / txval * 100 : 0;
+      const rt = VALID_RATES.reduce((a, b) => Math.abs(b - raw) < Math.abs(a - raw) ? b : a, 0);
+      r.hsn.push({ hsn: String(c[1]).trim(), desc: '', uqc: 'NOS', qty: num(c[2]), rt, rawRate: raw, val: num(c[3]), txval, iamt: num(c[5]), camt: num(c[6]), samt: num(c[7]), cess: num(c[8]) });
+    });
+    // 13 — documents issued
+    rowsOf('section 13').forEach(c => { if (String(c[1]).trim()) r.docs.push({ from: String(c[1]).trim(), to: String(c[2]).trim(), totnum: num(c[3]), cancel: num(c[4]), net_issue: num(c[5]) }); });
+    r.amendments = rowsOf('section 10a').length + rowsOf('section 10b').length;
+    r.gstr8 = gstr8.length ? { etin, net: num(gstr8[0][5]) } : null;
+    return r;
+  }
+
+  // Add one or more parsed Amazon / Flipkart reports to a buildGstr1() result (in place).
   function mergeReadyReport(res, readyList, opts) {
     const J = res.json, R = res.rows, seller = String(opts.stateCode || '').padStart(2, '0');
     const iss = res.issues, warn = (m, ref) => iss.push({ level: 'warn', msg: m, ref: ref || '' });
     const itm = (rt, txval, cess, inter) => { const t = taxSplit(txval, rt, inter); return { num: itemNum(rt), itm_det: Object.assign({ txval: r2(txval), rt }, inter ? { iamt: t.iamt } : { camt: t.camt, samt: t.samt }, { csamt: r2(cess) }) }; };
     const eco = {};
-    const addEco = (etin, txval, rt, inter, cess, sign) => {
+    const addEco = (etin, txval, rt, inter, cess, sign, given) => {
       if (!etin) return;
-      const t = taxSplit(txval, rt, inter); const e = eco[etin] = eco[etin] || { etin, suppval: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 };
+      const t = given || taxSplit(txval, rt, inter); const e = eco[etin] = eco[etin] || { etin, suppval: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 };
       e.suppval += sign * txval; e.igst += sign * t.iamt; e.cgst += sign * t.camt; e.sgst += sign * t.samt; e.cess += sign * cess;
     };
     readyList.forEach(rd => {
-      if (opts.gstin && rd.gstin && rd.gstin !== String(opts.gstin).toUpperCase()) warn(`Amazon report "${rd.fileName}" is for GSTIN ${rd.gstin}, not ${opts.gstin}.`);
+      const src = rd.source || 'Amazon';
+      if (opts.gstin && rd.gstin && rd.gstin !== String(opts.gstin).toUpperCase()) warn(`${src} report "${rd.fileName}" is for GSTIN ${rd.gstin}, not ${opts.gstin}.`);
+      rd.b2cs.filter(x => !x.pos).forEach(x => iss.push({ level: 'error', msg: `${src}: state "${x.stateName || '?'}" could not be matched to a GST state code.`, ref: rd.fileName }));
       // B2B — group rate lines into invoices
       const b2b = {};
       rd.b2b.forEach(x => {
@@ -548,20 +622,21 @@
         J.b2cl = J.b2cl || []; let p = J.b2cl.find(e => e.pos === x.pos); if (!p) J.b2cl.push(p = { pos: x.pos, inv: [] });
         let inv = p.inv.find(i => i.inum === x.inum);
         if (!inv) p.inv.push(inv = Object.assign({ inum: x.inum.slice(0, 16), idt: ddmmyyyy(x.idt), val: r2(x.val), itms: [] }, x.etin ? { etin: x.etin } : {}));
-        inv.itms.push({ num: itemNum(x.rt), itm_det: { txval: r2(x.txval), rt: x.rt, iamt: taxSplit(x.txval, x.rt, true).iamt, csamt: r2(x.cess) } });
+        inv.itms.push({ num: itemNum(x.rt), itm_det: { txval: r2(x.txval), rt: x.rt, iamt: x.tax ? x.tax.iamt : taxSplit(x.txval, x.rt, true).iamt, csamt: r2(x.cess) } });
         R.b2cl.push([x.inum, ddMonyyyy(x.idt), r2(x.val), posLabel(x.pos), '', x.rt, r2(x.txval), r2(x.cess), x.etin || '']);
-        addEco(x.etin, x.txval, x.rt, true, x.cess, 1);
+        addEco(x.etin, x.txval, x.rt, true, x.cess, 1, x.tax);
       });
       // B2CS — already summed and net of credit notes; merge with other sources
       rd.b2cs.forEach(x => {
-        const inter = x.pos !== seller, t = taxSplit(x.txval, x.rt, inter);
+        if (!x.pos || r2(x.txval) === 0) return;   // fully returned / unmatched — nothing to report
+        const inter = x.pos !== seller, t = x.tax || taxSplit(x.txval, x.rt, inter);   // the report's own tax amounts when given
         J.b2cs = J.b2cs || [];
         let e = J.b2cs.find(z => z.pos === x.pos && z.rt === x.rt && (z.etin || '') === (x.etin || '') && z.sply_ty === (inter ? 'INTER' : 'INTRA'));
         if (!e) J.b2cs.push(e = Object.assign({ sply_ty: inter ? 'INTER' : 'INTRA', pos: x.pos, typ: x.etin ? 'E' : 'OE' }, x.etin ? { etin: x.etin } : {}, { txval: 0, rt: x.rt }, inter ? { iamt: 0 } : { camt: 0, samt: 0 }, { csamt: 0 }));
         e.txval = r2(e.txval + x.txval); e.csamt = r2(e.csamt + x.cess);
         if (inter) e.iamt = r2(e.iamt + t.iamt); else { e.camt = r2(e.camt + t.camt); e.samt = r2(e.samt + t.samt); }
         R.b2cs.push([x.etin ? 'E' : 'OE', posLabel(x.pos), '', x.rt, r2(x.txval), r2(x.cess), x.etin || '']);
-        addEco(x.etin, x.txval, x.rt, inter, x.cess, 1);
+        addEco(x.etin, x.txval, x.rt, inter, x.cess, 1, x.tax);
       });
       // CDNR (registered buyers) and CDNUR (B2CL) credit / debit notes
       rd.cdnr.forEach(x => {
@@ -606,13 +681,28 @@
             iamt: h.iamt - (b2bPart ? b2bPart.iamt : 0), camt: h.camt - (b2bPart ? b2bPart.camt : 0), samt: h.samt - (b2bPart ? b2bPart.samt : 0), csamt: h.cess - (b2bPart ? b2bPart.csamt : 0) };
           if (r2(rest.txval) !== 0 || r2(rest.qty) !== 0) addHsn('hsn_b2c', rest);
         });
-        if (b && b.txval > 0) warn(`Amazon's HSN summary isn't split B2B/B2C — the B2B invoices' net value (₹${r2(b.txval)}) was put under HSN ${main.hsn} (B2B) and the rest under B2C. Check this matches your products.`);
+        if (b && b.txval > 0) warn(`${src}'s HSN summary isn't split B2B/B2C — the B2B invoices' net value (₹${r2(b.txval)}) was put under HSN ${main.hsn} (B2B) and the rest under B2C. Check this matches your products.`);
       });
       if ([...rd.b2b, ...rd.b2cs, ...rd.hsn].length && [...rd.b2b, ...rd.b2cs, ...rd.hsn].every(x => !x.rt)) {
-        warn(`Every line in Amazon's report is at 0% GST. HSN ${rd.hsn.map(h => h.hsn).join(', ')} is normally taxable (e.g. 63049291 = 5%). Confirm the tax code on your Amazon listings with your CA before filing — the file is built exactly as Amazon reports it.`);
+        warn(`Every line in ${src}'s report is at 0% GST. HSN ${rd.hsn.map(h => h.hsn).join(', ')} is normally taxable (e.g. 63049291 = 5%). Confirm the tax code on your Amazon listings with your CA before filing — the file is built exactly as Amazon reports it.`);
       }
-      warn(`Amazon's report has no "Documents issued" (Table 13) data — add your Amazon invoice and credit-note number ranges on the portal (Amazon Seller Central → Reports → Tax Document Library / MTR).`);
-      if (opts.period && rd.period && opts.period !== rd.period) warn(`Amazon report "${rd.fileName}" is for the period ending ${rd.period}, but you chose ${opts.period}.`);
+      if (rd.docs && rd.docs.length) {            // Table 13 straight from the report (Flipkart)
+        J.doc_issue = J.doc_issue || { doc_det: [] };
+        let d1 = J.doc_issue.doc_det.find(d => d.doc_num === 1);
+        if (!d1) J.doc_issue.doc_det.push(d1 = { doc_num: 1, docs: [] });
+        rd.docs.forEach(d => { d1.docs.push({ num: d1.docs.length + 1, from: d.from.slice(0, 16), to: d.to.slice(0, 16), totnum: d.totnum, cancel: d.cancel, net_issue: d.net_issue }); R.docs.push(['Invoices for outward supply', d.from, d.to, d.totnum, d.cancel]); });
+        res.counts.docs = d1.docs.length;
+      } else {
+        warn(`${src}'s report has no "Documents issued" (Table 13) data — add your ${src} invoice and credit-note number ranges on the portal${src === 'Amazon' ? ' (Amazon Seller Central → Reports → Tax Document Library / MTR)' : ''}.`);
+      }
+      (rd.hsn || []).filter(h => h.rawRate != null && Math.abs(h.rawRate - h.rt) > 0.2).forEach(h => warn(`${src} HSN ${h.hsn}: tax works out to ${r2(h.rawRate)}%, reported as ${h.rt}% — check if it mixes several GST rates.`));
+      if (rd.amendments) warn(`${src}'s report has ${rd.amendments} amendment line(s) for earlier periods (Section 10A/10B) — enter them on the portal under B2CS amendments; they are not in this file.`);
+      if (rd.gstr8) {
+        const via = rd.b2cs.reduce((a, x) => a + x.txval, 0) + rd.b2cl.reduce((a, x) => a + x.txval, 0);
+        if (Math.abs(via - rd.gstr8.net) > 1) warn(`${src}: sales in the B2C sheets (₹${r2(via)}) don't match ${src}'s GSTR-8 net value (₹${r2(rd.gstr8.net)}) — check the report.`);
+      }
+      if (!rd.period && rd.source === 'Flipkart') warn(`${src}'s report doesn't say which month it covers — make sure the Return period you chose (${opts.period || 'not set'}) is the month you downloaded it for.`);
+      if (opts.period && rd.period && opts.period !== rd.period) warn(`${src} report "${rd.fileName}" is for the period ending ${rd.period}, but you chose ${opts.period}.`);
     });
     // Table 14 — supplies through Amazon (net of credit notes)
     const ecoArr = Object.values(eco).filter(e => r2(e.suppval));
@@ -654,6 +744,7 @@
   global.VTGst = {
     STATES, UQC, VALID_RATES, stateName, posLabel, uqcCode, uqcLabel, ddmmyyyy, ddMonyyyy, fpOf, gstinOk, taxSplit, r2,
     validate, buildGstr1, gstr1Workbook, buildGstr3b, gstr3bWorkbook, netPayable,
-    parse2bJson, parse2bWorkbook, reconcile, downloadJson, isReadyWorkbook, parseReadyWorkbook, mergeReadyReport
+    parse2bJson, parse2bWorkbook, reconcile, downloadJson, isReadyWorkbook, parseReadyWorkbook, mergeReadyReport,
+    isFlipkartGstWorkbook, parseFlipkartGstWorkbook, stateCodeOf
   };
 })(typeof window !== 'undefined' ? window : globalThis);
