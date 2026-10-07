@@ -278,7 +278,7 @@ async function acceptOrder(orderId){
         });
       }
       tx.update(orderRef, {
-        status: 'ACCEPTED', invoiceId: invoiceRef.id, invoiceNo,
+        status: 'ACCEPTED', invoiceId: invoiceRef.id, invoiceNo, invoiceDate: invoiceData.date,   // bill date → buyer's purchase, stock & GST
         items: acceptedItems,
         invoiceSummary: { subtotal, cgst, sgst, igst, grandTotal },
         acceptedAt: firebase.firestore.FieldValue.serverTimestamp(),
