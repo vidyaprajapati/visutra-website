@@ -22,8 +22,8 @@ const opts = { prompt: () => 'wrong rate', before: w => { w.prompt = () => 'wron
 test('Invoice deletion needs the buyer\'s approval, then goes on BOTH sides (linked customer and order invoices)', async () => {
   await world();
   await seed(SA + '/invoices/i1', { createdAt: { __ts: '2026-09-02T10:00:00.000Z' }, invoiceNo: 'VT/001', date: '2026-09-02', customerId: 'c1', customer: { name: 'Shop' }, grandTotal: 630, items: [{ productId: 'p1', name: 'WM Cover', qty: 2 }] });
-  // (saving i1 for the linked customer created the buyer's purchase automatically: stock 5 → 7)
-  assert.equal((await read(SB + '/buyerSkuMappings/bm1')).stock, 7);
+  // the buyer's purchase for i1 (created when they confirmed the seller's order)
+  await seed(SB + '/buyerPurchases/bp1', { sellerInvoiceId: 'i1', invoiceId: 'i1', date: '2026-09-02', items: [{ name: 'WM Cover', qty: 2, linkedSkuMappingId: 'bm1' }] });
   await seed(SA + '/invoices/i2', { createdAt: { __ts: '2026-09-03T10:00:00.000Z' }, invoiceNo: 'VT/002', date: '2026-09-03', sourceOrderId: 'o1', customer: { name: 'Shop' }, grandTotal: 945, items: [{ productId: 'p1', name: 'WM Cover', qty: 3 }] });
   await seed('marketplaceOrders/o1', { buyerUid: B.uid, sellerUid: A.uid, status: 'ACCEPTED', buyerPurchaseId: 'bp2', orderNumber: 'ORD-1' });
   await seed(SB + '/buyerPurchases/bp2', { date: '2026-09-03', items: [{ name: 'WM Cover', qty: 3, linkedSkuMappingId: 'bm1' }] });
@@ -43,7 +43,7 @@ test('Invoice deletion needs the buyer\'s approval, then goes on BOTH sides (lin
   assert.equal((await read(SA + '/invoices/i1')).deleted, true); assert.equal((await read(SA + '/invoices/i2')).deleted, true);
   assert.equal((await read(SA + '/products/p1')).stock, 13, 'seller stock back: 8 + 2 + 3');
   assert.equal((await list(SB + '/buyerPurchases/')).length, 0, 'both purchases gone');
-  assert.equal((await read(SB + '/buyerSkuMappings/bm1')).stock, 2, 'buyer stock back: 7 − 2 (invoice) − 3 (order)');
+  assert.equal((await read(SB + '/buyerSkuMappings/bm1')).stock, 0, 'buyer stock back: 5 − 2 (invoice) − 3 (order)');
   assert.ok((await list('invoiceDeleteRequests/')).every(r => r.data.status === 'COMPLETED'));
 });
 
@@ -51,8 +51,7 @@ test('Rejected or GST-filed: nothing is deleted anywhere', async () => {
   await world();
   await seed(SA + '/invoices/i1', { invoiceNo: 'VT/001', customerId: 'c1', items: [{ productId: 'p1', qty: 2 }] });
   await seed(SA + '/invoices/i3', { invoiceNo: 'VT/003', customerId: 'c1', items: [{ productId: 'p1', qty: 1 }] });
-  // the purchase created automatically for i3 is filed on the buyer's side
-  await pool.query("update docs set data = data || '{\"gstFiled\": true}' where data->>'invoiceId' = 'i3'");
+  await seed(SB + '/buyerPurchases/bp3', { sellerInvoiceId: 'i3', invoiceId: 'i3', gstFiled: true, gstFiledPeriod: '2026-08', items: [{ qty: 1, linkedSkuMappingId: 'bm1' }] });
   await seed('invoiceDeleteRequests/r1', { sellerUid: A.uid, buyerUid: B.uid, invoiceId: 'i1', status: 'PENDING' });
   await seed('invoiceDeleteRequests/r3', { sellerUid: A.uid, buyerUid: B.uid, invoiceId: 'i3', status: 'PENDING' });
   const asB = makeClient(() => B);

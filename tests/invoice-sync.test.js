@@ -2,49 +2,73 @@ const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs'), path = require('path');
 const { seed, read, list, reset, pool, makeClient } = require('./lib/fakesb');
-const { loadPage, sleep, closeAll, A, B } = require('./lib/sbload');
+const { loadPage, sleep, closeAll, A, B, read: readSrc } = require('./lib/sbload');
+// user-menu.js (skipped by the page loader) holds the shared invoice-date helper — load it like the real pages do
+const withMenu = pg => { pg.w.eval(readSrc('billing/assets/user-menu.js')); return pg; };
 const { validate } = require('./lib/gstr1-schema');
 after(async () => { closeAll(); await pool.end(); });
 const SA = 'users/' + A.uid, SB = 'users/' + B.uid;
 const commit = (who, ops) => makeClient(() => who).rpc('vt_commit', { ops, pre: [] });
 
-test('Seller tax invoice → linked buyer gets the purchase and stock in the BILL\'S month', async () => {
+test('Seller invoice → buyer confirms → purchase, stock and GST use the INVOICE date (not the confirm date)', async () => {
   await reset();
   await seed(SA, { businessName: 'VISUTRA', gstin: '09BVHPP4321G1ZJ', stateCode: '09', profileComplete: true, roles: { seller: true } });
   await seed(SB, { businessName: 'Shop', profileComplete: true, roles: { buyer: true } });
   await seed(`sellerLinks/${A.uid}_${B.uid}`, { sellerUid: A.uid, buyerUid: B.uid, status: 'ACTIVE' });
-  await seed(SA + '/customers/c1', { name: 'Shop', linkedBuyerUid: B.uid });
-  await seed(SA + '/customers/c2', { name: 'Walk-in' });
+  await seed(SA + '/customers/c1', { name: 'Shop', linkedBuyerUid: B.uid, linkStatus: 'ACTIVE' });
   await seed(SB + '/buyerSkuMappings/bm1', { status: 'ACTIVE', productName: 'My WM Cover', stock: 5, linkType: 'SELLER', sellerId: A.uid, productId: 'p1' });
-  const inv = (id, extra) => commit(A, [{ op: 'set', path: SA + '/invoices/' + id, data: Object.assign({ invoiceNo: 'VT/0' + id, date: '2026-08-20', customerId: 'c1',
-    business: { businessName: 'VISUTRA', gstin: '09BVHPP4321G1ZJ' }, grandTotal: 1575,
-    items: [{ productId: 'p1', name: 'WM Cover', qty: 4, rate: 300, gstRate: 5, taxable: 1200, unit: 'PCS', hsn: '63079090' },
-            { productId: 'p2', name: 'TV Cover', qty: 1, rate: 300, gstRate: 5, taxable: 300 }] }, extra || {}) }]);
-  assert.ok(!(await inv('1')).error);
-  const pur = await read(SB + '/buyerPurchases/inv-aaaaaaaa-1');
-  assert.ok(pur, 'purchase created in the buyer account');
-  assert.deepEqual([pur.date, pur.invoiceNo, pur.invoiceId, pur.sellerUid, pur.supplierName, pur.subtotal, pur.gstTotal], ['2026-08-20', 'VT/01', '1', A.uid, 'VISUTRA', 1500, 75]);
-  assert.equal(pur.items[0].linkedSkuMappingId, 'bm1'); assert.equal(pur.items[1].linkedSkuMappingId, null);
-  assert.equal((await read(SB + '/buyerSkuMappings/bm1')).stock, 9, '5 + 4');
-  const mv = (await list(SB + '/buyerStockMovements/')).map(r => r.data);
-  assert.deepEqual(mv.map(m => [m.type, m.qty, m.date, m.mappingId]), [['purchase-in', 4, '2026-08-20', 'bm1']], 'movement dated the bill date (August)');
-  const sup = (await list(SB + '/buyerSuppliers/')).map(r => r.data);
-  assert.equal(sup[0].sellerUid, A.uid, 'supplier record created for the seller');
-  const note = (await list(SB + '/notifications/'))[0].data.text;
-  assert.match(note, /VISUTRA issued invoice VT\/01/); assert.match(note, /stock added for 1 product\(s\) in August 2026/); assert.match(note, /1 product\(s\) aren't linked/);
-  // the buyer's monthly stock report counts it in August
-  const page = loadPage('billing/buyer/stock.html', B, { hook: 'window.__mf=(id,m)=>{const x=mySkuMappingsCache.find(y=>y.id===id);return ensureAllMovementsLoaded().then(mv=>monthFigures(x,m,mv));};' }); await sleep(1300);
-  const aug = await page.w.__mf('bm1', '2026-08'), sep = await page.w.__mf('bm1', '2026-09');
-  assert.deepEqual([aug.opening, aug.closing], [5, 9], 'August: 5 → 9'); assert.deepEqual([sep.opening, sep.closing], [9, 9]);
-  // not for an unlinked customer, not twice for an order invoice
-  await inv('2', { customerId: 'c2' }); await inv('3', { sourceOrderId: 'o1' });
-  assert.equal(await read(SB + '/buyerPurchases/inv-aaaaaaaa-2'), undefined); assert.equal(await read(SB + '/buyerPurchases/inv-aaaaaaaa-3'), undefined);
+  const items = [{ productId: 'p1', productName: 'WM Cover', qty: 4, rate: 300, gstRate: 5, taxable: 1200, unit: 'PCS' }];
+  // what Billing does when you save an invoice (dated 20 Aug) for a linked buyer: the invoice + a "Recorded by seller" order
+  assert.ok(!(await commit(A, [{ op: 'set', path: SA + '/invoices/i1', data: { invoiceNo: 'VT/01', date: '2026-08-20', customerId: 'c1', grandTotal: 1260, items: [{ productId: 'p1', name: 'WM Cover', qty: 4, gstRate: 5, taxable: 1200 }] } }])).error);
+  assert.equal((await list(SB + '/buyerPurchases/')).length, 0, 'saving the invoice alone adds nothing — the buyer confirms first (no double count)');
+  assert.ok(!(await commit(A, [{ op: 'set', path: 'marketplaceOrders/o1', data: { buyerUid: B.uid, sellerUid: A.uid, sellerName: 'VISUTRA', status: 'PENDING_BUYER_CONFIRMATION', orderType: 'SELLER_RECORDED',
+    orderNumber: 'VT/01', invoiceId: 'i1', invoiceNo: 'VT/01', invoiceDate: '2026-08-20', items, invoiceSummary: { subtotal: 1200, igst: 0, cgst: 30, sgst: 30, grandTotal: 1260 }, createdAt: { __ts: '2026-10-06T10:00:00.000Z' } } }])).error);
+  // the buyer confirms in October
+  const dash = withMenu(loadPage('billing/buyer/dashboard.html', B)); await sleep(1500);
+  await dash.w.eval("respondToOrderConfirm('o1', true)"); await sleep(800);
+  const pur = (await list(SB + '/buyerPurchases/'))[0].data;
+  assert.deepEqual([pur.date, pur.invoiceDate, pur.invoiceNo], ['2026-08-20', '2026-08-20', 'VT/01'], 'purchase dated the bill, not the confirm date');
   assert.equal((await read(SB + '/buyerSkuMappings/bm1')).stock, 9);
-  // deleting the invoice (approved by the buyer) removes the purchase and its stock
-  assert.ok(!(await commit(A, [{ op: 'set', path: 'invoiceDeleteRequests/d1', data: { requestedBy: 'seller', sellerUid: A.uid, buyerUid: B.uid, invoiceId: '1', invoiceNo: 'VT/01', status: 'PENDING' } }])).error);
-  assert.ok(!(await commit(B, [{ op: 'update', path: 'invoiceDeleteRequests/d1', data: { status: 'ACCEPTED' } }])).error);
-  assert.equal(await read(SB + '/buyerPurchases/inv-aaaaaaaa-1'), undefined);
-  assert.equal((await read(SB + '/buyerSkuMappings/bm1')).stock, 5);
+  const mv = (await list(SB + '/buyerStockMovements/')).map(r => r.data);
+  assert.deepEqual(mv.map(m => [m.qty, m.date]), [[4, '2026-08-20']], 'stock movement in August');
+  const page = loadPage('billing/buyer/stock.html', B, { hook: 'window.__mf=(id,m)=>{const x=mySkuMappingsCache.find(y=>y.id===id);return ensureAllMovementsLoaded().then(mv=>monthFigures(x,m,mv));};' }); await sleep(1300);
+  const aug = await page.w.__mf('bm1', '2026-08'), oct = await page.w.__mf('bm1', '2026-10');
+  assert.deepEqual([aug.opening, aug.closing, oct.opening, oct.closing], [5, 9, 9, 9], 'counted in August');
+  // My Orders shows both dates
+  const mo = loadPage('billing/buyer/my-orders.html', B); await sleep(1500);
+  const row = mo.$('order-row-o1').textContent.replace(/\s+/g, ' ');
+  assert.match(row, /2026-08-20\s*counts in Aug 2026/); assert.match(row, /2026-10-06/);
+  assert.match(mo.$('ordersTable').closest('table').querySelector('thead').textContent, /Invoice date.*GST & stock.*Generated on/);
+});
+
+test('Older order without a stored invoice date reads it from the shared invoice', async () => {
+  await reset();
+  await seed(SB, { businessName: 'Shop', profileComplete: true, roles: { buyer: true } });
+  await seed(SB + '/buyerSkuMappings/bm1', { status: 'ACTIVE', productName: 'My WM Cover', stock: 0, linkType: 'SELLER', sellerId: A.uid, productId: 'p1' });
+  await seed('public_invoices/i9', { sellerUid: A.uid, invoiceNo: 'VT/09', date: '2026-07-15' });
+  await seed('marketplaceOrders/o9', { buyerUid: B.uid, sellerUid: A.uid, sellerName: 'VISUTRA', status: 'PENDING_BUYER_CONFIRMATION', orderType: 'SELLER_RECORDED', orderNumber: 'VT/09', invoiceId: 'i9', invoiceNo: 'VT/09',
+    items: [{ productId: 'p1', productName: 'WM Cover', qty: 2, rate: 300, gstRate: 5, taxable: 600 }], invoiceSummary: { subtotal: 600, grandTotal: 630 } });
+  const dash = withMenu(loadPage('billing/buyer/dashboard.html', B)); await sleep(1500);
+  await dash.w.eval("respondToOrderConfirm('o9', true)"); await sleep(800);
+  assert.equal((await list(SB + '/buyerPurchases/'))[0].data.date, '2026-07-15');
+});
+
+test('One-time clean-up: duplicate auto purchases removed (stock reversed); old order purchases moved to the invoice date', async () => {
+  await reset();
+  await seed(SB + '/buyerSkuMappings/bm1', { status: 'ACTIVE', productName: 'My WM Cover', stock: 13 });
+  // a duplicate made by the removed automatic step (the same invoice also has an order)
+  await seed(SB + '/buyerPurchases/inv-dup', { autoCreatedFromInvoice: true, invoiceId: 'i1', invoiceNo: 'VT/01', date: '2026-08-20', items: [{ name: 'WM Cover', qty: 4, linkedSkuMappingId: 'bm1' }] });
+  await seed('marketplaceOrders/o1', { buyerUid: B.uid, sellerUid: A.uid, status: 'ACCEPTED', invoiceId: 'i1', orderNumber: 'VT/01' });
+  // an order purchase dated the acceptance day (Oct) for an invoice dated 20 Sep
+  await seed(SA + '/invoices/i2', { invoiceNo: 'VT/02', date: '2026-09-20' });
+  await seed('marketplaceOrders/o2', { buyerUid: B.uid, sellerUid: A.uid, status: 'ACCEPTED', invoiceId: 'i2', orderNumber: 'VT/02' });
+  await seed(SB + '/buyerPurchases/bp2', { autoCreatedFromOrder: true, orderId: 'o2', invoiceId: 'i2', orderNumber: 'VT/02', date: '2026-10-06', items: [{ qty: 3, linkedSkuMappingId: 'bm1' }] });
+  await seed(SB + '/buyerStockMovements/m2', { type: 'purchase-in', mappingId: 'bm1', qty: 3, date: '2026-10-06', note: 'Purchase from VISUTRA (order VT/02)' });
+  await pool.query(require('fs').readFileSync(require('path').join(__dirname, '..', 'supabase', 'schema.sql'), 'utf8'));
+  assert.equal(await read(SB + '/buyerPurchases/inv-dup'), undefined, 'duplicate removed');
+  assert.equal((await read(SB + '/buyerSkuMappings/bm1')).stock, 9, 'its stock reversed: 13 − 4');
+  assert.equal((await read(SB + '/buyerPurchases/bp2')).date, '2026-09-20', 'moved to the invoice date');
+  assert.equal((await read(SB + '/buyerStockMovements/m2')).date, '2026-09-20', 'its stock movement too');
 });
 
 test('Amazon GST Ready-to-File report (real file) → GSTR-1 JSON through the GST Return Tool page', async () => {
