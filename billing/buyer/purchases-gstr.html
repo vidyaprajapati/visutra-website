@@ -354,7 +354,15 @@ async function loadBuyerGstContext(){
     const d = me.exists ? me.data() : {};
     buyerOwnState = String(d.stateCode || (d.gstin || '').slice(0, 2) || '').padStart(2, '0');
     const sup = await db.collection('users').doc(uid).collection('buyerSuppliers').get();
-    sup.docs.forEach(x => { buyerSupplierGstin[x.id] = (x.data().gstin || '').trim().toUpperCase(); });
+    for(const x of sup.docs){
+      let g = (x.data().gstin || '').trim().toUpperCase();
+      // a VISUTRA seller saved without a GSTIN (older records): fill it in from their profile
+      if(!g && x.data().sellerUid && typeof vtPartyProfile === 'function'){
+        const prof = await vtPartyProfile(x.data().sellerUid);
+        if(prof && prof.gstin){ g = prof.gstin; await db.collection('users').doc(uid).collection('buyerSuppliers').doc(x.id).set({ gstin: prof.gstin, stateCode: prof.stateCode }, { merge: true }); }
+      }
+      buyerSupplierGstin[x.id] = g;
+    }
   }catch(e){ console.warn('GST context:', e); }
 }
 async function renderBuyerItc(periodLabel){
