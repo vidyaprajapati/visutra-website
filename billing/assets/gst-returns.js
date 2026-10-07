@@ -152,7 +152,10 @@
       }
       if (taxedRates.length) {
         const itms = taxedRates.map(rt => {
-          const txval = r2(byRate[rt].txval), t = taxSplit(txval, rt, inter);
+          // the invoice's own tax (exactly as printed) when it has one rate; else per-rate
+          const txval = r2(byRate[rt].txval), t = (d.tax && taxedRates.length === 1)
+            ? { iamt: inter ? r2(d.tax.iamt) : 0, camt: inter ? 0 : r2(d.tax.camt), samt: inter ? 0 : r2(d.tax.samt) }
+            : taxSplit(txval, rt, inter);
           tot.taxable += txval; tot.igst += t.iamt; tot.cgst += t.camt; tot.sgst += t.samt; tot.cess += byRate[rt].cess;
           return { num: itemNum(rt), itm_det: Object.assign({ txval, rt }, inter ? { iamt: t.iamt } : { camt: t.camt, samt: t.samt }, { csamt: r2(byRate[rt].cess) }) };
         });
@@ -582,7 +585,7 @@
     // 13 — documents issued
     rowsOf('section 13').forEach(c => { if (String(c[1]).trim()) r.docs.push({ from: String(c[1]).trim(), to: String(c[2]).trim(), totnum: num(c[3]), cancel: num(c[4]), net_issue: num(c[5]) }); });
     r.amendments = rowsOf('section 10a').length + rowsOf('section 10b').length;
-    r.gstr8 = gstr8.length ? { etin, net: num(gstr8[0][5]) } : null;
+    r.gstr8 = gstr8.length ? { etin, net: num(gstr8[0][5]), tcs: r2(num(gstr8[0][7]) + num(gstr8[0][8]) + num(gstr8[0][9])) } : null;
     return r;
   }
 
@@ -699,6 +702,7 @@
       if (rd.amendments) warn(`${src}'s report has ${rd.amendments} amendment line(s) for earlier periods (Section 10A/10B) — enter them on the portal under B2CS amendments; they are not in this file.`);
       if (rd.gstr8) {
         const via = rd.b2cs.reduce((a, x) => a + x.txval, 0) + rd.b2cl.reduce((a, x) => a + x.txval, 0);
+        if (rd.gstr8.tcs) warn(`${src} collected TCS of ₹${rd.gstr8.tcs} on these sales — accept it on the GST portal (Returns → TCS and TDS credit received) so it reaches your cash ledger and reduces the tax you pay.`);
         if (Math.abs(via - rd.gstr8.net) > 1) warn(`${src}: sales in the B2C sheets (₹${r2(via)}) don't match ${src}'s GSTR-8 net value (₹${r2(rd.gstr8.net)}) — check the report.`);
       }
       if (!rd.period && rd.source === 'Flipkart') warn(`${src}'s report doesn't say which month it covers — make sure the Return period you chose (${opts.period || 'not set'}) is the month you downloaded it for.`);
@@ -733,6 +737,26 @@
     return res;
   }
 
+  /* GSTR-3B Table 3.1(a), 3.1(c) and 3.2 from a finished GSTR-1 JSON — so the
+     marketplace tool's combined data (Amazon + Flipkart + Meesho + Billing)
+     gives the sales side of GSTR-3B too. ITC (Table 4) comes from purchases. */
+  function gstr3bFromGstr1(J) {
+    const o = { txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 }, unreg = {}, add = (d, sg) => { o.txval += sg * (d.txval || 0); o.iamt += sg * (d.iamt || 0); o.camt += sg * (d.camt || 0); o.samt += sg * (d.samt || 0); o.csamt += sg * (d.csamt || 0); };
+    const addUnreg = (pos, d, sg) => { const u = unreg[pos] = unreg[pos] || { pos, txval: 0, iamt: 0 }; u.txval += sg * (d.txval || 0); u.iamt += sg * (d.iamt || 0); };
+    (J.b2b || []).forEach(c => c.inv.forEach(i => i.itms.forEach(t => add(t.itm_det, 1))));
+    (J.b2cl || []).forEach(c => c.inv.forEach(i => i.itms.forEach(t => { add(t.itm_det, 1); addUnreg(c.pos, t.itm_det, 1); })));
+    (J.b2cs || []).forEach(x => { add(x, 1); if (x.sply_ty === 'INTER') addUnreg(x.pos, x, 1); });
+    (J.cdnr || []).forEach(c => c.nt.forEach(n => n.itms.forEach(t => add(t.itm_det, n.ntty === 'C' ? -1 : 1))));
+    (J.cdnur || []).forEach(n => n.itms.forEach(t => { add(t.itm_det, n.ntty === 'C' ? -1 : 1); if (n.pos) addUnreg(n.pos, t.itm_det, n.ntty === 'C' ? -1 : 1); }));
+    const nil = ((J.nil || {}).inv || []).reduce((a, x) => a + (x.nil_amt || 0) + (x.expt_amt || 0), 0);
+    const R = x => { const y = {}; Object.keys(x).forEach(k => { y[k] = typeof x[k] === 'number' ? r2(x[k]) : x[k]; }); return y; };
+    return {
+      gstin: J.gstin, ret_period: J.fp,
+      sup_details: { osup_det: R(o), osup_zero: { txval: 0, iamt: 0, csamt: 0 }, osup_nil_exmp: { txval: r2(nil) }, isup_rev: { txval: 0, iamt: 0, camt: 0, samt: 0, csamt: 0 }, osup_nongst: { txval: 0 } },
+      inter_sup: { unreg_details: Object.values(unreg).filter(u => r2(u.txval) !== 0).map(R), comp_details: [], uin_details: [] }
+    };
+  }
+
   function downloadJson(obj, fileName) {
     const blob = new Blob([JSON.stringify(obj)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -745,6 +769,6 @@
     STATES, UQC, VALID_RATES, stateName, posLabel, uqcCode, uqcLabel, ddmmyyyy, ddMonyyyy, fpOf, gstinOk, taxSplit, r2,
     validate, buildGstr1, gstr1Workbook, buildGstr3b, gstr3bWorkbook, netPayable,
     parse2bJson, parse2bWorkbook, reconcile, downloadJson, isReadyWorkbook, parseReadyWorkbook, mergeReadyReport,
-    isFlipkartGstWorkbook, parseFlipkartGstWorkbook, stateCodeOf
+    isFlipkartGstWorkbook, parseFlipkartGstWorkbook, stateCodeOf, gstr3bFromGstr1
   };
 })(typeof window !== 'undefined' ? window : globalThis);

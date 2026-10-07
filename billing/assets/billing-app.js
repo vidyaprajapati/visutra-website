@@ -1130,6 +1130,11 @@ async function loadCustomers(){
   customersCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
   renderCustomers();
   renderCustomerDropdown();
+  // linked VISUTRA buyers saved without GSTIN / state: fill them in from their profile
+  const missing = customersCache.filter(c => c.linkedBuyerUid && (!c.gstin || !c.stateCode));
+  if(missing.length){
+    Promise.all(missing.map(syncLinkedCustomerGst)).then(() => { renderCustomers(); if(typeof recalcTotals === 'function') recalcTotals(); }).catch(() => {});
+  }
 }
 function renderCustomers(){
   document.getElementById('customersTable').innerHTML = customersCache.map(c => `
@@ -1519,11 +1524,26 @@ async function respondToPaymentDelete(reqId, approve){
   await loadPaymentDeleteRequests();
   await loadReceipts();
 }
+/* GST details of a linked buyer (GSTIN, state, address) — so invoices to a
+   GST-registered buyer go to B2B and reach their GSTR-2B (their ITC). */
+async function partyProfile(uid){
+  try{ const { data } = await firebase.supabase().rpc('vt_party_profile', { p_uid: uid }); return data || null; }catch(e){ return null; }
+}
+async function syncLinkedCustomerGst(customer){
+  if(!customer || !customer.linkedBuyerUid || (customer.gstin && customer.stateCode)) return customer;
+  const prof = await partyProfile(customer.linkedBuyerUid);
+  if(!prof || !prof.gstin) return customer;
+  const upd = { gstin: prof.gstin, stateCode: customer.stateCode || prof.stateCode, state: customer.state || prof.state, address: customer.address || prof.address };
+  await db.collection('users').doc(currentUser.uid).collection('customers').doc(customer.id).set(upd, { merge: true });
+  Object.assign(customer, upd);
+  return customer;
+}
 async function ensureCustomerForBuyer(buyerUid, buyerName, buyerEmail){
   const existing = customersCache.find(c => c.linkedBuyerUid === buyerUid);
   if(existing) return existing.id;
+  const prof = (await partyProfile(buyerUid)) || {};
   const ref = await db.collection('users').doc(currentUser.uid).collection('customers').add({
-    name: buyerName || buyerEmail || 'Buyer', gstin: '', address: '', stateCode: '', state: '',
+    name: buyerName || prof.businessName || buyerEmail || 'Buyer', gstin: prof.gstin || '', address: prof.address || '', stateCode: prof.stateCode || '', state: prof.state || '',
     email: buyerEmail || '', phone: '',
     linkedBuyerUid: buyerUid, linkedBuyerEmail: buyerEmail || '', linkStatus: 'ACTIVE',
     autoCreatedFromPayment: true
@@ -2597,6 +2617,9 @@ async function saveAndGenerate(sendEmail){
   const custId = document.getElementById('invCustomer').value;
   const customer = customersCache.find(c => c.id === custId);
   if(!customer){ showMsg('invoiceMsg', 'Select a customer first.', false); return; }
+  // A linked VISUTRA buyer: make sure their GSTIN + state are on the invoice
+  // (B2B in GSTR-1 → their GSTR-2B → their ITC) and the tax type is right.
+  if(customer.linkedBuyerUid && (!customer.gstin || !customer.stateCode)){ await syncLinkedCustomerGst(customer); recalcTotals(); }
   if(!businessData.businessName || !businessData.gstin){ showMsg('invoiceMsg', 'Complete your Business Profile first.', false); return; }
   if(!lineItems.length || lineItems.every(li => !li.productId)){ showMsg('invoiceMsg', 'Add at least one line item.', false); return; }
   if(sendEmail && !customer.email){ showMsg('invoiceMsg', 'This customer has no email address saved — add one in Customers.', false); return; }
@@ -3375,6 +3398,7 @@ function gstDocsFromInvoices(list){
     name: inv.customer ? (inv.customer.legalName || inv.customer.name || '') : '',
     pos: String((inv.customer && inv.customer.stateCode) || '').padStart(2, '0'),
     inter: !inv.sameState, rchrg: !!inv.reverseCharge, value: inv.grandTotal,
+    tax: { iamt: Number(inv.igst) || 0, camt: Number(inv.cgst) || 0, samt: Number(inv.sgst) || 0 },   // exactly as on the invoice
     items: (inv.items || []).filter(li => li.productId).map(li => ({
       hsn: li.hsn || (productsCache.find(p => p.id === li.productId) || {}).hsn || '',
       desc: li.name, unit: li.unit, qty: Number(li.qty) || 0, rate: Number(li.gstRate) || 0, taxable: Number(li.taxable) || 0
@@ -3393,6 +3417,13 @@ function renderGstFiling(){
   const biz = gstBusiness();
   const docs = gstDocsFromInvoices(gstr1AllPeriodInvoices);
   gstRes1 = VTGst.buildGstr1(docs, { gstin: biz.gstin, stateCode: biz.stateCode, period: gstr1PeriodTag });
+  // invoices to a GST-registered VISUTRA buyer that were issued WITHOUT their GSTIN
+  gstr1AllPeriodInvoices.filter(inv => !inv.deleted && !(inv.customer && inv.customer.gstin)).forEach(inv => {
+    const c = customersCache.find(x => x.id === inv.customerId);
+    if(c && c.linkedBuyerUid && c.gstin){
+      gstRes1.issues.push({ level: 'warn', msg: `Invoice ${inv.invoiceNo} was issued to ${c.name} without their GSTIN (${c.gstin}) — it is reported as B2C, so they can't claim ITC. Issue a credit note and a fresh invoice with their GSTIN.`, ref: 'Invoice ' + inv.invoiceNo });
+    }
+  });
   gstRes3b = VTGst.buildGstr3b(docs, gstPurchases(), { gstin: biz.gstin, period: gstr1PeriodTag });
   document.getElementById('gstFilingPeriod').textContent = gstr1PeriodLabel;
   const errs = gstRes1.issues.filter(i => i.level === 'error'), warns = gstRes1.issues.filter(i => i.level !== 'error');

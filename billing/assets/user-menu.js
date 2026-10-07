@@ -314,12 +314,32 @@ async function vtEnsureBuyerPurchaseForOrder(uid, order, skuMappings) {
   return { unmappedNames };
 }
 
+/* GST details of a linked partner (seller ↔ buyer) — GSTIN, state, address. */
+async function vtPartyProfile(partnerUid) {
+  try {
+    if (!partnerUid || !firebase.supabase) return null;
+    const { data } = await firebase.supabase().rpc('vt_party_profile', { p_uid: partnerUid });
+    return data || null;
+  } catch (e) { return null; }
+}
+/* The buyer's supplier record for a VISUTRA seller — WITH the seller's GSTIN
+   and state, so purchases from them count for ITC and match GSTR-2B. Fills
+   them in on older records that were created without. */
 async function vtEnsureSupplierForSeller(uid, sellerUid, sellerName) {
-  const snap = await db.collection('users').doc(uid).collection('buyerSuppliers')
-    .where('sellerUid', '==', sellerUid).limit(1).get();
-  if (!snap.empty) return snap.docs[0].id;
-  const ref = await db.collection('users').doc(uid).collection('buyerSuppliers').add({
-    name: sellerName, sellerUid, gstin: '', address: '', stateCode: '', state: '', email: '', phone: '',
+  const col = db.collection('users').doc(uid).collection('buyerSuppliers');
+  const snap = await col.where('sellerUid', '==', sellerUid).limit(1).get();
+  if (!snap.empty) {
+    const d = snap.docs[0].data();
+    if (!d.gstin || !d.stateCode) {
+      const prof = await vtPartyProfile(sellerUid);
+      if (prof && prof.gstin) await col.doc(snap.docs[0].id).set({ gstin: prof.gstin, stateCode: prof.stateCode, state: d.state || prof.state, address: d.address || prof.address }, { merge: true });
+    }
+    return snap.docs[0].id;
+  }
+  const prof = (await vtPartyProfile(sellerUid)) || {};
+  const ref = await col.add({
+    name: sellerName || prof.businessName || 'Seller', sellerUid, gstin: prof.gstin || '', address: prof.address || '',
+    stateCode: prof.stateCode || '', state: prof.state || '', email: prof.email || '', phone: '',
     autoCreatedFromOrder: true
   });
   return ref.id;
