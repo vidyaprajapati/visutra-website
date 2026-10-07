@@ -246,6 +246,16 @@ function vtFindSkuMapping(skuMappings, sellerUid, sellerProductId) {
   return skuMappings.find(function (m) { return m.sellerId === sellerUid && m.productId === sellerProductId; }) || null;
 }
 
+/* The seller's INVOICE date for an order — used for the buyer's purchase,
+   stock movement and GST/ITC (not the date it was accepted or confirmed).
+   Older orders don't carry it: it's read from the invoice the seller shared. */
+async function vtInvoiceDateForOrder(order) {
+  if (order.invoiceDate) return String(order.invoiceDate).slice(0, 10);
+  if (order.invoiceId) {
+    try { const s = await db.collection('public_invoices').doc(order.invoiceId).get(); if (s.exists && s.data().date) return String(s.data().date).slice(0, 10); } catch (e) {}
+  }
+  return order.acceptedAt && order.acceptedAt.toDate ? order.acceptedAt.toDate().toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+}
 async function vtEnsureBuyerPurchaseForOrder(uid, order, skuMappings) {
   const supplierId = await vtEnsureSupplierForSeller(uid, order.sellerUid, order.sellerName);
   const items = [];
@@ -266,9 +276,10 @@ async function vtEnsureBuyerPurchaseForOrder(uid, order, skuMappings) {
   }
 
   const summary = order.invoiceSummary || {};
+  const invoiceDate = await vtInvoiceDateForOrder(order);
   const purchaseData = {
     supplierId, supplierName: order.sellerName,
-    date: order.acceptedAt && order.acceptedAt.toDate ? order.acceptedAt.toDate().toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+    date: invoiceDate, invoiceDate,   // the bill's date → stock month + GST/ITC
     items,
     subtotal: summary.subtotal || 0,
     gstTotal: (summary.cgst || 0) + (summary.sgst || 0) + (summary.igst || 0),
