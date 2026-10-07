@@ -956,7 +956,7 @@ function classifySheet(headers) {
 }
 
 var KIND_LABELS = {
-  amazon_b2b: 'Amazon · B2B', amazon_b2c: 'Amazon · B2C', amazon_ready: 'Amazon · GST Ready-to-File report',
+  amazon_b2b: 'Amazon · B2B', amazon_b2c: 'Amazon · B2C', amazon_ready: 'Amazon · GST Ready-to-File report', flipkart_gst: 'Flipkart · GST report (GSTR-1 & GSTR-8)',
   flipkart: 'Flipkart · Sales', meesho_sales: 'Meesho · TCS Sales',
   meesho_return: 'Meesho · TCS Return', meesho_invoice_info: 'Meesho · Invoice Info',
   unknown: 'Not recognised'
@@ -965,6 +965,11 @@ var KIND_LABELS = {
 function processFile(file) {
   return readFileAsWorkbook(file).then(function (wb) {
     // Amazon's new "GST Ready-to-File" report (one Excel per period, no CSVs)
+    // Flipkart's "Report for GSTR-1 and GSTR-8" (sheets named by GSTR-1 section)
+    if (window.VTGst && VTGst.isFlipkartGstWorkbook(wb)) {
+      var fk = VTGst.parseFlipkartGstWorkbook(XLSX, wb, file.name);
+      return { id: 'f' + (fileIdSeq++), name: file.name, kind: 'flipkart_gst', rows: [], ready: fk, count: fk.b2cl.length + fk.b2cs.length + fk.hsn.length + fk.docs.length };
+    }
     if (window.VTGst && VTGst.isReadyWorkbook(wb)) {
       var ready = VTGst.parseReadyWorkbook(XLSX, wb, file.name);
       var n = ready.b2b.length + ready.cdnr.length + ready.cdnur.length + ready.b2cl.length + ready.b2cs.length + ready.hsn.length;
@@ -991,7 +996,8 @@ function processFile(file) {
 function rebuildBuckets() {
   store.amazonB2B = []; store.amazonB2C = []; store.flipkart = [];
   store.meeshoSales = []; store.meeshoReturns = []; store.meeshoInvoiceInfo = [];
-  store.amazonReady = store.files.filter(function (f) { return f.kind === 'amazon_ready'; }).map(function (f) { return f.ready; });
+  // marketplace GST reports already arranged by GSTR-1 section (Amazon Ready-to-File, Flipkart GSTR-1/8)
+  store.amazonReady = store.files.filter(function (f) { return f.kind === 'amazon_ready' || f.kind === 'flipkart_gst'; }).map(function (f) { return f.ready; });
   store.files.forEach(function (f) {
     if (f.kind === 'amazon_b2b') store.amazonB2B = store.amazonB2B.concat(f.rows);
     else if (f.kind === 'amazon_b2c') store.amazonB2C = store.amazonB2C.concat(f.rows);
@@ -1218,9 +1224,9 @@ function toolBuild() {
   var errs = res.issues.filter(function (i) { return i.level === 'error'; }).length;
   var amz = readyList.map(function (rd) {
     var tx = function (a) { return a.reduce(function (s, x) { return s + (x.txval || 0); }, 0); };
-    return '<div style="margin-bottom:8px;padding:8px 10px;background:#FFF7ED;border:1px solid #F2D18B;border-radius:8px"><b>Amazon GST Ready-to-File report</b> — ' + (rd.fileName || '').replace(/</g, '&lt;') +
+    return '<div style="margin-bottom:8px;padding:8px 10px;background:#FFF7ED;border:1px solid #F2D18B;border-radius:8px"><b>' + (rd.source === 'Flipkart' ? 'Flipkart GST report (GSTR-1 &amp; GSTR-8)' : 'Amazon GST Ready-to-File report') + '</b> — ' + (rd.fileName || '').replace(/</g, '&lt;') +
       (rd.period ? ' (period ending ' + rd.period + ')' : '') + '<br>B2B ' + rd.b2b.length + ' line(s) · credit notes ' + (rd.cdnr.length + rd.cdnur.length) +
-      ' · B2C Large ' + rd.b2cl.length + ' · B2C Small ' + rd.b2cs.length + ' state line(s) · HSN ' + rd.hsn.length +
+      ' · B2C Large ' + rd.b2cl.length + ' · B2C Small ' + rd.b2cs.length + ' state line(s) · HSN ' + rd.hsn.length + (rd.docs && rd.docs.length ? ' · invoice series ' + rd.docs.length : '') +
       ' · taxable ₹' + (tx(rd.b2b) + tx(rd.b2cl) + tx(rd.b2cs) - tx(rd.cdnr) - tx(rd.cdnur)).toLocaleString('en-IN') + ' (net of credit notes)</div>';
   }).join('');
   box.innerHTML = amz + (res.issues.length
