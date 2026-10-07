@@ -33,7 +33,7 @@
     <div class="field" style="max-width:240px"><label>Filter</label><select id="fStatus" onchange="renderOrders()">
       <option value="">All</option><option value="PENDING">Pending</option><option value="PENDING_BUYER_CONFIRMATION">Awaiting My Confirmation</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option>
     </select></div>
-    <table><thead><tr><th>Order #</th><th>Seller</th><th>Date</th><th>Items</th><th>Status</th><th></th></tr></thead>
+    <table><thead><tr><th>Order #</th><th>Seller</th><th title="The bill's date — used for your stock month and GST / ITC">Invoice date<br><span style="font-weight:400;text-transform:none">GST &amp; stock</span></th><th title="When the order / invoice was created">Generated on</th><th>Items</th><th>Status</th><th></th></tr></thead>
     <tbody id="ordersTable"></tbody></table>
     <p class="msg" id="pageMsg"></p>
   </div>
@@ -84,6 +84,17 @@ auth.onAuthStateChanged(async user => {
 const deepLinkOrderId = new URLSearchParams(window.location.search).get('id');
 let deepLinkApplied = false;
 
+/* Invoice dates for older orders that don't carry one: read once from the
+   invoice the seller shared, then the table redraws. */
+const invoiceDateCache = {};
+async function fetchInvoiceDate(invoiceId){
+  invoiceDateCache[invoiceId] = '';
+  try{
+    const s = await db.collection('public_invoices').doc(invoiceId).get();
+    invoiceDateCache[invoiceId] = s.exists ? String(s.data().date || '').slice(0, 10) : '';
+  }catch(e){}
+  if(invoiceDateCache[invoiceId]) renderOrders();
+}
 async function handleOrdersSnapshot(snap){
   ordersCache = snap.docs.map(d => ({id: d.id, ...d.data()}));
   ordersCache.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
@@ -117,6 +128,11 @@ function renderOrders(){
       return `${esc(i.productName)} × ${i.qty}${bdText}`;
     }).join('<br>');
     const date = o.createdAt?.toDate ? o.createdAt.toDate().toISOString().slice(0, 10) : '';
+    const invDate = o.invoiceDate || invoiceDateCache[o.invoiceId] || '';
+    if(o.invoiceId && !invDate && !(o.invoiceId in invoiceDateCache)) fetchInvoiceDate(o.invoiceId);
+    const invCell = invDate
+      ? `<b>${esc(invDate)}</b>${invDate !== date && date ? `<div style="font-size:11px;color:var(--muted)">${invDate.slice(0, 7) !== date.slice(0, 7) ? 'counts in ' + new Date(invDate + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : ''}</div>` : ''}`
+      : (o.invoiceId ? '<span style="color:var(--muted)">…</span>' : '<span style="color:var(--muted)">— (no invoice yet)</span>');
     const typeLabel = o.orderType === 'LABEL_AUTO' ? '<span class="badge">Label Auto</span> '
       : o.orderType === 'SELLER_RECORDED' ? '<span class="badge" title="Recorded by the seller from an off-platform sale, not placed through Place Order">Recorded by Seller</span> ' : '';
     let actions = '';
@@ -129,10 +145,10 @@ function renderOrders(){
       actions = `<a class="btn small primary" href="dashboard.html">Confirm on Dashboard</a>`;
     }
     const statusLabel = o.status === 'PENDING_BUYER_CONFIRMATION' ? 'Awaiting your confirmation' : o.status;
-    return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}</td><td>${esc(o.sellerName)}</td><td>${date}</td>
+    return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}</td><td>${esc(o.sellerName)}</td><td>${invCell}</td><td style="color:var(--muted)">${date}</td>
       <td>${itemsSummary}</td><td><span class="badge">${esc(statusLabel)}</span></td>
       <td class="row-actions">${actions}</td></tr>`;
-  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No orders yet — place one from My Sellers.</td></tr>';
+  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No orders yet — place one from My Sellers.</td></tr>';
 }
 
 /* ---------------- Auto Buyer Purchase (Part 53-57 of the spec) ----------------
@@ -170,9 +186,10 @@ async function ensureBuyerPurchaseForOrder(order){
     else unmappedNames.push(item.productName);
   }
   const summary = order.invoiceSummary || {};
+  const invoiceDate = await vtInvoiceDateForOrder(order);   // the bill's date → stock month + GST/ITC
   const purchaseData = {
     supplierId, supplierName: order.sellerName,
-    date: order.acceptedAt?.toDate ? order.acceptedAt.toDate().toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+    date: invoiceDate, invoiceDate,
     items,
     subtotal: summary.subtotal || 0,
     gstTotal: (summary.cgst || 0) + (summary.sgst || 0) + (summary.igst || 0),

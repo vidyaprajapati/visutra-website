@@ -234,9 +234,10 @@ async function ensureBuyerPurchaseForOrder(order){
     else unmappedNames.push(item.productName);
   }
   const summary = order.invoiceSummary || {};
+  const invoiceDate = await vtInvoiceDateForOrder(order);   // the bill's date → stock month + GST/ITC
   const purchaseData = {
     supplierId, supplierName: order.sellerName,
-    date: order.acceptedAt?.toDate ? order.acceptedAt.toDate().toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+    date: invoiceDate, invoiceDate,
     items,
     subtotal: summary.subtotal || 0,
     gstTotal: (summary.cgst || 0) + (summary.sgst || 0) + (summary.igst || 0),
