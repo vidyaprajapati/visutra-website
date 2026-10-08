@@ -157,6 +157,40 @@
 
     <!-- STOCK MANAGEMENT -->
     <div id="view-stock" class="view hidden">
+      <div class="card" id="stockUpdateCard">
+        <h2>📦 Update Stock</h2>
+        <p class="sub">For stock that doesn't come from a purchase bill or a sale: your own <b>production</b>, goods bought without a bill or opening stock, <b>damage / samples</b>, or a <b>physical count</b>. Each update is dated (it counts in that month's stock report) and can be undone below.</p>
+        <div class="su-modes" id="suModes">
+          <button type="button" class="btn small primary" data-mode="production" onclick="setStockUpdateMode('production')">🏭 Production</button>
+          <button type="button" class="btn small" data-mode="in" onclick="setStockUpdateMode('in')">📥 Stock in</button>
+          <button type="button" class="btn small" data-mode="out" onclick="setStockUpdateMode('out')">📤 Stock out</button>
+          <button type="button" class="btn small" data-mode="count" onclick="setStockUpdateMode('count')">🔢 Physical count</button>
+        </div>
+        <p class="sub" id="suModeHelp" style="margin:10px 0 6px"></p>
+        <div class="grid3">
+          <div class="field"><label>Date</label><input id="suDate" type="date"></div>
+          <div class="field"><label id="suReasonLabel">Reason</label><select id="suReason"></select></div>
+          <div class="field"><label>Note / batch no. (optional)</label><input id="suNote" placeholder="e.g. Batch 14, cutting unit"></div>
+        </div>
+        <table class="line-items" data-no-collapse><thead><tr><th style="width:55%" id="suProductHead">Product</th><th id="suQtyHead">Quantity</th><th id="suNowHead">In stock now</th><th></th></tr></thead>
+        <tbody id="suRows"></tbody></table>
+        <button type="button" class="btn small" onclick="addStockUpdateRow()">+ Add another product</button>
+        <div id="suMaterialsBox" style="margin-top:14px">
+          <label style="display:flex;gap:8px;align-items:center;font-weight:600"><input type="checkbox" id="suUseMaterials" onchange="renderStockUpdateMaterials()" style="width:auto"> Materials used in this production (stock goes down)</label>
+          <div id="suMaterialsWrap" class="hidden">
+            <table class="line-items" data-no-collapse><thead><tr><th style="width:55%">Material (product)</th><th>Quantity used</th><th>In stock now</th><th></th></tr></thead>
+            <tbody id="suMatRows"></tbody></table>
+            <button type="button" class="btn small" onclick="addStockUpdateRow('mat')">+ Add material</button>
+          </div>
+        </div>
+        <div id="suPreview" class="sub" style="margin-top:12px"></div>
+        <button class="btn primary" onclick="applyStockUpdate()">Apply stock update</button>
+        <p class="msg" id="suMsg"></p>
+        <h3 style="margin:20px 0 8px;font-size:15px">Recent manual updates</h3>
+        <table data-excel-name="Manual stock updates"><thead><tr><th>Date</th><th>Type</th><th>Product</th><th>Qty</th><th>Note</th><th></th></tr></thead>
+        <tbody id="suRecent"></tbody></table>
+      </div>
+
       <div class="card" id="sellerAnalysisCard">
         <h2>📊 Stock Analysis</h2>
         <p class="sub">How your stock is moving: sales trend, best sellers, days of stock left and what needs reordering. Updates whenever stock changes.</p>
@@ -241,17 +275,6 @@
         <tbody id="sellerLabelResultsTable"></tbody></table>
       </div>
 
-      <div class="card">
-        <h2>Adjust Stock</h2>
-        <p class="sub">For an opening balance, a stock count correction, damage, or anything else outside the normal purchase/sale flow. Use a negative number to reduce stock.</p>
-        <div class="grid3">
-          <div class="field"><label>Product</label><select id="adjProduct"></select></div>
-          <div class="field"><label>Quantity change</label><input id="adjQty" type="number" step="1" placeholder="e.g. 50 or -5"></div>
-          <div class="field"><label>Note</label><input id="adjNote" placeholder="e.g. Opening balance"></div>
-        </div>
-        <button class="btn primary" onclick="adjustStock()">Apply Adjustment</button>
-        <p class="msg" id="adjMsg"></p>
-      </div>
 
       <div class="card">
         <h2>Monthly Inventory Reconciliation</h2>
