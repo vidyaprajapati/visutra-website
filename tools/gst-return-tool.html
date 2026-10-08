@@ -1098,7 +1098,9 @@ document.getElementById('generateBtn').addEventListener('click', function () {
   lastResult.transactions = allTxns; // used by the GSTR-1 JSON / Excel export (shared GST engine)
 
   renderResults(result);
-  try { toolBuild(); } catch (e) { console.warn(e); }   // shows checks (incl. the Amazon report) right away
+  // The review shows exactly what will be FILED: the same combined result as
+  // the downloads (row-by-row files + Amazon/Flipkart GST reports + Billing).
+  try { var built = toolBuild(); if (built) renderFiledReview(built.res, result); } catch (e) { console.warn(e); }
   document.getElementById('results').classList.add('show');
   document.getElementById('resultsStep').classList.add('active');
   document.getElementById('resultsStep').scrollIntoView({ behavior: 'smooth' });
@@ -1155,6 +1157,42 @@ function renderResults(r) {
     r.hsn.map(function (x) { return [x.hsn, x.uqc, x.qty, x.rate + '%', fmtMoney(x.taxableValue), fmtMoney(x.igst), fmtMoney(x.cgst), fmtMoney(x.sgst)]; }),
     [2, 3, 4, 5, 6, 7]
   );
+}
+
+/* "Check the totals" from the combined GSTR-1 (what the JSON / Excel contain). */
+function renderFiledReview(res, legacy) {
+  var J = res.json || {}, T = res.totals || {};
+  var b2bRows = [], b2clRows = [], hsnRows = [];
+  (J.b2b || []).forEach(function (c) { c.inv.forEach(function (inv) { inv.itms.forEach(function (it) {
+    b2bRows.push([c.ctin, '', inv.inum, inv.idt, posLabel(inv.pos), it.itm_det.rt + '%', fmtMoney(it.itm_det.txval), fmtMoney(inv.val)]); }); }); });
+  (J.b2cl || []).forEach(function (c) { c.inv.forEach(function (inv) { inv.itms.forEach(function (it) {
+    b2clRows.push([inv.inum, inv.idt, posLabel(c.pos), it.itm_det.rt + '%', fmtMoney(it.itm_det.txval), fmtMoney(inv.val)]); }); }); });
+  var b2cs = (J.b2cs || []).slice().sort(function (a, b) { return b.txval - a.txval; });
+  var hsnAll = [].concat(((J.hsn || {}).hsn_b2b || []).map(function (h) { return ['B2B', h]; }), ((J.hsn || {}).hsn_b2c || []).map(function (h) { return ['B2C', h]; }));
+  hsnAll.forEach(function (x) { var h = x[1]; hsnRows.push([h.hsn_sc + ' (' + x[0] + ')', h.uqc, h.qty, h.rt + '%', fmtMoney(h.txval), fmtMoney(h.iamt || 0), fmtMoney(h.camt || 0), fmtMoney(h.samt || 0)]); });
+  var notes = (J.cdnr || []).reduce(function (a, c) { return a + c.nt.length; }, 0) + (J.cdnur || []).length;
+  var cards = [
+    ['Net taxable value', fmtMoney(T.taxable || 0)],
+    ['Net tax', fmtMoney((T.igst || 0) + (T.cgst || 0) + (T.sgst || 0) + (T.cess || 0))],
+    ['Transaction lines', ((legacy && legacy.docSummary ? legacy.docSummary.count : 0) + (store.amazonReady || []).reduce(function (a, r) { return a + r.b2b.length + r.b2cl.length + r.b2cs.length + r.cdnr.length + r.cdnur.length; }, 0)).toLocaleString('en-IN')],
+    ['B2B invoices', (J.b2b || []).reduce(function (a, c) { return a + c.inv.length; }, 0)],
+    ['B2CL invoices', (J.b2cl || []).reduce(function (a, c) { return a + c.inv.length; }, 0)],
+    ['B2CS rows', b2cs.length],
+    ['HSN lines', hsnAll.length]
+  ];
+  if (notes) cards.push(['Credit / debit notes', notes]);
+  document.getElementById('summaryCards').innerHTML = cards.map(function (c) {
+    return '<div class="card"><div class="label">' + c[0] + '</div><div class="value">' + c[1] + '</div></div>';
+  }).join('');
+  document.getElementById('b2bCount').textContent = b2bRows.length + ' invoice line(s)';
+  document.getElementById('b2bTable').innerHTML = tableHTML(['GSTIN', 'Receiver', 'Invoice No.', 'Invoice Date', 'Place of Supply', 'Rate', 'Taxable Value', 'Invoice Value'], b2bRows.slice(0, 25), [5, 6, 7]);
+  document.getElementById('b2clCount').textContent = b2clRows.length + ' invoice line(s)';
+  document.getElementById('b2clTable').innerHTML = tableHTML(['Invoice No.', 'Invoice Date', 'Place of Supply', 'Rate', 'Taxable Value', 'Invoice Value'], b2clRows.slice(0, 25), [3, 4, 5]);
+  document.getElementById('b2csCount').textContent = b2cs.length + ' row(s)';
+  document.getElementById('b2csTable').innerHTML = tableHTML(['Type', 'Place of Supply', 'Rate', 'Taxable Value'],
+    b2cs.slice(0, 40).map(function (x) { return [(x.typ || 'OE') + (x.etin ? ' · ' + x.etin : ''), posLabel(x.pos), x.rt + '%', fmtMoney(x.txval)]; }), [2, 3]);
+  document.getElementById('hsnCount').textContent = hsnRows.length + ' row(s)';
+  document.getElementById('hsnTable').innerHTML = tableHTML(['HSN', 'UQC', 'Qty', 'Rate', 'Taxable Value', 'IGST', 'CGST', 'SGST'], hsnRows, [2, 3, 4, 5, 6, 7]);
 }
 
 function tableHTML(headers, rows, numericCols) {
