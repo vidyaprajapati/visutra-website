@@ -119,7 +119,58 @@
     const anchor = table.closest('.vt-table-wrap, .vlc-tbl-wrap') || table;
     anchor.parentNode.insertBefore(bar, anchor);
   }
-  function scan(root) { (root || document).querySelectorAll('table').forEach(enhance); }
+  /* ---------- ＋ View all — long tables show 10 rows until opened ----------
+     Applies to data tables on every page. Never to editable tables (rows
+     with inputs / dropdowns — e.g. reconciliation mapping), entry grids, or
+     tables marked data-no-collapse. "Total" rows always stay visible, and
+     the Excel download still includes every row. Opened tables stay open
+     when the page refreshes their rows. */
+  const LIMIT = 10;
+  (function addStyles() {
+    if (document.getElementById('vt-collapse-css')) return;
+    const st = document.createElement('style'); st.id = 'vt-collapse-css';
+    st.textContent = '.vt-more-row{display:none!important}' +
+      '.vt-more-bar{display:flex;justify-content:center;margin:6px 0 2px}' +
+      '.vt-more-btn{font:600 12.5px/1 inherit;padding:7px 14px;border-radius:999px;border:1.5px solid #E8DCCB;background:#FFF;color:#7A3E00;cursor:pointer;display:inline-flex;gap:6px;align-items:center}' +
+      '.vt-more-btn:hover{background:#FFF4E5;border-color:#F2B266}' +
+      '.vt-more-btn b{font-size:15px;line-height:1}';
+    (document.head || document.documentElement).appendChild(st);
+  })();
+  function collapsible(table) {
+    if (!table.isConnected || !table.tBodies.length) return false;
+    if (table.hasAttribute('data-no-collapse') || table.classList.contains('line-items')) return false;
+    if (table.closest('.modal-box, .no-collapse, .sig-pad')) return false;
+    if (table.tBodies[0].querySelector('input:not([type=hidden]), select, textarea')) return false;   // editable: show everything
+    return true;
+  }
+  function applyCollapse(table) {
+    const rows = [...table.tBodies].flatMap(tb => [...tb.rows]);
+    const wrapEl = table.closest('.vt-table-wrap, .vlc-tbl-wrap') || table;
+    let bar = wrapEl.nextElementSibling && wrapEl.nextElementSibling.classList.contains('vt-more-bar') ? wrapEl.nextElementSibling : null;
+    rows.forEach(r => r.classList.remove('vt-more-row'));
+    // rows the page itself shows (not filtered out), excluding Total lines
+    const shown = rows.filter(r => r.style.display !== 'none' && !r.classList.contains('hidden'));
+    const isTotal = r => /^\s*(grand\s+)?total\b/i.test((r.cells[0] && r.cells[0].textContent) || '');
+    const body = shown.filter(r => !isTotal(r) && !(r.cells.length === 1 && r.cells[0].colSpan > 1));
+    if (!collapsible(table) || body.length <= LIMIT + 2) { if (bar) bar.remove(); return; }
+    const open = table.dataset.vtOpen === '1';
+    if (!open) body.slice(LIMIT).forEach(r => r.classList.add('vt-more-row'));
+    if (!bar) {
+      bar = document.createElement('div'); bar.className = 'vt-more-bar';
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'vt-more-btn';
+      b.addEventListener('click', () => { table.dataset.vtOpen = table.dataset.vtOpen === '1' ? '0' : '1'; applyCollapse(table); });
+      bar.appendChild(b);
+      wrapEl.parentNode.insertBefore(bar, wrapEl.nextSibling);
+    }
+    bar.firstChild.innerHTML = open ? '<b>−</b> Show first ' + LIMIT : '<b>＋</b> View all ' + body.length + ' rows';
+    bar.firstChild.title = open ? 'Show fewer rows' : 'Open the full table';
+  }
+  const pending = new Set(); let timer = null;
+  function queueCollapse(table) {
+    if (!table) return; pending.add(table);
+    if (!timer) timer = setTimeout(() => { timer = null; const list = [...pending]; pending.clear(); list.forEach(applyCollapse); }, 30);
+  }
+  function scan(root) { (root || document).querySelectorAll('table').forEach(t => { enhance(t); queueCollapse(t); }); }
 
   // Phones: the sidebar is a swipeable strip — keep the current page's tab in view.
   function showActiveTab() {
@@ -137,6 +188,12 @@
   else scan();
   // Tables that appear later (tabs, dialogs, results) get a button too.
   new MutationObserver(muts => {
-    for (const m of muts) m.addedNodes.forEach(n => { if (n.nodeType === 1) { if (n.tagName === 'TABLE') enhance(n); else if (n.querySelector) scan(n); } });
+    for (const m of muts) {
+      m.addedNodes.forEach(n => { if (n.nodeType === 1) { if (n.tagName === 'TABLE') { enhance(n); queueCollapse(n); } else if (n.querySelector) scan(n); } });
+      // rows re-drawn inside an existing table (filters, refreshes) → re-apply
+      const t = m.target && m.target.closest && m.target.closest('table');
+      if (t && !(m.target.closest('.vt-more-bar'))) queueCollapse(t);
+    }
   }).observe(document.documentElement, { childList: true, subtree: true });
+  window.VTExcel.collapse = applyCollapse;
 })();

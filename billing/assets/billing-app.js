@@ -451,6 +451,10 @@ async function deleteProduct(id){
 
 /* ---------------- Stock Management ---------------- */
 function renderStockDropdowns(){
+  // Update Stock card: refresh product lists, keep what was picked
+  document.querySelectorAll('#suRows .su-prod, #suMatRows .su-prod').forEach(sel => { const v = sel.value; sel.innerHTML = suProductOptions(v); });
+  if(document.getElementById('suModes') && !document.getElementById('suReason').options.length){ setStockUpdateMode('production'); renderStockUpdateRecent(); }
+  else if(document.getElementById('suPreview')) updateStockUpdatePreview();
   const sel = document.getElementById('adjProduct');
   if(sel){
     const prev = sel.value;
@@ -633,19 +637,142 @@ async function renderMonthlyStockReport(){
 }
 /* Shared by purchase stock-in and manual adjustment: bumps a product's stock
    by qty (can be negative) and logs the movement for the history table. */
-async function addStockMovement(type, productId, qty, date, note){
+async function addStockMovement(type, productId, qty, date, note, extra){
   const product = productsCache.find(p => p.id === productId);
   if(!product || !qty) return;
   await db.collection('users').doc(currentUser.uid).collection('products').doc(productId).update({
     stock: firebase.firestore.FieldValue.increment(qty)
   });
   await db.collection('users').doc(currentUser.uid).collection('stockMovements').add({
-    type, productId, productName: product.name, qty, date, note: note || '',
+    type, productId, productName: product.name, qty, date, note: note || '', ...(extra || {}),
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
   // Every stock change funnels through here, so invalidating in one place
   // keeps the Monthly Stock Report correct without touching each call site.
   allStockMovementsCache = null;
+}
+/* ---------------- Update Stock (manual) ----------------
+   Production (finished goods + / materials −), stock in, stock out, and
+   physical count (sets stock to the counted number). Every row goes through
+   addStockMovement(), so the product's stock, the movement history, the
+   Monthly Stock Report and Stock Analysis all stay in step. */
+const SU_MODES = {
+  production: { help: 'Goods you made yourself: the finished product goes UP. Tick "Materials used" to also take the raw materials / parts DOWN.', reasons: ['Own production', 'Job work received', 'Repacked / assembled'], qty: 'Quantity produced', type: 'production', sign: 1 },
+  in: { help: 'Goods that came in without a purchase bill in Billing: opening stock, cash purchase, customer return, found in count. (Purchases with a bill: use Purchase Entry — stock goes up automatically for linked products.)', reasons: ['Opening stock', 'Purchased (no bill entered)', 'Customer return (not via marketplace)', 'Found / correction', 'Other'], qty: 'Quantity added', type: 'stock-in', sign: 1 },
+  out: { help: 'Goods that left without a sale: damaged, lost, samples, own use, given free, correction.', reasons: ['Damaged / defective', 'Lost / missing', 'Sample / free gift', 'Own use', 'Correction', 'Other'], qty: 'Quantity removed', type: 'stock-out', sign: -1 },
+  count: { help: 'You counted the shelf: enter the COUNTED quantity — the difference from the stock on record is applied and logged.', reasons: ['Physical stock count', 'Month-end count', 'Audit'], qty: 'Counted quantity', type: 'count', sign: 0 }
+};
+let suMode = 'production';
+function suProductOptions(selected){
+  return '<option value="">Select product…</option>' + productsCache.filter(p => p.active !== false).map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+}
+function setStockUpdateMode(mode){
+  suMode = mode; const m = SU_MODES[mode];
+  document.querySelectorAll('#suModes [data-mode]').forEach(b => b.classList.toggle('primary', b.dataset.mode === mode));
+  document.getElementById('suModeHelp').textContent = m.help;
+  document.getElementById('suReason').innerHTML = m.reasons.map(r => `<option>${esc(r)}</option>`).join('');
+  document.getElementById('suQtyHead').textContent = m.qty;
+  document.getElementById('suMaterialsBox').classList.toggle('hidden', mode !== 'production');
+  if(!document.getElementById('suDate').value) document.getElementById('suDate').value = new Date().toISOString().slice(0, 10);
+  if(!document.querySelector('#suRows tr')) addStockUpdateRow();
+  updateStockUpdatePreview();
+}
+function addStockUpdateRow(kind){
+  const body = document.getElementById(kind === 'mat' ? 'suMatRows' : 'suRows');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><select class="su-prod" onchange="updateStockUpdatePreview()">${suProductOptions('')}</select></td>
+    <td><input class="su-qty" type="number" min="0" step="any" placeholder="0" oninput="updateStockUpdatePreview()"></td>
+    <td class="su-now" style="color:var(--muted)">—</td>
+    <td><button type="button" class="btn small" title="Remove" onclick="this.closest('tr').remove(); updateStockUpdatePreview()">✕</button></td>`;
+  body.appendChild(tr);
+}
+function renderStockUpdateMaterials(){
+  const on = document.getElementById('suUseMaterials').checked;
+  document.getElementById('suMaterialsWrap').classList.toggle('hidden', !on);
+  if(on && !document.querySelector('#suMatRows tr')) addStockUpdateRow('mat');
+  updateStockUpdatePreview();
+}
+function suCollect(){
+  const read = sel => [...document.querySelectorAll(sel + ' tr')].map(tr => ({ productId: tr.querySelector('.su-prod').value, qty: parseFloat(tr.querySelector('.su-qty').value), tr }))
+    .filter(r => r.productId && !isNaN(r.qty));
+  const main = read('#suRows'), mats = (suMode === 'production' && document.getElementById('suUseMaterials').checked) ? read('#suMatRows') : [];
+  const m = SU_MODES[suMode];
+  const changes = main.map(r => {
+    const p = productsCache.find(x => x.id === r.productId) || {}, now = Number(p.stock) || 0;
+    const delta = suMode === 'count' ? r.qty - now : m.sign * r.qty;
+    return { productId: r.productId, name: p.name, now, delta, type: m.type, counted: suMode === 'count' ? r.qty : null };
+  }).concat(mats.map(r => { const p = productsCache.find(x => x.id === r.productId) || {}; return { productId: r.productId, name: p.name, now: Number(p.stock) || 0, delta: -r.qty, type: 'production-use' }; }));
+  return { changes, main, mats };
+}
+function updateStockUpdatePreview(){
+  document.querySelectorAll('#suRows tr, #suMatRows tr').forEach(tr => {
+    const p = productsCache.find(x => x.id === tr.querySelector('.su-prod').value);
+    tr.querySelector('.su-now').textContent = p ? String(Number(p.stock) || 0) + ' ' + (p.unit || '') : '—';
+  });
+  const { changes } = suCollect();
+  const box = document.getElementById('suPreview');
+  if(!changes.length){ box.innerHTML = ''; return; }
+  box.innerHTML = '<b>Will change:</b> ' + changes.map(c => `${esc(c.name || '?')} <b style="color:${c.delta < 0 ? 'var(--paprika-dark)' : '#0E7C6B'}">${c.delta > 0 ? '+' : ''}${fix2(c.delta)}</b> → ${fix2(c.now + c.delta)}`).join(' · ')
+    + (changes.some(c => c.now + c.delta < 0) ? ' <span class="badge warn">some stock would go below 0</span>' : '');
+}
+async function applyStockUpdate(){
+  const { changes, main } = suCollect();
+  const date = document.getElementById('suDate').value || new Date().toISOString().slice(0, 10);
+  const reason = document.getElementById('suReason').value, note = document.getElementById('suNote').value.trim();
+  if(!main.length){ showMsg('suMsg', 'Pick a product and enter a quantity.', false); return; }
+  if(suMode !== 'count' && main.some(r => !(r.qty > 0))){ showMsg('suMsg', 'Quantities must be more than 0.', false); return; }
+  if(suMode === 'count' && main.some(r => r.qty < 0)){ showMsg('suMsg', 'A counted quantity can\'t be negative.', false); return; }
+  const real = changes.filter(c => c.delta !== 0);
+  if(!real.length){ showMsg('suMsg', 'Nothing to change — the counted quantities already match the stock on record.', true); return; }
+  if(real.some(c => c.now + c.delta < 0) && !confirm('Some stock would go below 0. Apply anyway?')) return;
+  const batch = 'su-' + Date.now();
+  try{
+    for(const c of real){
+      const label = c.type === 'production-use' ? `Used in production${note ? ' — ' + note : ''}`
+        : c.type === 'count' ? `${reason}: counted ${fix2(c.counted)} (was ${fix2(c.now)})${note ? ' — ' + note : ''}`
+        : `${reason}${note ? ' — ' + note : ''}`;
+      await addStockMovement(c.type, c.productId, c.delta, date, label, { batchId: batch, manual: true });   // one id per update → Undo reverses it together
+    }
+  }catch(err){ showMsg('suMsg', 'Could not update stock: ' + err.message, false); return; }
+  await loadProducts(); await loadStockMovements();
+  document.getElementById('suRows').innerHTML = ''; document.getElementById('suMatRows').innerHTML = '';
+  document.getElementById('suUseMaterials').checked = false; renderStockUpdateMaterials();
+  document.getElementById('suNote').value = ''; addStockUpdateRow(); updateStockUpdatePreview();
+  showMsg('suMsg', `Stock updated: ${real.map(c => `${c.name} ${c.delta > 0 ? '+' : ''}${fix2(c.delta)}`).join(', ')} (dated ${date}).`, true);
+  renderStockUpdateRecent();
+}
+async function renderStockUpdateRecent(){
+  const body = document.getElementById('suRecent');
+  if(!body) return;
+  let rows = [];
+  try{
+    const snap = await db.collection('users').doc(currentUser.uid).collection('stockMovements').where('manual', '==', true).get();
+    rows = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => String(b.batchId || '').localeCompare(String(a.batchId || ''))).slice(0, 60);
+  }catch(e){}
+  const TYPE = { production: '🏭 Produced', 'production-use': '🏭 Material used', 'stock-in': '📥 Stock in', 'stock-out': '📤 Stock out', count: '🔢 Count', undo: '↩ Undo' };
+  const seen = new Set();
+  body.innerHTML = rows.map(m => {
+    const first = !seen.has(m.batchId); seen.add(m.batchId);
+    const canUndo = first && m.type !== 'undo' && !m.undone;
+    return `<tr${m.undone ? ' style="opacity:.55"' : ''}><td>${esc(m.date)}</td><td>${TYPE[m.type] || esc(m.type)}</td><td>${esc(m.productName)}</td>
+      <td style="color:${m.qty < 0 ? 'var(--paprika-dark)' : '#0E7C6B'}"><b>${m.qty > 0 ? '+' : ''}${fix2(m.qty)}</b></td><td>${esc(m.note || '')}${m.undone ? ' <span class="badge">undone</span>' : ''}</td>
+      <td>${canUndo ? `<button class="btn small" onclick="undoStockUpdate('${esc(m.batchId)}')">Undo</button>` : ''}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No manual stock updates yet.</td></tr>';
+}
+async function undoStockUpdate(batchId){
+  if(!confirm('Undo this whole stock update? Each product goes back by the same amount (logged as an undo).')) return;
+  const col = db.collection('users').doc(currentUser.uid).collection('stockMovements');
+  const snap = await col.where('batchId', '==', batchId).get();
+  const today = new Date().toISOString().slice(0, 10);
+  for(const d of snap.docs){
+    const m = d.data();
+    if(m.undone || m.type === 'undo') continue;
+    await addStockMovement('undo', m.productId, -m.qty, m.date || today, `Undo: ${m.note || m.type}`, { batchId: batchId + '-undo', manual: true });
+    await d.ref.update({ undone: true });
+  }
+  await loadProducts(); await loadStockMovements(); renderStockUpdateRecent();
+  showMsg('suMsg', 'Stock update undone.', true);
 }
 async function adjustStock(){
   const productId = document.getElementById('adjProduct').value;
