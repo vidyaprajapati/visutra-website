@@ -113,6 +113,12 @@ test('Flipkart "Report for GSTR-1 and GSTR-8" (real file) → GSTR-1 JSON throug
   $('gstPeriod').value = '2026-09';
   $('generateBtn').disabled = false; $('generateBtn').click(); await sleep(500);
   assert.match($('gstToolChecks').textContent, /doesn't say which month it covers/);
+  // the review screen shows what will be filed — not ₹0
+  const cards = $('summaryCards').textContent.replace(/\s+/g, ' ');
+  assert.match(cards, /Net taxable value\s*₹4,526\.93/, cards);
+  assert.match(cards, /B2CS rows\s*13/); assert.match(cards, /HSN lines\s*1/);
+  assert.match($('b2csTable').textContent, /Tamil Nadu/);
+  assert.match($('hsnTable').textContent, /63049291 \(B2C\)/);
   $('downloadJsonBtn').click(); await sleep(200);
   const j = saved[0];
   assert.ok(validate(j), JSON.stringify(validate.errors));
