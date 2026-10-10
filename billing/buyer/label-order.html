@@ -72,8 +72,13 @@ let currentUser = null;
 let buyerData = {};
 let mappingsCache = [];       // this buyer's ACTIVE buyerSkuMappings
 let unmappedFound = {};       // "marketplace_sku" -> { marketplace, sku, qty } — just for this session's upload feedback
-let todayKey = new Date().toISOString().slice(0, 10); // buyer's local date; each day's accumulation is separate
-let todayDraftsCache = {};    // sellerId -> the labelOrderDrafts/{todayKey}_{sellerId} doc, {id, sellerId, sellerName, itemsByProduct, pageHashes}
+// "Today" in the buyer's LOCAL time (IST) — toISOString() is UTC, which
+// changed the day at 5:30 AM IST.
+function localDayKey(d){ d = d || new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+let todayKey = localDayKey();
+// EVERY unsent draft (any day), keyed by draft id — an unsent day stays on
+// screen until it's sent or discarded (it used to vanish the next day).
+let draftsCache = {};
 
 auth.onAuthStateChanged(async user => {
   const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
@@ -95,7 +100,7 @@ auth.onAuthStateChanged(async user => {
 
   await loadMappings();
   await loadSellerEmails();
-  await loadTodayDrafts();
+  await loadDrafts();
   await consumeCropperHandoff();
 });
 
@@ -211,7 +216,7 @@ async function processHits(hits, fileCount){
     (skippedCount ? ` ${skippedCount} already counted (sent earlier, or already in today's summary).` : '');
   showMsg('uploadMsg', msg, true);
   renderUnmapped();
-  await loadTodayDrafts();
+  await loadDrafts();
 }
 
 async function isAlreadyProcessed(pageHash){
@@ -227,6 +232,8 @@ async function isAlreadyProcessed(pageHash){
    earlier today (so re-processing the same file twice in one day doesn't
    double the quantity before it's even been sent). */
 async function mergeItemIntoDraft(mapping, hit){
+  // already in an earlier day's unsent draft → don't add (or deduct stock) twice
+  if(Object.values(draftsCache).some(d => d.date !== todayKey && (d.pageHashes || []).includes(hit.pageHash))) return false;
   const draftId = `${todayKey}_${mapping.sellerId}`;
   const ref = db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').doc(draftId);
   let added = false;
@@ -286,13 +293,14 @@ function balanceToOrder(mapping){
   return Math.max(0, -(mapping.stock || 0));
 }
 
-async function loadTodayDrafts(){
-  const snap = await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts')
-    .where('date', '==', todayKey).get();
-  todayDraftsCache = {};
-  snap.docs.forEach(d => { todayDraftsCache[d.data().sellerId] = { id: d.id, ...d.data() }; });
+async function loadDrafts(){
+  todayKey = localDayKey();
+  const snap = await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').get();
+  draftsCache = {};
+  snap.docs.forEach(d => { draftsCache[d.id] = { id: d.id, ...d.data() }; });
   renderSummary();
 }
+function dayLabel(key){ const [y, m, d] = String(key || '').split('-').map(Number); return y ? new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : key; }
 
 /* Same queue as Buyer SKU Master's "Report a new marketplace SKU" — one
    shared queue, so a SKU detected here and one reported manually there both
@@ -324,10 +332,10 @@ function renderUnmapped(){
 }
 
 function renderSummary(){
-  const sellerIds = Object.keys(todayDraftsCache);
-  document.getElementById('summaryCard').style.display = sellerIds.length ? 'block' : 'none';
-  document.getElementById('summaryBySeller').innerHTML = sellerIds.map(sid => {
-    const g = todayDraftsCache[sid];
+  const draftIds = Object.keys(draftsCache).sort((a, b) => String(draftsCache[a].date).localeCompare(String(draftsCache[b].date)) || String(draftsCache[a].sellerName).localeCompare(String(draftsCache[b].sellerName)));
+  document.getElementById('summaryCard').style.display = draftIds.length ? 'block' : 'none';
+  document.getElementById('summaryBySeller').innerHTML = draftIds.map(did => {
+    const g = draftsCache[did], sid = g.sellerId, old = g.date && g.date < todayKey;
     const products = Object.entries(g.itemsByProduct).map(([productIdKey, p]) => ({
       ...p, mapping: resolveMappingForItem(sid, productIdKey, p)
     }));
@@ -341,24 +349,27 @@ function renderSummary(){
       <td><b>${bal===null ? p.qty : bal}</b>${bal===0 ? ' <span class="badge">Covered by stock</span>' : ''}</td></tr>`;
     }).join('');
     const anyToOrder = products.some(p => (balanceToOrder(p.mapping) ?? p.qty) > 0);
-    return `<div style="margin-bottom:22px;padding-bottom:18px;border-bottom:1px solid var(--line)">
-      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">${esc(g.sellerName)}</h3>
-      <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Dispatched Today</th><th>Stock Now</th><th>Balance to Order</th></tr></thead>
+    return `<div style="margin-bottom:22px;padding:${old ? '12px 14px' : '0 0 18px'};border-bottom:1px solid var(--line);${old ? 'background:#FFF7ED;border:1.5px solid #F2B266;border-radius:12px' : ''}">
+      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">${esc(g.sellerName)} <span style="font-weight:400;font-size:13px;color:var(--muted)">· labels of ${esc(dayLabel(g.date))}</span>
+        ${old ? '<span class="badge warn">📅 not sent yet — from an earlier day</span>' : ''}</h3>
+      <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Dispatched ${old ? 'on ' + esc(dayLabel(g.date)) : 'Today'}</th><th>Stock Now</th><th>Balance to Order</th></tr></thead>
       <tbody>${rows}</tbody></table>
-      <button class="btn primary" style="margin-top:10px" onclick="placeAutoOrder('${sid}')">${anyToOrder ? `Send Order to ${esc(g.sellerName)}` : 'Mark Labels Processed (no order needed)'}</button>
-      <p class="msg" id="autoOrderMsg-${sid}"></p>
+      <button class="btn primary" style="margin-top:10px" onclick="placeAutoOrder('${did}')">${anyToOrder ? `Send Order to ${esc(g.sellerName)}` : 'Mark Labels Processed (no order needed)'}</button>
+      <button class="btn small" style="margin-top:10px" onclick="discardDraft('${did}')" title="Remove this draft without sending an order (e.g. you ordered another way)">Discard</button>
+      <p class="msg" id="autoOrderMsg-${did}"></p>
     </div>`;
   }).join('') || '<p class="sub">No fully-mapped items to order yet.</p>';
 }
 
-async function placeAutoOrder(sellerId){
+async function placeAutoOrder(draftId){
+  const g = draftsCache[draftId];
+  if(!g) return;
+  const sellerId = g.sellerId, msgId = `autoOrderMsg-${draftId}`;
   if(!buyerData.businessName || !buyerData.stateCode){
-    showMsg(`autoOrderMsg-${sellerId}`, 'Complete your Business Profile (Billing → Business Profile) before placing an order.', false);
+    showMsg(msgId, 'Complete your Business Profile (Billing → Business Profile) before placing an order.', false);
     return;
   }
-  const g = todayDraftsCache[sellerId];
-  if(!g) return;
-  showMsg(`autoOrderMsg-${sellerId}`, 'Checking stock…', true);
+  showMsg(msgId, 'Checking stock…', true);
   try{
     // Re-resolve against the freshest stock we have (updated in place by
     // every deductStockForLabel() call this session) right before building
@@ -377,7 +388,7 @@ async function placeAutoOrder(sellerId){
 
     let orderNumber = null, orderRef = null;
     if(items.length){
-      showMsg(`autoOrderMsg-${sellerId}`, 'Sending order…', true);
+      showMsg(msgId, 'Sending order…', true);
       orderRef = db.collection('marketplaceOrders').doc();
       orderNumber = `VIS-ORD-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${orderRef.id.slice(-6).toUpperCase()}`;
       await orderRef.set({
@@ -389,7 +400,7 @@ async function placeAutoOrder(sellerId){
           email: currentUser.email || ''
         },
         sellerUid: sellerId, sellerName: g.sellerName,
-        items, note: '', status: 'PENDING',
+        items, note: g.date && g.date !== todayKey ? `Labels dispatched on ${dayLabel(g.date)}` : '', labelsDate: g.date || todayKey, status: 'PENDING',
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
@@ -408,15 +419,15 @@ async function placeAutoOrder(sellerId){
     // tomorrow (or the next batch today) starts fresh rather than
     // double-counting.
     await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').doc(g.id).delete();
-    delete todayDraftsCache[sellerId];
+    delete draftsCache[draftId];
     renderSummary();
 
     if(!items.length){
-      showMsg(`autoOrderMsg-${sellerId}`, `No order needed — your existing stock covers all of today's demand for ${g.sellerName}. Labels marked as processed.`, true);
+      showMsg(msgId, `No order needed — your existing stock covers all of today's demand for ${g.sellerName}. Labels marked as processed.`, true);
       return;
     }
 
-    showMsg(`autoOrderMsg-${sellerId}`, `Order ${orderNumber} sent to ${g.sellerName}. Notifying seller…`, true);
+    showMsg(msgId, `Order ${orderNumber} sent to ${g.sellerName}. Notifying seller…`, true);
     const emailResult = await sendOrderNotification(
       sellerEmailById[sellerId], g.sellerName,
       `New Order Received – VISUTRA – Order #${orderNumber}`,
@@ -425,17 +436,31 @@ async function placeAutoOrder(sellerId){
       `${window.location.origin}/billing/seller/order-receive.html?id=${orderRef.id}`
     );
     if(emailResult.sent){
-      showMsg(`autoOrderMsg-${sellerId}`, `Order ${orderNumber} sent to ${g.sellerName} and they've been emailed. Track it from My Orders.`, true);
+      showMsg(msgId, `Order ${orderNumber} sent to ${g.sellerName} and they've been emailed. Track it from My Orders.`, true);
     } else if(emailResult.reason === 'not_configured'){
-      showMsg(`autoOrderMsg-${sellerId}`, `Order ${orderNumber} placed — but the seller wasn't emailed (order email isn't set up on this site yet). They'll still see it in their Order Receive portal.`, true);
+      showMsg(msgId, `Order ${orderNumber} placed — but the seller wasn't emailed (order email isn't set up on this site yet). They'll still see it in their Order Receive portal.`, true);
     } else {
-      showMsg(`autoOrderMsg-${sellerId}`, `Order ${orderNumber} placed — but notifying the seller by email failed (${emailResult.error || emailResult.reason}). They'll still see it in their Order Receive portal.`, true);
+      showMsg(msgId, `Order ${orderNumber} placed — but notifying the seller by email failed (${emailResult.error || emailResult.reason}). They'll still see it in their Order Receive portal.`, true);
     }
   }catch(err){
-    showMsg(`autoOrderMsg-${sellerId}`, err.message, false);
+    showMsg(msgId, err.message, false);
   }
 }
 
+/* Remove an unsent draft without ordering (e.g. you ordered another way).
+   Its label pages are marked processed, so re-uploading the same PDF won't
+   bring it back; stock already taken off for those dispatched labels stays. */
+async function discardDraft(draftId){
+  const g = draftsCache[draftId];
+  if(!g) return;
+  if(!confirm(`Discard the unsent order draft for ${g.sellerName} (labels of ${dayLabel(g.date)})? No order is sent. Your stock stays as it is — those labels were dispatched.`)) return;
+  await Promise.all((g.pageHashes || []).map(hash =>
+    db.collection('users').doc(currentUser.uid).collection('processedLabels').doc(hash)
+      .set({ orderId: null, discarded: true, processedAt: firebase.firestore.FieldValue.serverTimestamp() })));
+  await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').doc(g.id).delete();
+  delete draftsCache[draftId];
+  renderSummary();
+}
 async function sendOrderNotification(toEmail, toName, subject, headline, detailLine, viewLink){
   if(!toEmail) return { sent: false, reason: 'no_recipient_email' };
   if(!EMAILJS_ORDER_TEMPLATE_ID || EMAILJS_ORDER_TEMPLATE_ID.indexOf('PASTE_YOUR') === 0) return { sent: false, reason: 'not_configured' };
