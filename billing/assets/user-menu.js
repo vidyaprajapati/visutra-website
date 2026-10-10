@@ -30,7 +30,15 @@ async function vtLoadApprovalBar(user, base) {
     db.collection('users').doc(user.uid).collection('notifications').where('read', '==', false).get()
       .then(s => s.docs.map(d => ({ id: d.id, ...d.data() }))).catch(() => [])
   ]);
+  // label orders from an earlier day that were never sent (Label-Based Auto Order)
+  let oldDrafts = [];
+  try {
+    const d = new Date(), today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const ds = await db.collection('users').doc(user.uid).collection('labelOrderDrafts').get();
+    oldDrafts = ds.docs.map(x => x.data()).filter(x => x.date && x.date < today);
+  } catch (e) {}
   const parts = [], buyerCount = invDelForBuyer.length + payDelForBuyer.length, sellerCount = invDelForSeller.length + payConfirm.length + payDelForSeller.length;
+  if (oldDrafts.length) parts.push(`${oldDrafts.length} label order(s) not sent yet (from ${[...new Set(oldDrafts.map(x => x.date))].sort().join(', ')})`);
   if (invDelForBuyer.length) parts.push(`${invDelForBuyer.length} invoice deletion request(s) from sellers`);
   if (payDelForBuyer.length) parts.push(`${payDelForBuyer.length} payment deletion request(s) from sellers`);
   if (invDelForSeller.length) parts.push(`${invDelForSeller.length} invoice deletion request(s) from buyers`);
@@ -48,6 +56,7 @@ async function vtLoadApprovalBar(user, base) {
   }
   const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const links = [];
+  if (oldDrafts.length) links.push(`<a class="btn small primary" href="${base}buyer/label-order.html">Send label order</a>`);
   if (buyerCount) links.push(`<a class="btn small primary" href="${base}buyer/dashboard.html">Review as buyer</a>`);
   if (sellerCount) links.push(`<a class="btn small primary" href="${base}app.html#customer-dashboard">Review as seller</a>`);
   bar.innerHTML =
