@@ -109,7 +109,7 @@ function renderOrders(){
   const filter = document.getElementById('fStatus').value;
   const rows = filter ? ordersCache.filter(o => o.status === filter) : ordersCache;
   document.getElementById('ordersTable').innerHTML = rows.map(o => {
-    const itemsSummary = (o.items||[]).map(i => {
+    let itemsSummary = (o.items||[]).map(i => {
       const bd = i.marketplaceBreakdown;
       const bdText = bd && (bd.amazon || bd.meesho || bd.flipkart)
         ? ` <span style="color:var(--muted);font-size:11px">(Amazon ${bd.amazon||0} / Meesho ${bd.meesho||0} / Flipkart ${bd.flipkart||0})</span>` : '';
@@ -120,25 +120,32 @@ function renderOrders(){
     let actions = '';
     let missingWarning = '';
     if(o.status === 'PENDING'){
-      // Checked against your OWN products (no cross-account issue — this is
-      // your own data) so a genuinely unresolvable product shows up before
-      // Accept is even clicked, instead of only failing after the attempt.
-      // resolveOrderItemProductId already tries a name-match fallback, so
-      // this only flags items that don't resolve even that way.
-      const missingNames = (o.items||[]).filter(it => !resolveOrderItemProductId(it)).map(it => it.productName);
+      // Tick the items to accept: those ticked get the GST invoice + stock
+      // deduction; the rest move to a new pending order (accept later, or
+      // reject). Short-stock items start unticked; items missing from your
+      // Product Master can't be ticked.
+      const missingNames = [];
+      const itemRows = (o.items||[]).map((i, idx) => {
+        const bd = i.marketplaceBreakdown;
+        const bdText = bd && (bd.amazon || bd.meesho || bd.flipkart)
+          ? ` <span style="color:var(--muted);font-size:11px">(Amazon ${bd.amazon||0} / Meesho ${bd.meesho||0} / Flipkart ${bd.flipkart||0})</span>` : '';
+        const pid = resolveOrderItemProductId(i), p = pid ? productsCache.find(x => x.id === pid) : null;
+        if(!p) missingNames.push(i.productName);
+        const avail = p ? (Number(p.stock) || 0) : null;
+        const ok = !!p && p.active !== false && avail >= i.qty;
+        const stockTxt = !p ? 'not in Product Master' : p.active === false ? 'inactive' : `stock ${avail}${avail < i.qty ? ' — short by ' + (i.qty - avail) : ''}`;
+        return `<label class="oi-row" style="display:flex;gap:8px;align-items:flex-start;margin:3px 0;cursor:${p ? 'pointer' : 'not-allowed'}">
+          <input type="checkbox" class="oi-chk" data-order="${o.id}" data-idx="${idx}" ${ok ? 'checked' : ''} ${p ? '' : 'disabled'} onchange="onOrderItemTick('${o.id}')" style="width:auto;margin-top:3px">
+          <span>${esc(i.productName)} × ${i.qty}${bdText} <span style="font-size:11px;color:${ok ? '#0E7C6B' : 'var(--paprika-dark)'}">· ${esc(stockTxt)}</span></span></label>`;
+      });
+      itemsSummary = `<label class="oi-all" style="display:flex;gap:8px;align-items:center;font-weight:700;font-size:12.5px;border-bottom:1px solid var(--line,#eee);padding-bottom:4px;margin-bottom:4px;cursor:pointer">
+          <input type="checkbox" class="oi-all-chk" data-order="${o.id}" onchange="toggleAllOrderItems('${o.id}', this.checked)" style="width:auto"> Select all</label>` + itemRows.join('');
       if(missingNames.length){
-        missingWarning = `<div style="color:var(--paprika-dark);margin-top:6px;font-size:13px">${esc(missingNames.join(', '))} — no longer in your Product Master. Accepting will fail until this is fixed on the buyer's end; reject with a note so they know to re-map it.</div>`;
-        const rejectReason = `${missingNames.join(', ')} no longer exists in my catalog — please re-check your SKU mapping for this item and resend the order.`;
-        // JSON.stringify safely escapes quotes/backslashes for the JS string
-        // literal; esc() then HTML-escapes the whole thing (including that
-        // JSON string's own wrapping quotes) so it survives sitting inside
-        // this double-quoted onclick="..." attribute intact either way.
-        actions = `<button class="btn small primary" disabled title="Can't accept — a product on this order no longer exists">Accept</button>
-                   <button class="btn small danger" onclick="rejectOrder('${o.id}', ${esc(JSON.stringify(rejectReason))})">Reject</button>`;
-      } else {
-        actions = `<button class="btn small primary" onclick="acceptOrder('${o.id}')">Accept</button>
-                   <button class="btn small danger" onclick="rejectOrder('${o.id}')">Reject</button>`;
+        missingWarning = `<div style="color:var(--paprika-dark);margin-top:6px;font-size:13px">${esc(missingNames.join(', '))} — no longer in your Product Master, so it can't be ticked. Accept the other items, or reject the order.</div>`;
       }
+      const rejectReason = missingNames.length ? `${missingNames.join(', ')} no longer exists in my catalog — please re-check your SKU mapping for this item and resend the order.` : '';
+      actions = `<button class="btn small primary" id="oi-accept-${o.id}" onclick="acceptOrder('${o.id}')">Accept selected (<span id="oi-count-${o.id}">0</span>)</button>
+                 <button class="btn small danger" onclick="rejectOrder('${o.id}'${rejectReason ? ', ' + esc(JSON.stringify(rejectReason)) : ''})">Reject all</button>`;
     } else if(o.status === 'ACCEPTED' && o.invoiceId){
       actions = `<a class="btn small" href="../invoice-view.html?id=${o.invoiceId}" target="_blank">View Invoice</a>`;
     } else if(o.status === 'REJECTED'){
@@ -155,10 +162,25 @@ function renderOrders(){
         actions += ` <span class="badge">Stock reversed</span>`;
       }
     }
-    return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}</td><td>${esc(o.buyerBusiness?.businessName || o.buyerEmail)}</td><td>${date}</td>
+    const splitNote = o.splitFromOrderId ? `<div style="font-size:11px;color:var(--muted)">remaining items of a partly accepted order</div>`
+      : (o.splitInto ? `<div style="font-size:11px;color:var(--muted)">partly accepted — the rest moved to a new pending order</div>` : '');
+    return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}${splitNote}</td><td>${esc(o.buyerBusiness?.businessName || o.buyerEmail)}</td><td>${date}</td>
       <td>${itemsSummary}</td><td><span class="badge">${esc(o.status)}</span></td>
       <td class="row-actions">${actions}${missingWarning}</td></tr>`;
   }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No orders here.</td></tr>';
+  rows.filter(o => o.status === 'PENDING').forEach(o => onOrderItemTick(o.id));
+}
+function orderTickBoxes(orderId){ return [...document.querySelectorAll(`.oi-chk[data-order="${orderId}"]`)]; }
+function onOrderItemTick(orderId){
+  const boxes = orderTickBoxes(orderId), usable = boxes.filter(b => !b.disabled), n = boxes.filter(b => b.checked).length;
+  const cnt = document.getElementById('oi-count-' + orderId); if(cnt) cnt.textContent = n;
+  const btn = document.getElementById('oi-accept-' + orderId); if(btn) btn.disabled = n === 0;
+  const all = document.querySelector(`.oi-all-chk[data-order="${orderId}"]`);
+  if(all){ all.checked = usable.length > 0 && usable.every(b => b.checked); all.indeterminate = n > 0 && !all.checked; all.disabled = !usable.length; }
+}
+function toggleAllOrderItems(orderId, on){
+  orderTickBoxes(orderId).forEach(b => { if(!b.disabled) b.checked = on; });
+  onOrderItemTick(orderId);
 }
 
 function currentFY(date){
@@ -169,7 +191,13 @@ function currentFY(date){
 }
 
 async function acceptOrder(orderId){
-  if(!confirm('Accept this order? This generates a GST invoice and deducts inventory — it cannot be undone.')) return;
+  const ticked = orderTickBoxes(orderId).filter(b => b.checked).map(b => Number(b.dataset.idx));
+  const total = orderTickBoxes(orderId).length;
+  if(!ticked.length){ showMsg('pageMsg', 'Tick at least one item to accept.', false); return; }
+  const partial = ticked.length < total;
+  if(!confirm(partial
+    ? `Accept ${ticked.length} of ${total} items? A GST invoice is generated and stock deducted for the ticked items only. The other ${total - ticked.length} item(s) move to a new pending order you can accept later or reject. This cannot be undone.`
+    : 'Accept all items of this order? This generates a GST invoice and deducts inventory — it cannot be undone.')) return;
   if(!businessData.businessName || !businessData.gstin || !businessData.stateCode){
     showMsg('pageMsg', 'Complete your Business Profile before accepting orders.', false);
     return;
@@ -179,6 +207,8 @@ async function acceptOrder(orderId){
   const invoiceRef = db.collection('users').doc(currentUser.uid).collection('invoices').doc();
   const publicInvoiceRef = db.collection('public_invoices').doc(invoiceRef.id);
   const counterRef = db.collection('users').doc(currentUser.uid).collection('meta').doc('invoiceCounter');
+  const restRef = db.collection('marketplaceOrders').doc();   // the not-ticked items, if any
+  let restNumber = '';
   let emailPayload = null; // filled inside the transaction once we know the final numbers, sent after it commits
   let selfHealedNames = []; // reset at the top of every transaction attempt below — Firestore can retry this callback on contention, and a stale array from an earlier attempt would double-report
 
@@ -200,8 +230,12 @@ async function acceptOrder(orderId){
       // (loaded fresh at page load) purely to pick WHICH id to read; the
       // actual price/stock/GST used below always comes from tx.get() on
       // that id, never from the outside cache.
+      const allItems = order.items || [];
+      if(ticked.some(i => i >= allItems.length)) throw new Error('This order changed since the page loaded — refresh and tick again.');
+      const chosen = allItems.filter((_, i) => ticked.includes(i));
+      const rest = allItems.filter((_, i) => !ticked.includes(i));
       const productReads = [];
-      for(const item of (order.items || [])){
+      for(const item of chosen){
         const resolvedId = resolveOrderItemProductId(item);
         const pRef = db.collection('users').doc(currentUser.uid).collection('products').doc(resolvedId || item.productId);
         productReads.push({ item, resolvedId, ref: pRef, snap: await tx.get(pRef) });
@@ -277,7 +311,20 @@ async function acceptOrder(orderId){
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
       }
+      // Not-ticked items → a new pending order for the same buyer (accept later / reject)
+      let splitFields = {};
+      if(rest.length){
+        const base = order.baseOrderNumber || order.orderNumber, part = (Number(order.partNo) || 1) + 1;
+        restNumber = `${base}-P${part}`;
+        const remainder = { ...order };
+        ['status', 'invoiceId', 'invoiceNo', 'invoiceDate', 'invoiceSummary', 'acceptedAt', 'updatedAt', 'originalItems', 'splitInto', 'buyerPurchaseId', 'buyerPurchaseCreatedAt', 'rejectionReason'].forEach(k => delete remainder[k]);
+        Object.assign(remainder, { items: rest, status: 'PENDING', splitFromOrderId: orderId, baseOrderNumber: base, partNo: part, orderNumber: restNumber,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+        tx.set(restRef, remainder);
+        splitFields = { originalItems: allItems, splitInto: restRef.id, baseOrderNumber: base, partNo: Number(order.partNo) || 1 };
+      }
       tx.update(orderRef, {
+        ...splitFields,
         status: 'ACCEPTED', invoiceId: invoiceRef.id, invoiceNo, invoiceDate: invoiceData.date,   // bill date → buyer's purchase, stock & GST
         items: acceptedItems,
         invoiceSummary: { subtotal, cgst, sgst, igst, grandTotal },
@@ -289,28 +336,32 @@ async function acceptOrder(orderId){
         toEmail: order.buyerEmail, toName: invoiceData.customer.name,
         subject: `Order Accepted – VISUTRA – Order #${order.orderNumber}`,
         headline: `Your order to ${businessData.businessName} has been accepted — your GST bill is ready.`,
-        detailLine: `Invoice ${invoiceNo} — Total ₹${grandTotal.toFixed(2)}. Opening the link below downloads the bill automatically — no sign-in needed.`,
+        detailLine: `Invoice ${invoiceNo} — Total ₹${grandTotal.toFixed(2)}.${restNumber ? ` Some items couldn't be supplied yet — they stay pending as order ${restNumber}.` : ''} Opening the link below downloads the bill automatically — no sign-in needed.`,
         viewLink: `${window.location.origin}/billing/invoice-view.html?id=${invoiceRef.id}`
       };
     });
 
+    // keep the "rest is pending" information in every message shown after this
+    const restNote = restNumber ? ` Items not ticked are pending as order ${restNumber}.` : '';
     const healedNote = selfHealedNames.length
       ? ` (Note: ${selfHealedNames.join(', ')} matched by name to a different product ID than this order originally pointed to — likely re-created at some point. Worth telling the buyer to refresh their SKU mapping so future orders reference the current one directly.)`
       : '';
-    showMsg('pageMsg', 'Order accepted — invoice generated and stock updated. Sending buyer email…' + healedNote, true);
+    showMsg('pageMsg', (restNumber
+      ? `Accepted the ticked items — invoice generated and stock updated. The other items are now pending as order ${restNumber}. Sending buyer email…`
+      : 'Order accepted — invoice generated and stock updated. Sending buyer email…') + healedNote, true);
     if(emailPayload){
       const emailResult = await sendOrderNotification(emailPayload.toEmail, emailPayload.toName, emailPayload.subject, emailPayload.headline, emailPayload.detailLine, emailPayload.viewLink);
       if(emailResult.sent){
         await db.collection('users').doc(currentUser.uid).collection('invoices').doc(invoiceRef.id).update({ emailSent: true }).catch(()=>{});
         await db.collection('public_invoices').doc(invoiceRef.id).update({ emailSent: true }).catch(()=>{});
-        showMsg('pageMsg', 'Order accepted — invoice generated, stock updated, and the buyer has been emailed the bill.', true);
+        showMsg('pageMsg', 'Order accepted — invoice generated, stock updated, and the buyer has been emailed the bill.' + restNote, true);
       } else if(emailResult.reason === 'not_configured'){
-        showMsg('pageMsg', 'Order accepted and invoice generated — but no email was sent because EMAILJS_ORDER_TEMPLATE_ID in assets/firebase-config.js is still the placeholder. See BILLING-SETUP.md "Order email notifications" to set this up (one-time). The buyer can still be sent the invoice link manually for now.', false);
+        showMsg('pageMsg', restNote.trim() + ' Order accepted and invoice generated — but no email was sent because EMAILJS_ORDER_TEMPLATE_ID in assets/firebase-config.js is still the placeholder. See BILLING-SETUP.md "Order email notifications" to set this up (one-time). The buyer can still be sent the invoice link manually for now.', false);
       } else {
         showMsg('pageMsg', `Order accepted and invoice generated — but the email to the buyer failed to send: ${emailResult.error}`, false);
       }
     } else {
-      showMsg('pageMsg', 'Order accepted — invoice generated and stock updated.', true);
+      showMsg('pageMsg', 'Order accepted — invoice generated and stock updated.' + restNote, true);
     }
     loadOrders();
   }catch(err){
