@@ -203,6 +203,13 @@ begin
       if not coalesce((
         (n->>'buyerUid' = me and n->>'status' = 'PENDING' and public.vt_link_active(n->>'sellerUid', me))
         or (n->>'sellerUid' = me and n->>'status' = 'PENDING_BUYER_CONFIRMATION' and public.vt_link_active(me, n->>'buyerUid'))
+        -- partly accepted order: the items the seller did NOT tick move to a
+        -- new pending order — only as the remainder of an order between the
+        -- same seller and buyer
+        or (n->>'sellerUid' = me and n->>'status' = 'PENDING' and coalesce(n->>'splitFromOrderId', '') <> ''
+            and public.vt_link_active(me, n->>'buyerUid')
+            and exists (select 1 from public.docs d where d.path = 'marketplaceOrders/' || (n->>'splitFromOrderId')
+                        and d.data->>'sellerUid' = me and d.data->>'buyerUid' = n->>'buyerUid'))
       ), false) then raise exception 'VT_DENIED: marketplaceOrders create'; end if;
     elsif tg_op = 'UPDATE' then
       ch := public.vt_changed_keys(o, n);
