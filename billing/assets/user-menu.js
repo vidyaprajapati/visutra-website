@@ -266,6 +266,18 @@ async function vtInvoiceDateForOrder(order) {
   return order.acceptedAt && order.acceptedAt.toDate ? order.acceptedAt.toDate().toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
 }
 async function vtEnsureBuyerPurchaseForOrder(uid, order, skuMappings) {
+  /* ONCE per order, whatever runs it (the background check on every page, the
+     Dashboard, My Orders' live update — possibly at the same moment): the
+     purchase has a FIXED id per order, and claiming the order, creating the
+     purchase, adding stock and logging the movement happen in ONE
+     all-or-nothing step. A second attempt finds it already done (or is
+     refused by the database and re-checks) — so stock is never added twice.
+     (Before, each copy added stock first and marked the order last, so two
+     running together both added it: −49 + 49 + 49 = 49.) */
+  if (!skuMappings) {
+    const ms = await db.collection('users').doc(uid).collection('buyerSkuMappings').get();
+    skuMappings = ms.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
   const supplierId = await vtEnsureSupplierForSeller(uid, order.sellerUid, order.sellerName);
   const items = [];
   const stockIns = []; // {mappingId, productName, qty} — applied to buyerSkuMappings, never to products
@@ -297,30 +309,30 @@ async function vtEnsureBuyerPurchaseForOrder(uid, order, skuMappings) {
     autoCreatedFromOrder: true,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  const purRef = await db.collection('users').doc(uid).collection('buyerPurchases').add(purchaseData);
-
-  for (const s of stockIns) {
-    await db.collection('users').doc(uid).collection('buyerSkuMappings').doc(s.mappingId).update({
-      stock: firebase.firestore.FieldValue.increment(s.qty),
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    await db.collection('users').doc(uid).collection('buyerStockMovements').add({
-      type: 'purchase-in', mappingId: s.mappingId, productName: s.productName, qty: s.qty, date: purchaseData.date,
-      note: 'Purchase from ' + order.sellerName + ' (order ' + (order.orderNumber || '') + ')',
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-  }
-
-  // Same narrow, rule-guarded update the per-page copies use: a buyer may
-  // only set buyerPurchaseId once, on an already-ACCEPTED order — see
-  // firestore.rules — which is what stops this sweep (and the other two
-  // copies of this logic) from ever double-creating a purchase for one order.
-  await db.collection('marketplaceOrders').doc(order.id).update({
-    buyerPurchaseId: purRef.id,
-    buyerPurchaseCreatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  const orderRef = db.collection('marketplaceOrders').doc(order.id);
+  const purRef = db.collection('users').doc(uid).collection('buyerPurchases').doc('ord-' + order.id);
+  const created = await db.runTransaction(async tx => {
+    const os = await tx.get(orderRef);
+    const ps = await tx.get(purRef);
+    if (!os.exists) return false;
+    const o = os.data();
+    if (o.status !== 'ACCEPTED' || o.buyerPurchaseId || ps.exists) return false;   // already done elsewhere
+    tx.set(purRef, purchaseData);
+    for (const st of stockIns) {
+      tx.update(db.collection('users').doc(uid).collection('buyerSkuMappings').doc(st.mappingId), {
+        stock: firebase.firestore.FieldValue.increment(st.qty),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      tx.set(db.collection('users').doc(uid).collection('buyerStockMovements').doc(), {
+        type: 'purchase-in', mappingId: st.mappingId, productName: st.productName, qty: st.qty, date: purchaseData.date,
+        note: 'Purchase from ' + order.sellerName + ' (order ' + (order.orderNumber || '') + ')',
+        orderId: order.id, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    tx.update(orderRef, { buyerPurchaseId: purRef.id, buyerPurchaseCreatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    return true;
   });
-
-  return { unmappedNames };
+  return { unmappedNames: created ? unmappedNames : [], created };
 }
 
 /* GST details of a linked partner (seller ↔ buyer) — GSTIN, state, address. */
