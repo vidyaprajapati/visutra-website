@@ -668,6 +668,28 @@ begin
     end loop;
     delete from public.docs where path = r.path;
   end loop;
+  -- (a2) the SAME order turned into two purchases (two pages ran at once):
+  --      keep the one the order points to, remove the others, take back their stock
+  for r in
+    select p.path, p.data, split_part(p.path, '/', 2) as uid from public.docs p
+    join public.docs o on o.path = 'marketplaceOrders/' || (p.data->>'orderId')
+    where p.path ~ '^users/[^/]+/buyerPurchases/' and p.data->>'autoCreatedFromOrder' = 'true'
+      and coalesce(o.data->>'buyerPurchaseId', '') <> ''
+      and split_part(p.path, '/', 4) <> o.data->>'buyerPurchaseId'
+      and exists (select 1 from public.docs k where k.path = 'users/' || split_part(p.path, '/', 2) || '/buyerPurchases/' || (o.data->>'buyerPurchaseId'))
+  loop
+    buyer := r.uid;
+    for it in select * from jsonb_array_elements(coalesce(r.data->'items', '[]'::jsonb)) loop
+      q := coalesce((it->>'qty')::numeric, 0);
+      if coalesce(it->>'linkedSkuMappingId', '') <> '' and q <> 0 then
+        perform public.vt_bump('users/' || buyer || '/buyerSkuMappings/' || (it->>'linkedSkuMappingId'), -q);
+        perform public.vt_new_doc('users/' || buyer || '/buyerStockMovements', jsonb_build_object('type', 'adjustment', 'mappingId', it->>'linkedSkuMappingId',
+          'productName', it->>'name', 'qty', -q, 'date', coalesce(r.data->>'date', public.vt_today()),
+          'note', 'Removed duplicate purchase of order ' || coalesce(r.data->>'orderNumber', '') || ' (it was counted twice)', 'createdAt', public.vt_now_ts()));
+      end if;
+    end loop;
+    delete from public.docs where path = r.path;
+  end loop;
   -- (b) purchases made from an order: move them (and their stock movements)
   --     from the acceptance date to the seller's INVOICE date
   for r in
