@@ -928,7 +928,35 @@
     });
   }
 
-  /* entries: [{ platform, month, lines, docs, b2b, cdnr }] (one per platform & month)
+  /* Compact form for saving: lines summed per state / rate / HSN / registered
+     (raw sums, no rounding — totals identical) + Table 13 as series. */
+  function compactEntry(en) {
+    const by = {};
+    (en.lines || []).forEach(l => {
+      const k = [l.pos, l.rt, l.hsn, l.registered ? 1 : 0].join('|');
+      const r = by[k] = by[k] || { platform: l.platform, etin: l.etin, pos: l.pos, rt: l.rt, hsn: l.hsn, registered: !!l.registered, txval: 0, iamt: 0, camt: 0, samt: 0, qty: 0 };
+      r.txval += l.txval; r.iamt += l.iamt; r.camt += l.camt; r.samt += l.samt; r.qty += l.qty;
+    });
+    const ser = {}; ['inv', 'cn', 'dn'].forEach(k => { ser[k] = en.docSeries ? (en.docSeries[k] || []) : platformDocSeries(((en.docs || {})[k]) || []); });
+    return { platform: en.platform, month: en.month, etin: en.etin, lines: Object.values(by), docSeries: ser, b2b: en.b2b || [], cdnr: en.cdnr || [], info: en.info || {} };
+  }
+  // Join series lists that may share a prefix (e.g. Amazon B2C + B2B "IN-" invoices of one month)
+  function joinSeries(lists) {
+    const out = [], by = {};
+    const prefix = n => { const m = String(n).match(/^(.*?)(\d+)$/); return m ? m[1] : String(n); };
+    const numOf = n => { const m = String(n).match(/(\d+)$/); return m ? parseInt(m[1], 10) : 0; };
+    lists.forEach(list => (list || []).forEach(sr => {
+      const p = prefix(sr.from);
+      if (!by[p]) { by[p] = Object.assign({}, sr); out.push(by[p]); return; }
+      const e = by[p];
+      if (numOf(sr.from) < numOf(e.from)) e.from = sr.from;
+      if (numOf(sr.to) > numOf(e.to)) e.to = sr.to;
+      e.totnum += sr.totnum; e.cancel += sr.cancel; e.net_issue += sr.net_issue;
+    }));
+    return out;
+  }
+
+  /* entries: [{ platform, month, lines, docs | docSeries, b2b, cdnr }] (one per platform & month)
      → merged into a buildGstr1() result `res` (in place) */
   function mergePlatformData(res, entries, opts) {
     const J = res.json, R = res.rows, seller = String(opts.stateCode || '').padStart(2, '0');
@@ -1020,7 +1048,7 @@
     J.doc_issue = J.doc_issue || { doc_det: [] };
     [[1, 'inv', 'Invoices for outward supply'], [5, 'cn', 'Credit Note'], [4, 'dn', 'Debit Note']].forEach(([num, key, label]) => {
       let det = J.doc_issue.doc_det.find(d => d.doc_num === num);
-      entries.forEach(en => platformDocSeries(en.docs[key] || []).forEach(sr => {
+      entries.forEach(en => (en.docSeries ? (en.docSeries[key] || []) : platformDocSeries((en.docs || {})[key] || [])).forEach(sr => {
         if (!det) J.doc_issue.doc_det.push(det = { doc_num: num, doc_typ: label, docs: [] });
         det.docs.push(Object.assign({ num: det.docs.length + 1 }, sr));
         R.docs.push([label, sr.from, sr.to, sr.totnum, sr.cancel]);
@@ -1064,6 +1092,6 @@
     validate, buildGstr1, gstr1Workbook, buildGstr3b, gstr3bWorkbook, netPayable,
     parse2bJson, parse2bWorkbook, reconcile, downloadJson, isReadyWorkbook, parseReadyWorkbook, mergeReadyReport,
     isFlipkartGstWorkbook, parseFlipkartGstWorkbook, stateCodeOf, gstr3bFromGstr1,
-    ECO, ecoGstin, gstinValid, gstinCheckChar, stateCodeLoose, rowsToObjects, parseMeesho, parseAmazonMtr, parseFlipkart, platformDocSeries, mergePlatformData
+    ECO, ecoGstin, gstinValid, gstinCheckChar, stateCodeLoose, rowsToObjects, parseMeesho, parseAmazonMtr, parseFlipkart, platformDocSeries, mergePlatformData, compactEntry, joinSeries
   };
 })(typeof window !== 'undefined' ? window : globalThis);
