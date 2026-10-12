@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../billing/assets/vt-firebase-compat.js"></script>
+<script src="../billing/assets/firebase-config.js"></script>
+<script src="../billing/assets/user-menu.js"></script>
+<script src="assets/auth-guard.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GST Online Seller — GSTR-1 from Meesho, Amazon & Flipkart | Visutra</title>
+<meta name="description" content="Import your Meesho, Amazon and Flipkart GST reports month by month, check them against the GST portal's TCS data, review every table and download a portal-ready GSTR-1 (JSON / Excel).">
+<link href="https://fonts.bunny.net/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{--navy:#1E2A4F;--blue:#2F6FED;--blue-2:#1D4ED8;--blue-soft:#EAF1FE;--ink:#1F2937;--muted:#6B7280;--line:#E7EAF0;--bg:#F5F7FB;--green:#0FB98A;--green-dk:#0E9F77;--red:#E11D48;--amber:#D97706}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--bg)}
+  a{color:var(--blue-2)}
+  .gs-hero{background:var(--navy) radial-gradient(circle at 80% 10%,rgba(255,255,255,.05),transparent 40%);color:#fff;padding:22px 30px 120px}
+  .gs-hero h1{margin:0 0 6px;font-size:34px;font-weight:800;letter-spacing:-.01em}
+  .gs-crumb{font-size:16px}.gs-crumb a{color:#7AA7FF;text-decoration:none}.gs-crumb span{color:#9CA3AF;margin:0 8px}
+  .gs-wrap{display:grid;grid-template-columns:300px 1fr;gap:28px;max-width:1500px;margin:-96px auto 40px;padding:0 24px}
+  .gs-side{background:#fff;border-radius:18px;box-shadow:0 8px 30px rgba(15,23,42,.08);padding:26px 22px;align-self:start;position:sticky;top:16px}
+  .gs-side .back{color:var(--muted);font-size:15px;text-decoration:none;display:inline-flex;gap:8px;align-items:center}
+  .gs-side h2{font-size:19px;margin:14px 0 18px;padding-bottom:18px;border-bottom:1px solid var(--line)}
+  .gs-nav{display:flex;flex-direction:column;gap:6px}
+  .gs-nav button{all:unset;cursor:pointer;display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:12px;color:#4B5563;font-size:16px}
+  .gs-nav button i{font-size:19px;color:#6B7280}
+  .gs-nav button.on{background:var(--blue-soft);color:var(--blue-2);font-weight:600}.gs-nav button.on i{color:var(--blue-2)}
+  .gs-nav button:hover:not(.on){background:#F3F4F6}
+  .gs-main{min-width:0}
+  .gs-card{background:#fff;border-radius:18px;box-shadow:0 8px 30px rgba(15,23,42,.06);margin-bottom:26px;overflow:hidden}
+  .gs-card-h{display:flex;align-items:center;gap:16px;padding:22px 28px;border-bottom:1px solid var(--line)}
+  .gs-card-h h3{margin:0;font-size:20px}.gs-card-h p{margin:4px 0 0;color:var(--muted)}
+  .gs-card-h .sp{flex:1}
+  .gs-card-b{padding:26px 28px}
+  .gs-sec{display:none}.gs-sec.on{display:block}
+  .gs-panel{background:#F8FAFC;border:1px solid var(--line);border-radius:16px;padding:22px 24px}
+  .gs-grid2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px 22px;align-items:end}
+  .gs-lbl{display:block;font-size:12.5px;font-weight:700;letter-spacing:.05em;color:#4B5563;text-transform:uppercase;margin-bottom:8px}
+  .gs-in{display:flex;align-items:center;border:1px solid #DDE2EA;border-radius:12px;background:#fff;overflow:hidden;height:56px}
+  .gs-in i{padding:0 14px 0 18px;color:#6B7280;font-size:20px}
+  .gs-in input,.gs-in select{border:0;outline:0;font:500 17px Inter,sans-serif;flex:1;height:100%;background:transparent;min-width:0;padding-right:12px;color:var(--ink)}
+  .gs-in:focus-within{border-color:var(--blue);box-shadow:0 0 0 3px rgba(47,111,237,.15)}
+  .gs-seg{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .gs-seg button{height:56px;border-radius:12px;border:1px solid #DDE2EA;background:#fff;font:600 17px Inter,system-ui,-apple-system,'Segoe UI',sans-serif;color:#4B5563;cursor:pointer}
+  .gs-seg button.on{background:#5B8DEF;border-color:#5B8DEF;color:#fff}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:12px;border:1px solid transparent;font:600 15px Inter,system-ui,-apple-system,'Segoe UI',sans-serif;cursor:pointer;padding:10px 18px;text-decoration:none}
+  .btn-blue{background:var(--blue);color:#fff}.btn-blue:hover{background:var(--blue-2)}
+  .btn-big{height:60px;font-size:19px;width:100%}
+  .btn-green{background:var(--green);color:#fff}.btn-green:hover{background:var(--green-dk)}
+  .btn-ghost{background:#fff;border-color:#DDE2EA;color:var(--blue-2)}
+  .btn-danger-o{background:#fff;border-color:#F4B6C6;color:var(--red);padding:10px 14px}
+  .btn-amber-o{background:#fff;border-color:#F7D9A8;color:var(--amber);padding:10px 14px}
+  .btn[disabled]{opacity:.55;cursor:not-allowed}
+  .gs-selected{margin-top:22px;display:flex;align-items:center;gap:16px;background:#EEF4FF;border:1px solid #CFE0FF;border-radius:16px;padding:18px 22px}
+  .gs-selected h4{margin:0;font-size:21px;display:flex;align-items:center;gap:8px}.gs-selected h4 i{color:var(--blue)}
+  .gs-selected p{margin:4px 0 0;color:#4B5563}
+  .gs-saved{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:22px}
+  .gs-sv{border:1px solid var(--line);border-radius:16px;padding:22px 24px;box-shadow:0 2px 10px rgba(15,23,42,.03)}
+  .gs-sv h5{margin:0 0 6px;font-size:20px;letter-spacing:.02em}.gs-sv small{color:var(--muted)}
+  .gs-sv .row{display:flex;gap:10px;margin-top:14px}.gs-sv .row .btn-blue{flex:1}
+  .gs-slots{min-width:250px;font-size:14px;color:#374151}.gs-slots .bar{height:6px;background:#E5E7EB;border-radius:9px;margin:8px 0 6px;overflow:hidden}.gs-slots .bar b{display:block;height:100%;background:var(--blue-2)}
+  .gs-steps{display:flex;justify-content:center;align-items:center;gap:14px;margin:16px 0 28px;flex-wrap:wrap}
+  .gs-steps span{display:inline-flex;align-items:center;gap:8px;color:#6B7280;padding:8px 16px;border-radius:999px;font-weight:500}
+  .gs-steps span.on{background:var(--blue-soft);color:var(--blue-2);font-weight:600}
+  .gs-steps span.done{color:var(--green-dk)}
+  .gs-steps span.ln{width:34px;height:1px;background:#D1D5DB;padding:0;border-radius:0}
+  .gs-empty{text-align:center;padding:10px 0 20px}
+  .gs-empty .ic{width:108px;height:108px;border-radius:50%;background:var(--blue-soft);display:inline-flex;align-items:center;justify-content:center;font-size:44px;color:var(--blue-2)}
+  .gs-empty h4{font-size:26px;margin:20px 0 8px}.gs-empty p{color:#4B5563;font-size:17px}
+  .gs-help{border-top:1px solid var(--line);margin-top:28px;padding-top:22px;text-align:center;color:#6B7280}
+  .gs-stat{border:1px solid var(--line);border-radius:12px;padding:8px 18px;text-align:center;background:#FAFBFC}
+  .gs-stat small{display:block;color:var(--muted);font-size:13px}.gs-stat b{font-size:21px}
+  .gs-tools{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .gs-search{flex:1;min-width:240px;display:flex;align-items:center;border:1px solid #DDE2EA;border-radius:12px;height:52px;background:#F8FAFC}
+  .gs-search i{padding:0 12px 0 18px;color:#9CA3AF;font-size:19px}.gs-search input{border:0;outline:0;background:transparent;flex:1;font:16px Inter,system-ui,-apple-system,'Segoe UI',sans-serif;height:100%}
+  .chip{border:0;border-radius:10px;padding:12px 20px;font:600 16px Inter,system-ui,-apple-system,'Segoe UI',sans-serif;background:#F1F5F9;color:#475569;cursor:pointer}.chip.on{background:var(--blue-2);color:#fff}
+  .gs-warn{color:#F59E0B;margin:20px 0 6px;font-size:16px}
+  .gs-sep{display:flex;align-items:center;gap:14px;color:#64748B;font-weight:700;letter-spacing:.06em;font-size:14px;margin:18px 0}
+  .gs-sep:before,.gs-sep:after{content:"";flex:1;height:1px;background:var(--line)}
+  .gs-pf{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:26px}
+  .pf{position:relative;border:1px solid var(--line);border-radius:18px;padding:30px 22px 24px;text-align:center;background:#fff;box-shadow:0 2px 12px rgba(15,23,42,.04)}
+  .pf.done{border:2px solid var(--green-dk)}
+  .pf .tick{position:absolute;top:14px;right:14px;width:30px;height:30px;border-radius:50%;background:#E7F8F1;color:var(--green-dk);display:none;align-items:center;justify-content:center;font-size:18px}.pf.done .tick{display:flex}
+  .pf .logo{width:88px;height:88px;margin:0 auto 10px;border-radius:18px;background:#F8FAFC;display:flex;align-items:center;justify-content:center}
+  .pf .logo b{width:62px;height:62px;border-radius:14px;display:flex;align-items:center;justify-content:center;font:800 32px/1 Inter,system-ui,-apple-system,'Segoe UI',sans-serif;color:#fff}
+  .pf h5{margin:6px 0;font-size:22px}
+  .pf .bd{display:inline-block;font-size:13px;font-weight:700;background:#DCFCE7;color:#166534;border-radius:8px;padding:3px 10px;margin-bottom:18px}
+  .pf .acts{display:flex;gap:10px}.pf .acts .btn{height:58px;font-size:17px}.pf .acts .main{flex:1}
+  .pf.soon{opacity:.75}
+  .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:26px}
+  @media (max-width:1250px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media (max-width:600px){.kpis{grid-template-columns:1fr}}
+  .kpi>div{min-width:0}.kpi b{display:block;white-space:nowrap;font-size:clamp(16px,1.25vw,20px);letter-spacing:-.01em}
+  .kpi{border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;gap:12px;align-items:center;box-shadow:0 2px 10px rgba(15,23,42,.03)}
+  .kpi .ic{width:44px;height:44px;flex:none;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:24px}
+  .kpi small{display:block;font-size:13px;font-weight:700;letter-spacing:.06em;color:#6B7280;text-transform:uppercase}
+  .tblc{border:1px solid var(--line);border-radius:16px;overflow:hidden;margin-bottom:26px}
+  .tblc-h{display:flex;align-items:center;gap:14px;padding:16px 24px;background:#F8FAFC;border-bottom:1px solid var(--line)}
+  .tblc-h h4{margin:0;font-size:21px;font-weight:600;color:#4B5563}.tblc-h .sp{flex:1}.tblc-h .tx{color:#6B7280}.tblc-h .tx b{color:#15803D;font-size:21px}
+  .tblc-h .lg{width:42px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;font:800 22px Inter,system-ui,-apple-system,'Segoe UI',sans-serif;color:#fff}
+  table.gt{width:100%;border-collapse:collapse;font-size:16px}
+  table.gt th{background:#F3F6FA;font-weight:500;text-align:right;padding:14px 20px;color:#374151;font-size:15px}
+  table.gt td{padding:15px 20px;text-align:right;border-top:1px solid var(--line)}
+  table.gt th:first-child,table.gt td:first-child{text-align:left}
+  table.gt td.lnk{color:var(--blue);cursor:pointer}table.gt td.lnk:hover{text-decoration:underline}
+  table.gt td.dash{color:#9CA3AF}
+  table.gt tr.tot td{font-weight:700;background:#FAFBFC}
+  .diff-bad{color:var(--red);font-weight:700}.diff-ok{color:var(--green-dk);font-weight:600}
+  .sumc{border:1px solid var(--line);border-radius:16px;margin-bottom:22px;overflow:hidden}
+  .sumc-h{display:flex;align-items:center;gap:16px;padding:16px 22px;background:#F8FAFC;border-bottom:1px solid var(--line)}
+  .sumc-h .ic{width:50px;height:50px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px}
+  .sumc-h h4{margin:0;font-size:21px}.sumc-h p{margin:2px 0 0;color:var(--muted)}.sumc-h .sp{flex:1}
+  .edited{font-size:12px;font-weight:700;background:#FEF3C7;color:#92400E;border-radius:8px;padding:3px 8px;margin-left:8px}
+  .toggle{position:relative;width:64px;height:38px;border-radius:999px;background:#CBD5E1;border:0;cursor:pointer;flex:none}
+  .toggle:after{content:"";position:absolute;top:5px;left:5px;width:28px;height:28px;border-radius:50%;background:#fff;transition:.15s}
+  .toggle.on{background:var(--blue)}.toggle.on:after{left:31px}
+  .dl{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-top:18px}
+  .dl .btn{min-width:300px;height:110px;font-size:21px;border-radius:12px;flex-direction:row;gap:18px}
+  .dl .btn i{font-size:52px}
+  .dl .btn.rep{background:#fff;border:1px solid var(--line);color:var(--blue);min-width:220px}
+  .issues{border-radius:12px;padding:12px 16px;margin:0 0 18px;font-size:14.5px}
+  .issues.warn{background:#FFFBEB;border:1px solid #FDE68A}.issues.ok{background:#ECFDF5;border:1px solid #A7F3D0;color:#065F46}
+  .issues ul{margin:6px 0 0 18px;padding:0}
+  .drop{position:relative}
+  .drop-m{position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.12);z-index:20;min-width:220px;display:none}
+  .drop-m.on{display:block}.drop-m button{all:unset;display:block;padding:11px 16px;cursor:pointer;font-size:15px}.drop-m button:hover{background:#F3F4F6}
+  /* modal */
+  .gs-modal{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1100;display:none;align-items:flex-start;justify-content:center;padding:4vh 14px;overflow:auto}
+  .gs-modal.on{display:flex}
+  .gs-mbox{background:#fff;border-radius:20px;max-width:880px;width:100%;box-shadow:0 30px 80px rgba(0,0,0,.3)}
+  .gs-mbox.sm{max-width:620px}
+  .gs-mh{display:flex;gap:14px;align-items:center;padding:20px 24px;background:#F8FAFC;border-radius:20px 20px 0 0;border-bottom:1px solid var(--line)}
+  .gs-mh h4{margin:0;font-size:22px}.gs-mh .sub{color:#6B7280;font-size:14px}.gs-mh .x{all:unset;margin-left:auto;cursor:pointer;font-size:24px;color:#6B7280;padding:4px 8px}
+  .gs-mb{padding:20px 24px;max-height:70vh;overflow:auto}
+  .gs-mf{display:flex;justify-content:flex-end;gap:10px;padding:14px 24px;border-top:1px solid var(--line);background:#FAFAFA;border-radius:0 0 20px 20px}
+  .mtabs{display:flex;gap:6px;background:#F1F5F9;border-radius:14px;padding:6px;margin-bottom:18px}
+  .mtabs button{flex:1;border:0;background:transparent;border-radius:10px;padding:12px 6px;font:600 16px Inter,system-ui,-apple-system,'Segoe UI',sans-serif;color:#64748B;cursor:pointer}
+  .mtabs button.on{background:#fff;color:var(--blue-2);box-shadow:0 1px 4px rgba(0,0,0,.1)}
+  .mtabs .ok{color:var(--green-dk)}
+  .m-lbl{font-size:13px;font-weight:700;letter-spacing:.06em;color:#94A3B8;text-transform:uppercase;margin:12px 0 8px}.m-lbl em{color:#E11D48;font-style:normal}
+  .m-path{background:#EEF4FF;border:1px solid #D7E5FF;border-radius:12px;padding:12px 14px;font-size:15.5px;color:#1E293B}
+  .m-eco{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:14px}
+  .m-eco span{background:#F8FAFC;padding:12px 14px;color:#64748B;border-right:1px solid var(--line);white-space:nowrap}
+  .m-eco input{border:0;padding:12px 14px;font:600 16px ui-monospace,monospace;flex:1;min-width:0}
+  .m-slot{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:8px 0;align-items:stretch}
+  .m-slot .nm{background:#F8FAFC;padding:14px 16px;color:#334155;border-right:1px solid var(--line);min-width:200px;font-weight:600}
+  .m-slot input{padding:10px 12px;font-size:15px;flex:1;min-width:0}
+  .m-slot.done .nm{background:#ECFDF5;color:#065F46}
+  .m-note{color:#0891B2;font-size:15px;margin:4px 0 8px}
+  .m-ok{font-size:13.5px;color:#065F46;margin:-2px 0 6px 4px}
+  .m-sum{margin-top:14px;background:#F8FAFC;border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:14.5px}
+  .m-err{color:#B91C1C}
+  table.ed{width:100%;border-collapse:collapse;font-size:14px}
+  table.ed th{background:#F3F6FA;padding:8px;text-align:left;font-weight:600;position:sticky;top:0}
+  table.ed td{padding:4px;border-top:1px solid var(--line)}
+  table.ed input{width:100%;border:1px solid #DDE2EA;border-radius:8px;padding:7px 8px;font:14px Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
+  table.ed td.r{text-align:right}
+  @media (max-width:1000px){.gs-wrap{grid-template-columns:1fr;margin-top:-80px}.gs-side{position:static}.gs-grid2{grid-template-columns:1fr}.dl .btn{min-width:100%}}
+  @media print{.gs-hero,.gs-side,.no-print{display:none!important}.gs-wrap{display:block;margin:0}.gs-card{box-shadow:none}}
+</style>
+</head>
+<body>
+<div class="gs-hero">
+  <h1>GST Online Seller</h1>
+  <div class="gs-crumb"><a href="../index.html" style="color:#fff">Home</a><span>/</span><a href="tools-home.html">Dashboard</a><span>/</span><a href="#profile">GST Online Seller</a></div>
+</div>
+
+<div class="gs-wrap">
+  <aside class="gs-side no-print">
+    <a class="back" href="tools-home.html"><i class="bi bi-arrow-left"></i> Dashboard</a>
+    <h2>GST Online Seller</h2>
+    <nav class="gs-nav" id="gsNav">
+      <button data-sec="profile"><i class="bi bi-shop-window"></i> GST Profile</button>
+      <button data-sec="import"><i class="bi bi-cloud-arrow-up"></i> Import Data</button>
+      <button data-sec="manage"><i class="bi bi-table"></i> Manage Data</button>
+      <button data-sec="tcs"><i class="bi bi-arrow-left-right"></i> TCS Reconcile</button>
+      <button data-sec="report"><i class="bi bi-file-earmark-arrow-down"></i> GSTR1 Report</button>
+    </nav>
+  </aside>
+
+  <main class="gs-main">
+    <!-- ========== GST PROFILE ========== -->
+    <section class="gs-sec" id="sec-profile">
+      <div class="gs-card">
+        <div class="gs-card-h"><div><h3>GST profile</h3><p>Choose the GSTIN and the return period you want to work on</p></div></div>
+        <div class="gs-card-b">
+          <div class="gs-panel">
+            <div class="gs-grid2">
+              <div style="grid-column:span 2"><label class="gs-lbl" for="pGstin">GST Number</label>
+                <div class="gs-in"><i class="bi bi-person-vcard"></i><input id="pGstin" maxlength="15" placeholder="24ABCDE1234F1Z5" autocomplete="off"></div></div>
+              <div><label class="gs-lbl">Return Type</label>
+                <div class="gs-seg" id="pType"><button type="button" data-v="monthly">Monthly</button><button type="button" data-v="quarterly">Quarterly</button></div></div>
+              <div><label class="gs-lbl" for="pPeriod">Period</label>
+                <div class="gs-in"><i class="bi bi-calendar3"></i><select id="pPeriod"></select></div></div>
+              <div><label class="gs-lbl" for="pYear">Year</label>
+                <div class="gs-in"><i class="bi bi-calendar3"></i><select id="pYear"></select></div></div>
+              <div><button class="btn btn-blue btn-big" id="pSelectBtn"><i class="bi bi-check2"></i> Select GSTIN</button></div>
+            </div>
+            <div class="m-err" id="pErr" style="margin-top:10px"></div>
+          </div>
+          <div id="pSelected"></div>
+        </div>
+      </div>
+      <div class="gs-card">
+        <div class="gs-card-h"><div><h3>Saved GSTINs</h3><p>Pick a saved GSTIN to load it into the form above</p></div><div class="sp"></div>
+          <div class="gs-slots" id="pSlots"></div></div>
+        <div class="gs-card-b"><div class="gs-saved" id="pSaved"></div></div>
+      </div>
+    </section>
+
+    <!-- ========== IMPORT DATA ========== -->
+    <section class="gs-sec" id="sec-import">
+      <div class="gs-card">
+        <div class="gs-card-h"><div><h3>Import platform data</h3><p>Upload each marketplace's report, then review and generate GSTR-1</p></div><div class="sp"></div>
+          <div id="iStats" style="display:flex;gap:12px"></div></div>
+        <div class="gs-card-b" id="iBody"></div>
+      </div>
+    </section>
+
+    <!-- ========== MANAGE DATA ========== -->
+    <section class="gs-sec" id="sec-manage">
+      <div class="gs-card">
+        <div class="gs-card-h"><div><h3>Imported Data</h3><p>Click any amount to view its records</p></div><div class="sp"></div>
+          <button class="btn btn-blue" onclick="gsGo('report')"><i class="bi bi-file-earmark-arrow-down"></i> Generate GSTR-1</button></div>
+        <div class="gs-card-b" id="mBody"></div>
+      </div>
+    </section>
+
+    <!-- ========== TCS RECONCILE ========== -->
+    <section class="gs-sec" id="sec-tcs">
+      <div class="gs-card">
+        <div class="gs-card-h"><div><h3>TCS Reconciliation</h3><p>Match your tool data against the GST portal TCS report</p></div><div class="sp"></div>
+          <button class="btn btn-blue" onclick="gsGo('report')"><i class="bi bi-file-earmark-arrow-down"></i> Generate GSTR-1</button></div>
+        <div class="gs-card-b" id="tBody"></div>
+      </div>
+    </section>
+
+    <!-- ========== GSTR1 REPORT ========== -->
+    <section class="gs-sec" id="sec-report">
+      <div class="gs-card">
+        <div class="gs-card-h"><div><h3>GSTR1 Report</h3><p>Generated GSTR1 report, download it in Excel or JSON format.</p></div><div class="sp"></div>
+          <div class="drop no-print"><button class="btn btn-ghost" onclick="gsToggleAdd(event)"><i class="bi bi-plus-lg"></i> Add entry <i class="bi bi-chevron-down"></i></button>
+            <div class="drop-m" id="addMenu"><button onclick="gsAddEntry('b2cs')">B2CS row (state & rate)</button><button onclick="gsAddEntry('hsn_b2c')">HSN row (B2C)</button><button onclick="gsAddEntry('hsn_b2b')">HSN row (B2B)</button><button onclick="gsAddEntry('docs')">Document series (Table 13)</button></div></div></div>
+        <div class="gs-card-b" id="rBody"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="gs-modal" id="gsModal" onclick="if(event.target===this)gsCloseModal()"><div class="gs-mbox" id="gsMbox"></div></div>
+
+<script src="../billing/assets/gst-returns.js"></script>
+<script src="assets/gst-seller.js"></script>
+<script src="../billing/assets/android-download.js"></script>
+</body>
+</html>
