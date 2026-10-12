@@ -169,58 +169,9 @@ function renderOrders(){
    mapping yet are left alone (flagged via unmappedNames) — the purchase
    itself is still recorded either way. */
 async function ensureBuyerPurchaseForOrder(order){
-  const supplierId = await ensureSupplierForSeller(order.sellerUid, order.sellerName);
-  const items = [];
-  const stockIns = []; // {mappingId, productName, qty} — applied to buyerSkuMappings after the purchase doc is saved
-  const unmappedNames = [];
-  for(const item of order.items){
-    const purchaseProductId = await ensurePurchaseProduct(order.sellerUid, item);
-    const mapping = findSkuMapping(order.sellerUid, item.productId);
-    items.push({
-      productId: purchaseProductId, name: item.productName, unit: item.unit || 'PCS', hsn: item.hsn || '',
-      qty: item.qty, rate: item.rate || 0, gstRate: item.gstRate || 0,
-      taxable: item.taxable || 0, gstAmt: item.gstAmt || 0, total: item.total || 0,
-      priceMode: 'excl', linkedSkuMappingId: mapping ? mapping.id : null
-    });
-    if(mapping) stockIns.push({ mappingId: mapping.id, productName: mapping.productName || item.productName, qty: item.qty });
-    else unmappedNames.push(item.productName);
-  }
-  const summary = order.invoiceSummary || {};
-  const invoiceDate = await vtInvoiceDateForOrder(order);   // the bill's date → stock month + GST/ITC
-  const purchaseData = {
-    supplierId, supplierName: order.sellerName,
-    date: invoiceDate, invoiceDate,
-    items,
-    subtotal: summary.subtotal || 0,
-    gstTotal: (summary.cgst || 0) + (summary.sgst || 0) + (summary.igst || 0),
-    grandTotal: summary.grandTotal || 0,
-    orderId: order.id, orderNumber: order.orderNumber, invoiceId: order.invoiceId, invoiceNo: order.invoiceNo,
-    autoCreatedFromOrder: true,
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  };
-  const purRef = await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').add(purchaseData);
-
-  for(const s of stockIns){
-    await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(s.mappingId).update({
-      stock: firebase.firestore.FieldValue.increment(s.qty),
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-    await db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').add({
-      type: 'purchase-in', mappingId: s.mappingId, productName: s.productName, qty: s.qty, date: purchaseData.date,
-      note: `Purchase from ${order.sellerName} (order ${order.orderNumber || ''})`,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-  }
-  if(unmappedNames.length) console.warn(`Stock not tracked for order ${order.orderNumber || order.id} — no Buyer SKU Master mapping yet for: ${unmappedNames.join(', ')}`);
-
-  // Narrow, rule-guarded update: a buyer may only set buyerPurchaseId once,
-  // on an already-ACCEPTED order, and only that one field (+ timestamp) — see
-  // BILLING-SETUP.md for the exact rule. This is what prevents this sweep
-  // from ever creating a second purchase for the same order.
-  await db.collection('marketplaceOrders').doc(order.id).update({
-    buyerPurchaseId: purRef.id,
-    buyerPurchaseCreatedAt: firebase.firestore.FieldValue.serverTimestamp()
-  });
+  // Shared with every page (user-menu.js): once per order, all-or-nothing —
+  // so this page and the background check can never both add the stock.
+  return vtEnsureBuyerPurchaseForOrder(currentUser.uid, order, null);
 }
 async function ensureSupplierForSeller(sellerUid, sellerName){
   const snap = await db.collection('users').doc(currentUser.uid).collection('buyerSuppliers')
