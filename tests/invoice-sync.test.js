@@ -124,11 +124,12 @@ test('Flipkart "Report for GSTR-1 and GSTR-8" (real file) → GSTR-1 JSON throug
   assert.ok(validate(j), JSON.stringify(validate.errors));
   assert.equal(r2(j.b2cs.reduce((a, x) => a + x.txval, 0)), 4526.93, '7(A)(2) + 7(B)(2) net taxable');
   assert.equal(r2(j.b2cs.reduce((a, x) => a + (x.iamt || 0), 0)), 199.97, 'IGST exactly as Flipkart');
-  assert.deepEqual(j.b2cs.find(x => x.sply_ty === 'INTRA'), { sply_ty: 'INTRA', pos: '09', typ: 'E', etin: '09AACCF0683K1ZF', txval: 527.88, rt: 5, camt: 13.2, samt: 13.2, csamt: 0 });
+  // B2CS rows carry no marketplace GSTIN (typ OE) — marketplace sales are in Table 14
+  assert.deepEqual(j.b2cs.find(x => x.sply_ty === 'INTRA'), { sply_ty: 'INTRA', pos: '09', typ: 'OE', txval: 527.88, rt: 5, camt: 13.2, samt: 13.2, csamt: 0 });
   assert.ok(j.b2cs.find(x => x.pos === '36') && j.b2cs.find(x => x.pos === '29'), 'IN-TS → 36, IN-KA → 29');
   assert.ok(!j.b2cs.find(x => x.pos === '21'), 'fully returned state (Odisha) left out');
   assert.deepEqual(j.doc_issue.doc_det[0].docs[0], { num: 1, from: 'LWAB4JO270000293', to: 'LWAB4JO270000326', totnum: 34, cancel: 0, net_issue: 34 });
   assert.deepEqual(j.hsn.hsn_b2c.map(h => [h.hsn_sc, h.qty, h.rt, h.txval]), [['63049291', 25, 5, 4526.93]]);
-  assert.equal(j.supeco.clttx[0].etin, '09AACCF0683K1ZF'); assert.equal(j.supeco.clttx[0].suppval, 4526.93);
+  assert.equal(j.supeco.clttx[0].etin, '09AACCF0683K1CQ', 'Flipkart\'s TCS GSTIN, not its regular 09AACCF0683K1ZF'); assert.equal(j.supeco.clttx[0].suppval, 4526.93);
 });
 function r2(n){ return Math.round(n * 100) / 100; }
