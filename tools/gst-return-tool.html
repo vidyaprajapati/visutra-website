@@ -126,6 +126,38 @@
   .step-card h3{font-weight:700;font-size:19px;}
   .step-card .sub{color:var(--muted);font-size:14px;margin-bottom:18px;}
 
+  /* Platform import (Meesho / Amazon / Flipkart) */
+  .pf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;margin-top:6px}
+  .pf-card{border:1px solid #E7E2D8;border-radius:16px;padding:18px 14px 14px;text-align:center;background:#fff;display:flex;flex-direction:column;gap:6px;align-items:center}
+  .pf-logo{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font:800 22px/1 system-ui;color:#fff}
+  .pf-name{font-weight:700;color:#1D4ED8}
+  .pf-badge{font-size:10.5px;font-weight:700;background:#DCFCE7;color:#166534;border-radius:999px;padding:1px 8px}
+  .pf-status{font-size:11.5px;color:#57534E;min-height:16px}
+  .pf-status b{color:#15803D}
+  .pf-card .btn{width:100%}
+  .pf-modal{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:1050;display:flex;align-items:flex-start;justify-content:center;padding:4vh 12px;overflow:auto}
+  .pf-box{background:#fff;border-radius:18px;max-width:520px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+  .pf-head{display:flex;gap:12px;align-items:center;padding:16px 18px;border-bottom:1px solid #EEE}
+  .pf-head h4{margin:0;font-size:17px;color:#1D4ED8}
+  .pf-head .sub{font-size:12px;color:#57534E}
+  .pf-body{padding:16px 18px}
+  .pf-tabs{display:flex;gap:6px;background:#F1F5F9;border-radius:12px;padding:5px;margin-bottom:14px}
+  .pf-tabs button{flex:1;border:0;background:transparent;border-radius:9px;padding:7px 4px;font-size:13px;font-weight:600;color:#475569}
+  .pf-tabs button.on{background:#fff;color:#0F172A;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+  .pf-tabs button .ok{color:#15803D}
+  .pf-label{font-size:11px;font-weight:800;letter-spacing:.06em;color:#1E40AF;text-transform:uppercase;margin:10px 0 5px}
+  .pf-path{background:#EFF6FF;border:1px solid #BFDBFE;border-radius:10px;padding:8px 10px;font-size:12.5px;color:#1E3A8A}
+  .pf-eco{display:flex;border:1px solid #E5E7EB;border-radius:10px;overflow:hidden;margin-top:10px;font-size:12.5px}
+  .pf-eco span{background:#F8FAFC;padding:8px 10px;color:#475569;border-right:1px solid #E5E7EB;white-space:nowrap}
+  .pf-eco input{border:0;padding:8px 10px;font-family:monospace;flex:1;min-width:0}
+  .pf-slot{display:flex;border:1px solid #E5E7EB;border-radius:10px;overflow:hidden;margin:6px 0;font-size:12.5px;align-items:stretch}
+  .pf-slot .nm{background:#F8FAFC;padding:9px 10px;color:#334155;border-right:1px solid #E5E7EB;min-width:150px;font-weight:600}
+  .pf-slot input[type=file]{padding:6px 8px;font-size:12px;flex:1;min-width:0}
+  .pf-slot.done .nm{background:#F0FDF4;color:#166534}
+  .pf-note{font-size:12px;color:#1D4ED8;margin:2px 0 6px}
+  .pf-sum{font-size:12.5px;background:#F8FAFC;border:1px solid #E5E7EB;border-radius:10px;padding:8px 10px;margin-top:10px}
+  .pf-err{color:#B91C1C}
+  .pf-foot{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #EEE;background:#FAFAF9;border-radius:0 0 18px 18px}
   .dropzone{
     border:1.5px dashed #c9d3e5;border-radius:8px;background:var(--bg-panel);
     padding:34px 22px;text-align:center;cursor:pointer;transition:border-color .15s, background .15s;
@@ -308,10 +340,17 @@
 <section class="tool-shell section-pad" id="tool">
   <div class="container">
 
+    <div class="step-card" id="platformStep">
+      <div class="step-badge"><span class="n">1</span> Import platform data</div>
+      <h3>Famous platforms</h3>
+      <p class="sub">Choose your <b>Financial Year, Filing Type and month / quarter</b> in step 2 first, then open each platform and upload that platform's files for each month — exactly as downloaded (Excel, CSV or the .zip).</p>
+      <div class="pf-grid" id="pfGrid"></div>
+    </div>
+
     <div class="step-card">
-      <div class="step-badge"><span class="n">1</span> Upload your reports</div>
-      <h3>Add your files</h3>
-      <p class="sub">Drop in any mix of files — the tool reads each one's columns and sorts it automatically. You can add files from more than one month in a single go.</p>
+      <div class="step-badge"><span class="n">1+</span> Other files (optional)</div>
+      <h3>Add other files</h3>
+      <p class="sub">For other reports: Amazon "GST Ready-to-File" Excel, Flipkart "Report for GSTR-1 and GSTR-8", or older files. <b>Marketplace files imported above don't go here</b> — when platform data is imported, Amazon / Flipkart / Meesho files dropped here are ignored so nothing is counted twice.</p>
 
       <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload report files">
         <p><strong>Drop files here</strong> or click to browse<br>
@@ -453,6 +492,7 @@
   </div>
 </footer>
 
+<div class="pf-modal" id="pfModal" style="display:none" onclick="if(event.target===this)pfClose()"><div class="pf-box" id="pfBox"></div></div>
 <script src="../billing/assets/gst-returns.js"></script>
 <script>
 
@@ -1033,7 +1073,7 @@ function renderFileList() {
 }
 
 function updateGenerateEnabled() {
-  document.getElementById('generateBtn').disabled = store.files.length === 0;
+  document.getElementById('generateBtn').disabled = store.files.length === 0 && !pfHasData();
 }
 
 function updateGstinField() {
@@ -1084,10 +1124,11 @@ document.getElementById('generateBtn').addEventListener('click', function () {
 
   if (!sellerState) { alert('Please enter a valid 15-character GSTIN so the tool knows your home state.'); return; }
 
+  var usePf = pfHasData();   // platform cards imported → older marketplace files below are not used (no double count)
   var allTxns = []
-    .concat(GSTR1.normalizeAmazon(store.amazonB2B, store.amazonB2C))
-    .concat(GSTR1.normalizeFlipkart(store.flipkart))
-    .concat(GSTR1.normalizeMeesho(store.meeshoSales, store.meeshoReturns, store.meeshoInvoiceInfo))
+    .concat(usePf ? [] : GSTR1.normalizeAmazon(store.amazonB2B, store.amazonB2C))
+    .concat(usePf ? [] : GSTR1.normalizeFlipkart(store.flipkart))
+    .concat(usePf ? [] : GSTR1.normalizeMeesho(store.meeshoSales, store.meeshoReturns, store.meeshoInvoiceInfo))
     .concat(GSTR1.normalizeBillingInvoices(store.billingInvoices));
 
   var result = GSTR1.buildGSTR1(allTxns, sellerState, threshold);
@@ -1245,10 +1286,181 @@ function toolDocs(r) {
   });
   return { docs: docs, creditNotes: creditNotes };
 }
+/* =========================================================================
+   Platform import — Meesho / Amazon / Amazon B2B / Flipkart, month by month.
+   Raw rows are kept per platform → month → file slot; they are read with the
+   shared engine (VTGst.parseMeesho / parseAmazonMtr / parseFlipkart) when the
+   GSTR-1 is built.
+   ========================================================================= */
+var PF = {
+  MEESHO: { name: 'Meesho', site: 'meesho.com · GST reports (TCS sales)', badge: 'B2C', eco: 'MEESHO', bg: '#9F2089', letter: 'm',
+    path: 'Meesho Panel → Payments → Download GST Reports',
+    slots: [
+      { key: 'sales', label: 'tcs_sales.xlsx', zip: /tcs_sales(?!_return)[^\/]*\.xlsx$/i, need: 'total_taxable_sale_value' },
+      { key: 'returns', label: 'tcs_sales_return.xlsx', zip: /tcs_sales_return[^\/]*\.xlsx$/i, need: 'total_taxable_sale_value' },
+      { key: 'invoices', label: 'Tax_invoice_details.xlsx', zip: /tax_invoice_details[^\/]*\.xlsx$/i, need: 'Invoice No.', before: 'Download Path: Meesho Panel → Payments → Tax Invoice.', after: 'Unzip the file and upload only the Excel (Tax_invoice_details.xlsx) — or upload the .zip as downloaded.' }
+    ] },
+  AMAZON: { name: 'Amazon', site: 'amazon.in · B2C merchant tax report', badge: 'B2C', eco: 'AMAZON', bg: '#131921', letter: 'a',
+    path: 'Finance (Reports) → Manage Taxes → GST Reporting → GST Monthly Reports → Download Report → Select Merchant Tax Report (MTR) → select (B2C) → Select Year and Month → Download Report.',
+    slots: [{ key: 'mtr', label: 'MTR_B2C File', zip: /MTR_B2C[^\/]*\.csv$/i, need: 'Transaction Type' }] },
+  AMAZON_B2B: { name: 'Amazon B2B', site: 'amazon.in · B2B merchant tax report', badge: 'B2B', eco: 'AMAZON', bg: '#131921', letter: 'a',
+    path: 'Finance (Reports) → Manage Taxes → GST Reporting → GST Monthly Reports → Download Report → Select Merchant Tax Report (MTR) → select (B2B) → Select Year and Month → Download Report.',
+    slots: [{ key: 'mtr', label: 'MTR_B2B File', zip: /MTR_B2B[^\/]*\.csv$/i, need: 'Transaction Type' },
+            { key: 'stock', label: 'MTR_STOCK_TRANSFER File', zip: /STOCK[^\/]*\.csv$/i, optional: true, before: 'If the stock is transferred to FBA and stock transfer file is available.' }] },
+  FLIPKART: { name: 'Flipkart', site: 'flipkart.com · Sales / Tax report', badge: 'B2C / B2B', eco: 'FLIPKART', bg: '#2874F0', letter: 'f',
+    path: 'Flipkart Portal → Report → Reports Center → Request New Report → Tax Reports → Sales report',
+    slots: [{ key: 'sales', label: 'Sales Report', zip: /\.xlsx$/i, need: 'Sales Report' }] }
+};
+var pfRaw = {};       // pfRaw[platform][month][slot] = { name, rows | sheets }
+var pfEco = {};       // ECO GSTIN overrides per platform
+var pfCur = null;     // { pf, month }
+function pfSellerState() { var g = (document.getElementById('gstin').value || '').trim().toUpperCase(); return /^\d{2}/.test(g) ? g.slice(0, 2) : ''; }
+function pfEcoGstin(pf) { return pfEco[PF[pf].eco] || VTGst.ecoGstin(PF[pf].eco, pfSellerState() || '09'); }
+function pfMonths() {
+  var r = getGstPeriodRange(); if (isNaN(r.start.getTime())) return [];
+  var out = [];
+  for (var d = new Date(r.start); d < r.end; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) out.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+  return out;
+}
+function pfMonthName(m) { var p = m.split('-'); return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString('en-IN', { month: 'long' }); }
+function pfHasData() { return pfMonths().some(function (m) { return Object.keys(PF).some(function (k) { return pfRaw[k] && pfRaw[k][m] && Object.keys(pfRaw[k][m]).length; }); }); }
+function pfRenderGrid() {
+  var months = pfMonths();
+  document.getElementById('pfGrid').innerHTML = Object.keys(PF).map(function (k) {
+    var d = PF[k], st = months.map(function (m) { var has = pfRaw[k] && pfRaw[k][m] && Object.keys(pfRaw[k][m]).length; return has ? '<b>' + pfMonthName(m).slice(0, 3) + ' ✓</b>' : pfMonthName(m).slice(0, 3) + ' —'; }).join(' · ');
+    return '<div class="pf-card"><div class="pf-logo" style="background:' + d.bg + '">' + d.letter + '</div><div class="pf-name">' + d.name + '</div>' +
+      '<span class="pf-badge">' + d.badge + '</span><div class="pf-status">' + (months.length ? st : 'pick the period in step 2') + '</div>' +
+      '<button class="btn btn-primary btn-sm" onclick="pfOpen(\'' + k + '\')"><i class="bi bi-cloud-arrow-up"></i> Import data</button></div>';
+  }).join('');
+  var g = document.getElementById('generateBtn'); if (g && pfHasData()) g.disabled = false;
+}
+function pfOpen(pf) {
+  var months = pfMonths();
+  if (!months.length) { alert('First choose the Financial Year, Filing Type and month / quarter in step 2.'); return; }
+  pfCur = { pf: pf, month: (pfCur && pfCur.pf === pf && months.indexOf(pfCur.month) >= 0) ? pfCur.month : months[0] };
+  document.getElementById('pfModal').style.display = 'flex';
+  pfRenderModal();
+}
+function pfClose() { document.getElementById('pfModal').style.display = 'none'; pfRenderGrid(); }
+function pfTab(m) { pfCur.month = m; pfRenderModal(); }
+function pfRenderModal() {
+  var d = PF[pfCur.pf], months = pfMonths(), m = pfCur.month, have = (pfRaw[pfCur.pf] || {})[m] || {};
+  var html = '<div class="pf-head"><div class="pf-logo" style="background:' + d.bg + ';width:38px;height:38px;font-size:18px">' + d.letter + '</div>' +
+    '<div style="flex:1"><h4>' + d.name + '</h4><div class="sub">' + d.site + '</div></div><button class="btn btn-sm" onclick="pfClose()" aria-label="Close">✕</button></div><div class="pf-body">';
+  html += '<div class="pf-tabs">' + months.map(function (x) {
+    var ok = pfRaw[pfCur.pf] && pfRaw[pfCur.pf][x] && Object.keys(pfRaw[pfCur.pf][x]).length;
+    return '<button class="' + (x === m ? 'on' : '') + '" onclick="pfTab(\'' + x + '\')">' + pfMonthName(x) + ' Data' + (ok ? ' <span class="ok">✓</span>' : '') + '</button>';
+  }).join('') + '</div>';
+  html += '<div class="pf-label">↓ Download path</div><div class="pf-path">↓ ' + d.path + '</div>';
+  if (d.eco) html += '<div class="pf-eco"><span title="The marketplace\'s TCS GSTIN in your state — used for Table 14">' + d.name.replace(' B2B', '') + ' ECO GSTIN ⓘ</span><input id="pfEcoInput" value="' + pfEcoGstin(pfCur.pf) + '" maxlength="15" onchange="pfEco[PF[pfCur.pf].eco]=this.value.trim().toUpperCase()"></div>';
+  html += '<div class="pf-label">Upload files: (' + pfMonthName(m).toUpperCase() + '-' + m.slice(0, 4) + ')</div>';
+  d.slots.forEach(function (sl) {
+    if (sl.before) html += '<div class="pf-note">' + sl.before + '</div>';
+    html += '<div class="pf-slot' + (have[sl.key] ? ' done' : '') + '"><div class="nm">' + sl.label + (sl.optional ? ' <span style="font-weight:400;color:#64748B">(optional)</span>' : '') + '</div>' +
+      '<input type="file" id="pfFile_' + sl.key + '" accept=".xlsx,.xls,.csv,.zip"></div>';
+    if (have[sl.key]) html += '<div style="font-size:11.5px;color:#166534;margin:-2px 0 4px 4px">✓ ' + have[sl.key].name + ' · ' + have[sl.key].count + ' rows</div>';
+    if (sl.after) html += '<div class="pf-note">' + sl.after + '</div>';
+  });
+  html += '<button class="btn btn-primary mt-2" onclick="pfUpload()">Upload</button> ' +
+    (Object.keys(have).length ? '<button class="btn btn-outline-danger btn-sm mt-2" onclick="pfClearMonth()">Remove ' + pfMonthName(m) + ' data</button>' : '');
+  html += '<div id="pfMsg" class="pf-sum" style="' + (Object.keys(have).length ? '' : 'display:none') + '">' + pfMonthSummary(pfCur.pf, m) + '</div>';
+  html += '</div><div class="pf-foot"><button class="btn btn-secondary" onclick="pfClose()">Close</button></div>';
+  document.getElementById('pfBox').innerHTML = html;
+}
+function pfLoadJsZip() {
+  if (window.JSZip) return Promise.resolve();
+  return new Promise(function (ok, bad) { var sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'; sc.onload = ok; sc.onerror = function () { bad(new Error('Could not load the zip reader — unzip the file and upload the Excel / CSV instead.')); }; document.head.appendChild(sc); });
+}
+// a chosen file (or the matching file inside a .zip) → SheetJS workbook
+function pfReadWorkbook(file, slot) {
+  if (/\.zip$/i.test(file.name)) {
+    return pfLoadJsZip().then(function () { return file.arrayBuffer(); }).then(function (buf) { return JSZip.loadAsync(buf); }).then(function (zip) {
+      var names = Object.keys(zip.files).filter(function (n) { return !zip.files[n].dir && slot.zip.test(n); });
+      if (!names.length) throw new Error('"' + file.name + '" has no ' + slot.label + ' inside.');
+      return zip.files[names[0]].async('arraybuffer').then(function (b) { return { wb: /\.csv$/i.test(names[0]) ? XLSX.read(new TextDecoder().decode(b), { type: 'string', raw: true }) : XLSX.read(b, { type: 'array' }), name: file.name + ' › ' + names[0].split('/').pop() }; });
+    });
+  }
+  return file.arrayBuffer().then(function (buf) {
+    return { wb: /\.csv$/i.test(file.name) ? XLSX.read(new TextDecoder().decode(buf), { type: 'string', raw: true }) : XLSX.read(buf, { type: 'array' }), name: file.name };
+  });
+}
+function pfSheet(wb, nameLike) {
+  var n = nameLike ? wb.SheetNames.filter(function (x) { return x.toLowerCase().indexOf(nameLike) >= 0; })[0] : null;
+  return VTGst.rowsToObjects(XLSX, wb.Sheets[n || wb.SheetNames[0]]);
+}
+function pfUpload() {
+  var pf = pfCur.pf, m = pfCur.month, d = PF[pf], jobs = [], errors = [];
+  d.slots.forEach(function (sl) {
+    var inp = document.getElementById('pfFile_' + sl.key); if (!inp || !inp.files.length) return;
+    var file = inp.files[0];
+    jobs.push(pfReadWorkbook(file, sl).then(function (got) {
+      var entry = { name: got.name };
+      if (pf === 'FLIPKART') {
+        var sr = got.wb.SheetNames.filter(function (x) { return /sales report/i.test(x); })[0];
+        if (!sr) throw new Error(got.name + ': no "Sales Report" sheet — download Reports Center → Tax Reports → Sales report.');
+        entry.sales = pfSheet(got.wb, 'sales report'); entry.cash = got.wb.SheetNames.some(function (x) { return /cash back/i.test(x); }) ? pfSheet(got.wb, 'cash back') : [];
+        entry.count = entry.sales.length + entry.cash.length;
+      } else {
+        entry.rows = pfSheet(got.wb, pf === 'MEESHO' && sl.key === 'invoices' ? 'invoice' : null);
+        entry.count = entry.rows.length;
+        if (sl.need && entry.rows.length && !Object.keys(entry.rows[0]).some(function (k) { return k.trim().toLowerCase() === sl.need.toLowerCase(); }))
+          throw new Error(got.name + ' doesn\'t look like ' + sl.label + ' (column "' + sl.need + '" not found).');
+      }
+      pfRaw[pf] = pfRaw[pf] || {}; pfRaw[pf][m] = pfRaw[pf][m] || {}; pfRaw[pf][m][sl.key] = entry;
+    }).catch(function (e) { errors.push(e.message || String(e)); }));
+  });
+  if (!jobs.length) { pfShowMsg('<span class="pf-err">Choose at least one file to upload.</span>'); return; }
+  pfShowMsg('Reading…');
+  Promise.all(jobs).then(function () {
+    pfRenderModal();
+    if (errors.length) pfShowMsg('<span class="pf-err">' + errors.join('<br>') + '</span><br>' + pfMonthSummary(pf, m));
+    pfRenderGrid();
+  });
+}
+function pfShowMsg(h) { var el = document.getElementById('pfMsg'); if (el) { el.style.display = ''; el.innerHTML = h; } }
+function pfClearMonth() { if (!confirm('Remove ' + PF[pfCur.pf].name + ' data for ' + pfMonthName(pfCur.month) + '?')) return; delete (pfRaw[pfCur.pf] || {})[pfCur.month]; pfRenderModal(); pfRenderGrid(); }
+// parse one platform-month from its raw rows (engine), for the summary and for the build
+function pfEntry(pf, m) {
+  var raw = (pfRaw[pf] || {})[m]; if (!raw) return null;
+  var o = { sellerState: pfSellerState() || '09', etin: pfEcoGstin(pf) }, out;
+  if (pf === 'MEESHO') out = VTGst.parseMeesho(raw.sales ? raw.sales.rows : [], raw.returns ? raw.returns.rows : [], raw.invoices ? raw.invoices.rows : [], o);
+  else if (pf === 'FLIPKART') out = raw.sales ? VTGst.parseFlipkart(raw.sales.sales, raw.sales.cash, o) : { lines: [], docs: { inv: [], cn: [], dn: [] }, info: {} };
+  else out = raw.mtr ? VTGst.parseAmazonMtr(raw.mtr.rows, pf === 'AMAZON_B2B' ? 'B2B' : 'B2C', o) : { lines: [], docs: { inv: [], cn: [], dn: [] }, info: {} };
+  return Object.assign({ platform: PF[pf].eco, card: pf, month: m, etin: o.etin, stockFile: !!(raw.stock) }, out);
+}
+function pfMonthSummary(pf, m) {
+  var e = pfEntry(pf, m); if (!e) return '';
+  var tx = e.lines.reduce(function (a, l) { return a + l.txval; }, 0), tax = e.lines.reduce(function (a, l) { return a + l.iamt + l.camt + l.samt; }, 0);
+  var raw = pfRaw[pf][m], miss = PF[pf].slots.filter(function (sl) { return !sl.optional && !raw[sl.key]; }).map(function (sl) { return sl.label; });
+  return '<b>' + pfMonthName(m) + ':</b> ' + e.lines.length + ' line(s) · net taxable <b>₹' + tx.toLocaleString('en-IN', { maximumFractionDigits: 2 }) + '</b> · tax ₹' + tax.toLocaleString('en-IN', { maximumFractionDigits: 2 }) +
+    ' · invoices ' + e.docs.inv.length + ', credit notes ' + e.docs.cn.length + (e.docs.dn.length ? ', debit notes ' + e.docs.dn.length : '') +
+    (e.info.months && e.info.months.length && e.info.months[0].slice(-2) !== m.slice(-2) ? '<br><span class="pf-err">⚠ This file is mostly for ' + pfMonthName(e.info.months[0]) + ', not ' + pfMonthName(m) + ' — check the month tab.</span>' : '') +
+    (e.info.unknownStates && e.info.unknownStates.length ? '<br><span class="pf-err">⚠ State(s) not recognised: ' + e.info.unknownStates.join(', ') + '</span>' : '') +
+    (miss.length ? '<br><span style="color:#A16207">Still to upload for ' + pfMonthName(m) + ': ' + miss.join(', ') + '</span>' : '');
+}
+// all platform entries for the chosen period — Amazon B2C + B2B combined per month (one invoice series)
+function pfEntries() {
+  var months = pfMonths(), out = [];
+  ['MEESHO', 'AMAZON', 'FLIPKART'].forEach(function (pf) {
+    months.forEach(function (m) {
+      var parts = [pfEntry(pf, m)].concat(pf === 'AMAZON' ? [pfEntry('AMAZON_B2B', m)] : []).filter(Boolean);
+      if (!parts.length) return;
+      out.push({ platform: PF[pf].eco, month: m, etin: parts[0].etin, lines: [].concat.apply([], parts.map(function (p) { return p.lines; })),
+        docs: { inv: [].concat.apply([], parts.map(function (p) { return p.docs.inv; })), cn: [].concat.apply([], parts.map(function (p) { return p.docs.cn; })), dn: [].concat.apply([], parts.map(function (p) { return p.docs.dn; })) },
+        b2b: [].concat.apply([], parts.map(function (p) { return p.b2b || []; })), cdnr: [].concat.apply([], parts.map(function (p) { return p.cdnr || []; })),
+        info: Object.assign({}, parts[0].info, { exemptCode: parts.reduce(function (a, p) { return a + ((p.info || {}).exemptCode || 0); }, 0) }), stockFile: parts.some(function (p) { return p.stockFile; }) });
+    });
+  });
+  return out;
+}
+document.addEventListener('change', function (e) { if (e.target && /^(gstFY|gstFilingType|gstMonth|gstQuarter|gstin)$/.test(e.target.id)) pfRenderGrid(); });
+setTimeout(pfRenderGrid, 0);
+
 function toolBuild() {
   if (!lastResult) return null;
   var r = lastResult, conv = toolDocs(r);
   var period = document.getElementById('gstPeriod').value;
+  if (pfHasData()) { var pm = pfMonths(); period = pm[pm.length - 1]; document.getElementById('gstPeriod').value = period; }   // quarter → its last month (fp)
   var readyList = store.amazonReady || [];
   if (!period && readyList.length && readyList[0].period) { period = readyList[0].period; document.getElementById('gstPeriod').value = period; }
   if (!period) {
@@ -1258,6 +1470,13 @@ function toolBuild() {
   }
   var res = VTGst.buildGstr1(conv.docs, { gstin: r.sellerGstin, stateCode: r.sellerState, period: period });
   if (readyList.length) VTGst.mergeReadyReport(res, readyList, { gstin: r.sellerGstin, stateCode: r.sellerState, period: period });
+  var pfList = pfHasData() ? pfEntries() : [];
+  if (pfList.length) {
+    VTGst.mergePlatformData(res, pfList, { stateCode: r.sellerState, uqc: (document.getElementById('uqc').value || 'PCS').split('-')[0] });
+    if (pfList.some(function (e) { return e.stockFile; })) res.issues.push({ level: 'warn', msg: 'Amazon stock-transfer (FBA) file received — stock moved to another state is a supply to your own GSTIN there (B2B). It is not added automatically yet: add it as a B2B invoice.' });
+    if (store.files.some(function (f) { return /^(amazon|flipkart|meesho)/.test(f.kind) && f.kind !== 'amazon_ready' && f.kind !== 'flipkart_gst'; }))
+      res.issues.unshift({ level: 'warn', msg: 'Marketplace files dropped in "Other files" were ignored because platform data is imported above (so nothing is counted twice).' });
+  }
   if (conv.creditNotes.length) res.issues.unshift({ level: 'warn', msg: conv.creditNotes.length + ' return(s) from GST-registered buyers must be filed as credit notes (Table 9B — CDNR) on the portal; they are not in this file.', ref: conv.creditNotes.map(function (c) { return c.no; }).slice(0, 5).join(', ') });
   var box = document.getElementById('gstToolChecks');
   var errs = res.issues.filter(function (i) { return i.level === 'error'; }).length;
