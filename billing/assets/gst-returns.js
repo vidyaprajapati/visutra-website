@@ -173,8 +173,9 @@
           taxedRates.forEach(rt => rows.b2cl.push([String(d.no), ddMonyyyy(d.date), invVal, posLabel(pos), '', rt, r2(byRate[rt].txval), r2(byRate[rt].cess), d.etin || '']));
         } else {                             // Table 7
           taxedRates.forEach(rt => {
-            const k = [inter ? 'INTER' : 'INTRA', pos, rt, d.etin || ''].join('|');
-            if (!b2cs[k]) b2cs[k] = { sply_ty: inter ? 'INTER' : 'INTRA', pos, rt, txval: 0, csamt: 0, etin: d.etin || '' };
+            // one row per type, state and rate (the marketplace goes to Table 14, so it doesn't split rows)
+            const k = [inter ? 'INTER' : 'INTRA', pos, rt].join('|');
+            if (!b2cs[k]) b2cs[k] = { sply_ty: inter ? 'INTER' : 'INTRA', pos, rt, txval: 0, csamt: 0 };
             b2cs[k].txval += byRate[rt].txval; b2cs[k].csamt += byRate[rt].cess;
           });
         }
@@ -205,7 +206,7 @@
     const b2csArr = Object.values(b2cs).filter(x => r2(x.txval) !== 0).map(x => {
       const t = taxSplit(x.txval, x.rt, x.sply_ty === 'INTER');
       rows.b2cs.push([x.etin ? 'E' : 'OE', posLabel(x.pos), '', x.rt, r2(x.txval), r2(x.csamt), x.etin]);
-      return Object.assign({ sply_ty: x.sply_ty, pos: x.pos, typ: x.etin ? 'E' : 'OE' }, x.etin ? { etin: x.etin } : {},
+      return Object.assign({ sply_ty: x.sply_ty, pos: x.pos, typ: 'OE' },   // marketplace sales: Table 14, not inside B2CS
         { txval: r2(x.txval), rt: x.rt }, x.sply_ty === 'INTER' ? { iamt: t.iamt } : { camt: t.camt, samt: t.samt }, { csamt: r2(x.csamt) });
     });
     const hsnOut = (map, sheetRows) => Object.values(map).filter(h => r2(h.txval) !== 0 || r2(h.qty) !== 0).map((h, i) => {
@@ -602,6 +603,12 @@
     };
     readyList.forEach(rd => {
       const src = rd.source || 'Amazon';
+      // Table 14 needs the marketplace's TCS GSTIN (14th character "C"); some reports carry its regular GSTIN
+      const ecoKey = src === 'Flipkart' ? 'FLIPKART' : 'AMAZON', tcs = ecoGstin(ecoKey, seller);
+      const fixEtin = e => (e && e[13] !== 'C' && e.slice(2, 12) === ECO[ecoKey].pan) ? tcs : e;
+      if (rd.gstr8 && rd.gstr8.etin && fixEtin(rd.gstr8.etin) !== rd.gstr8.etin) warn(`${src}'s report shows its regular GSTIN ${rd.gstr8.etin}; Table 14 uses its TCS GSTIN ${tcs}.`);
+      [rd.b2b, rd.b2cl, rd.b2cs].forEach(list => (list || []).forEach(x => { if (x.etin) x.etin = fixEtin(x.etin); }));
+      if (rd.gstr8) rd.gstr8.etin = fixEtin(rd.gstr8.etin);
       if (opts.gstin && rd.gstin && rd.gstin !== String(opts.gstin).toUpperCase()) warn(`${src} report "${rd.fileName}" is for GSTIN ${rd.gstin}, not ${opts.gstin}.`);
       rd.b2cs.filter(x => !x.pos).forEach(x => iss.push({ level: 'error', msg: `${src}: state "${x.stateName || '?'}" could not be matched to a GST state code.`, ref: rd.fileName }));
       // B2B — group rate lines into invoices
@@ -634,8 +641,8 @@
         if (!x.pos || r2(x.txval) === 0) return;   // fully returned / unmatched — nothing to report
         const inter = x.pos !== seller, t = x.tax || taxSplit(x.txval, x.rt, inter);   // the report's own tax amounts when given
         J.b2cs = J.b2cs || [];
-        let e = J.b2cs.find(z => z.pos === x.pos && z.rt === x.rt && (z.etin || '') === (x.etin || '') && z.sply_ty === (inter ? 'INTER' : 'INTRA'));
-        if (!e) J.b2cs.push(e = Object.assign({ sply_ty: inter ? 'INTER' : 'INTRA', pos: x.pos, typ: x.etin ? 'E' : 'OE' }, x.etin ? { etin: x.etin } : {}, { txval: 0, rt: x.rt }, inter ? { iamt: 0 } : { camt: 0, samt: 0 }, { csamt: 0 }));
+        let e = J.b2cs.find(z => z.pos === x.pos && z.rt === x.rt && z.sply_ty === (inter ? 'INTER' : 'INTRA'));
+        if (!e) J.b2cs.push(e = Object.assign({ sply_ty: inter ? 'INTER' : 'INTRA', pos: x.pos, typ: 'OE' }, { txval: 0, rt: x.rt }, inter ? { iamt: 0 } : { camt: 0, samt: 0 }, { csamt: 0 }));
         e.txval = r2(e.txval + x.txval); e.csamt = r2(e.csamt + x.cess);
         if (inter) e.iamt = r2(e.iamt + t.iamt); else { e.camt = r2(e.camt + t.camt); e.samt = r2(e.samt + t.samt); }
         R.b2cs.push([x.etin ? 'E' : 'OE', posLabel(x.pos), '', x.rt, r2(x.txval), r2(x.cess), x.etin || '']);
@@ -757,6 +764,293 @@
     };
   }
 
+  /* ======================= Marketplace data (row-level) =======================
+     Meesho (tcs_sales + tcs_sales_return + Tax_invoice_details), Amazon MTR
+     (B2C / B2B CSV) and Flipkart Sales Report (Sales Report + Cash Back
+     Report) → one GSTR-1. Rules proven against a reference GSTR-1 for a full
+     quarter: B2CS summed per state & rate from the marketplace's OWN figures
+     (rounded once), 0% lines → Table 8 nil, HSN per code/rate, Table 14 per
+     marketplace TCS GSTIN, Table 13 per month & document-number prefix. */
+  const ECO = {
+    MEESHO:   { name: 'Meesho',   pan: 'AARCM9332R' },
+    AMAZON:   { name: 'Amazon',   pan: 'AAICA3918J' },
+    FLIPKART: { name: 'Flipkart', pan: 'AACCF0683K' }
+  };
+  // GSTIN check character (official mod-36 algorithm)
+  function gstinCheckChar(first14) {
+    const cs = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'; let sum = 0;
+    for (let i = 0; i < 14; i++) {
+      const v = cs.indexOf(first14[i]) * (i % 2 === 0 ? 1 : 2);
+      sum += Math.floor(v / 36) + (v % 36);
+    }
+    return cs[(36 - (sum % 36)) % 36];
+  }
+  // Any GSTIN type (normal "Z", TCS "C", …): pattern + check character
+  function gstinValid(g) { g = String(g || '').toUpperCase(); return /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z][0-9A-Z][0-9A-Z]$/.test(g) && gstinCheckChar(g.slice(0, 14)) === g[14]; }
+  // A marketplace's TCS (e-commerce operator) GSTIN in the seller's state: 14th character "C".
+  function ecoGstin(platform, sellerState) {
+    const e = ECO[platform]; if (!e || !sellerState) return '';
+    const b = String(sellerState).padStart(2, '0') + e.pan + '1C';
+    return b + gstinCheckChar(b);
+  }
+  const STATE_ALIASES = { JAMMUKASHMIR: '01', JAMMUANDKASHMIR: '01', UTTARANCHAL: '05', NEWDELHI: '07', NCTOFDELHI: '07', ORISSA: '21',
+    CHATTISGARH: '22', CHHATISGARH: '22', CHATISGARH: '22', PONDICHERRY: '34', DAMANANDDIU: '26', DADRAANDNAGARHAVELI: '26',
+    DADRAANDNAGARHAVELIANDDAMANANDDIU: '26', DADRANAGARHAVELIANDDAMANANDDIU: '26', DADRANAGARHAVELIDAMANDIU: '26', ANDAMANNICOBARISLANDS: '35', ANDAMANANDNICOBAR: '35' };
+  const STATE_KEYS = {};
+  Object.keys(STATES).forEach(c => { STATE_KEYS[String(STATES[c]).toUpperCase().replace(/&/g, 'AND').replace(/[^A-Z]/g, '')] = c; });
+  // "CHATTISGARH", "Andhra Pradesh", "DADRA & NAGAR HAVELI AND DAMAN & DIU", "IN-KA", "27" → GST state code
+  function stateCodeLoose(v) {
+    const raw = String(v == null ? '' : v).trim(); if (!raw) return '';
+    if (/^\d{1,2}$/.test(raw)) return raw.padStart(2, '0');
+    const iso = raw.toUpperCase().replace(/^IN-/, '');
+    if (ISO_TO_GST[iso] && /^(IN-)?[A-Z]{2}$/i.test(raw)) return ISO_TO_GST[iso];
+    const k = raw.toUpperCase().replace(/&/g, 'AND').replace(/[^A-Z]/g, '');
+    return STATE_KEYS[k] || STATE_ALIASES[k] || '';
+  }
+  const pick = (row, names) => {   // a column by any of several header spellings (case/space-insensitive)
+    for (const n of names) { if (row[n] !== undefined) return row[n]; }
+    const keys = Object.keys(row), want = names.map(n => n.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    const k = keys.find(x => want.includes(x.toLowerCase().replace(/[^a-z0-9]/g, '')));
+    return k !== undefined ? row[k] : undefined;
+  };
+  const numv = v => { const n = parseFloat(String(v == null ? '' : v).replace(/[₹,\s]/g, '')); return isFinite(n) ? n : 0; };
+  const snapRate = r => { if (r > 0 && r < 1) r *= 100; return VALID_RATES.reduce((a, b) => Math.abs(b - r) < Math.abs(a - r) ? b : a, 0); };
+  const ym = v => {
+    if (typeof v === 'number') return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 7);
+    const s = String(v || '').trim(); let m = s.match(/^(\d{4})-(\d{2})/); if (m) return m[1] + '-' + m[2];
+    m = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/); return m ? m[3] + '-' + m[2].padStart(2, '0') : '';
+  };
+  function rowsToObjects(XLSX, ws) {
+    fixSheetRange(XLSX, ws);
+    return XLSX.utils.sheet_to_json(ws, { defval: '', raw: true }).map(r => {   // raw: full precision, never the display-rounded text
+      const o = {}; Object.keys(r).forEach(k => { o[String(k).trim()] = r[k]; }); return o;
+    }).filter(r => Object.values(r).some(v => String(v).trim() !== ''));
+  }
+  function mainMonth(counts) { const k = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0]; return k ? [k] : []; }
+  function mostCommon(list) { const c = {}; list.forEach(x => { if (x) c[x] = (c[x] || 0) + 1; }); return Object.keys(c).sort((a, b) => c[b] - c[a])[0] || ''; }
+
+  /* Meesho: tcs_sales (+), tcs_sales_return (−), Tax_invoice_details (Table 13) */
+  function parseMeesho(sales, returns, invoiceRows, o) {
+    const lines = [], months = {}, unknownStates = {};
+    [[sales || [], 1], [returns || [], -1]].forEach(([rows, sg]) => rows.forEach(r => {
+      const pos = stateCodeLoose(pick(r, ['end_customer_state_new', 'end_customer_state']));
+      if (!pos) { unknownStates[String(pick(r, ['end_customer_state_new', 'end_customer_state']))] = 1; }
+      const rt = snapRate(numv(pick(r, ['gst_rate']))), tax = sg * numv(pick(r, ['tax_amount'])), intra = pos === o.sellerState;
+      const mn = numv(pick(r, ['month_number'])), fy = numv(pick(r, ['financial_year']));
+      if (mn) { const k = (fy || '') + '-' + String(mn).padStart(2, '0'); months[k] = (months[k] || 0) + 1; }
+      lines.push({ platform: 'MEESHO', etin: String(pick(r, ['eco_tcs_gstin']) || '').trim().toUpperCase() || o.etin, pos, rt,
+        txval: sg * numv(pick(r, ['total_taxable_sale_value', 'total_taxable_sale_v'])),
+        iamt: intra ? 0 : tax, camt: intra ? tax / 2 : 0, samt: intra ? tax / 2 : 0,
+        qty: sg * numv(pick(r, ['quantity'])), hsn: String(pick(r, ['hsn_code']) || '').trim(), registered: false });
+    }));
+    const docs = { inv: [], cn: [], dn: [] }; let conversions = 0;
+    (invoiceRows || []).forEach(r => {
+      const t = String(pick(r, ['Type']) || '').toUpperCase().trim(), no = String(pick(r, ['Invoice No.', 'Invoice No']) || '').trim();
+      if (!no) return;
+      if (t === 'INVOICE') docs.inv.push(no);
+      else if (t === 'CREDIT NOTE' || t === 'CREDIT_NOTE' || t === 'CREDIT_DISCOUNT') docs.cn.push(no);
+      else if (t === 'CREDIT_CONVERSION') conversions++;          // not a separate GST document
+      else if (t.indexOf('DEBIT') >= 0) docs.dn.push(no);
+    });
+    return { lines, docs, info: { months: mainMonth(months), unknownStates: Object.keys(unknownStates), conversions, salesRows: (sales || []).length, returnRows: (returns || []).length, invoiceRows: (invoiceRows || []).length } };
+  }
+
+  /* Amazon MTR (B2C or B2B): Shipment (+), Refund (− already), Cancel ignored */
+  function parseAmazonMtr(rows, kind, o) {
+    const lines = [], docs = { inv: [], cn: [], dn: [] }, months = {}, b2b = [], cdnr = [];
+    let cancelled = 0, exemptCode = 0;
+    (rows || []).forEach(r => {
+      const tt = String(pick(r, ['Transaction Type']) || '').trim().toLowerCase();
+      if (tt === 'cancel') { cancelled++; return; }
+      if (tt !== 'shipment' && tt !== 'refund') return;
+      const pos = stateCodeLoose(pick(r, ['Ship To State'])) || stateCodeLoose(pick(r, ['Bill To State']));
+      const ir = numv(pick(r, ['Igst Rate'])), cr = numv(pick(r, ['Cgst Rate'])) + numv(pick(r, ['Sgst Rate'])) + numv(pick(r, ['Utgst Rate']));
+      const rt = snapRate(ir || cr), tax = numv(pick(r, ['Total Tax Amount'])), txval = numv(pick(r, ['Tax Exclusive Gross']));
+      const inter = ir > 0 || (!cr && pos !== o.sellerState);
+      const sg = tt === 'refund' ? -1 : 1, ctin = kind === 'B2B' ? String(pick(r, ['Customer Bill To Gstid']) || '').trim().toUpperCase() : '';
+      if (/EXEMPT/i.test(String(pick(r, ['Product Tax Code']) || ''))) exemptCode++;
+      // refunds carry the ORIGINAL invoice's date (often last month) — only shipments say which month the file is
+      const d = tt === 'shipment' ? ym(pick(r, ['Invoice Date'])) : ''; if (d) months[d] = (months[d] || 0) + 1;
+      lines.push({ platform: 'AMAZON', etin: o.etin, pos, rt, txval, iamt: inter ? tax : 0, camt: inter ? 0 : tax / 2, samt: inter ? 0 : tax / 2,
+        qty: sg * Math.abs(numv(pick(r, ['Quantity']))), hsn: String(pick(r, ['Hsn/sac', 'HSN/SAC']) || '').trim(), registered: !!ctin, ctin });
+      const inum = String(pick(r, ['Invoice Number']) || '').trim(), cnum = String(pick(r, ['Credit Note No']) || '').trim();
+      if (tt === 'shipment' && inum) docs.inv.push(inum);
+      if (tt === 'refund' && cnum) docs.cn.push(cnum);
+      if (ctin && rt > 0) (tt === 'shipment' ? b2b : cdnr).push({ ctin, num: tt === 'shipment' ? inum : cnum, dt: String(pick(r, [tt === 'shipment' ? 'Invoice Date' : 'Credit Note Date']) || '').slice(0, 10),
+        val: Math.abs(numv(pick(r, ['Invoice Amount']))), pos, rt, txval: Math.abs(txval), tax: Math.abs(tax), inter, name: String(pick(r, ['Buyer Name']) || '') });
+    });
+    return { lines, docs, b2b, cdnr, info: { months: mainMonth(months), cancelled, exemptCode, rows: (rows || []).length } };
+  }
+
+  /* Flipkart Sales Report: Sales Report sheet + Cash Back Report sheet (signed values summed) */
+  function parseFlipkart(salesRows, cashRows, o) {
+    const lines = [], docs = { inv: [], cn: [], dn: [] }, months = {}, b2b = [], cdnr = [];
+    const hsnByItem = {}, TV = r => pick(r, ['Taxable Value (Final Invoice Amount -Taxes)', 'Taxable Value']);
+    const gst = r => { const g = String(pick(r, ['Business GST Number']) || '').trim().toUpperCase(); return GSTIN_RE.test(g) ? g : ''; };
+    (salesRows || []).forEach(r => {
+      const ev = String(pick(r, ['Event Type']) || '').trim().toLowerCase(), sub = String(pick(r, ['Event Sub Type']) || '').trim().toLowerCase();
+      const hsn = String(pick(r, ['HSN Code']) || '').trim(); hsnByItem[String(pick(r, ['Order Item ID']) || '')] = hsn;
+      const txval = numv(TV(r)), ig = numv(pick(r, ['IGST Amount'])), cg = numv(pick(r, ['CGST Amount'])), sgv = numv(pick(r, ['SGST Amount (Or UTGST as applicable)', 'SGST Amount']));
+      const rt = snapRate(numv(pick(r, ['IGST Rate'])) || (numv(pick(r, ['CGST Rate'])) + numv(pick(r, ['SGST Rate (or UTGST as applicable)', 'SGST Rate']))));
+      const qty = Math.abs(numv(pick(r, ['Item Quantity']))) * (txval < 0 ? -1 : 1), ctin = gst(r);
+      const d = ym(pick(r, ['Buyer Invoice Date', 'Order Date'])); if (d) months[d] = (months[d] || 0) + 1;
+      lines.push({ platform: 'FLIPKART', etin: o.etin, pos: stateCodeLoose(pick(r, ["Customer's Delivery State"])), rt, txval, iamt: ig, camt: cg, samt: sgv, qty, hsn, registered: !!ctin, ctin });
+      const no = String(pick(r, ['Buyer Invoice ID']) || '').trim();
+      if (no) { if (ev === 'sale') docs.inv.push(no); else if (sub.indexOf('cancel') >= 0) docs.dn.push(no); else if (ev === 'return') docs.cn.push(no); }
+      if (ctin && rt > 0 && no) (ev === 'sale' ? b2b : cdnr).push({ ctin, num: no, dt: String(pick(r, ['Buyer Invoice Date']) || '').slice(0, 10),
+        val: Math.abs(numv(pick(r, ['Buyer Invoice Amount', 'Final Invoice Amount (Price after discount+Shipping Charges)']))), pos: stateCodeLoose(pick(r, ["Customer's Delivery State"])), rt,
+        txval: Math.abs(txval), tax: Math.abs(ig + cg + sgv), inter: ig !== 0, name: String(pick(r, ['Business Name']) || '') });
+    });
+    const defHsn = mostCommon(Object.values(hsnByItem));
+    (cashRows || []).forEach(r => {
+      const dt = String(pick(r, ['Document Type']) || '').trim().toLowerCase(), sub = String(pick(r, ['Document Sub Type']) || '').trim().toLowerCase();
+      const rt = snapRate(numv(pick(r, ['IGST Rate'])) || (numv(pick(r, ['CGST Rate'])) + numv(pick(r, ['SGST Rate (or UTGST as applicable)', 'SGST Rate']))));
+      lines.push({ platform: 'FLIPKART', etin: o.etin, pos: stateCodeLoose(pick(r, ["Customer's Delivery State"])), rt, txval: numv(pick(r, ['Taxable Value'])),
+        iamt: numv(pick(r, ['IGST Amount'])), camt: numv(pick(r, ['CGST Amount'])), samt: numv(pick(r, ['SGST Amount (Or UTGST as applicable)', 'SGST Amount'])),
+        qty: 0, hsn: hsnByItem[String(pick(r, ['Order Item ID']) || '')] || defHsn, registered: !!gst(r), ctin: gst(r) });
+      const no = String(pick(r, ['Credit Note ID/ Debit Note ID', 'Credit Note ID', 'Debit Note ID']) || '').trim();
+      if (no) { if (dt.indexOf('debit') >= 0 || sub.indexOf('cancel') >= 0) docs.dn.push(no); else docs.cn.push(no); }
+    });
+    return { lines, docs, b2b, cdnr, info: { months: mainMonth(months), salesRows: (salesRows || []).length, cashRows: (cashRows || []).length } };
+  }
+
+  // Table 13: group document numbers by prefix (text before the trailing number), first-seen order
+  function platformDocSeries(nums) {   // (own name: the Billing docSeries() above must not be replaced)
+    const groups = [], by = {};
+    nums.forEach(n => {
+      const m = String(n).match(/^(.*?)(\d+)$/), p = m ? m[1] : String(n), v = m ? parseInt(m[2], 10) : 0;
+      if (!by[p]) { by[p] = { p, list: {} }; groups.push(by[p]); }
+      by[p].list[n] = v;
+    });
+    return groups.map(g => {
+      const arr = Object.keys(g.list).sort((a, b) => g.list[a] - g.list[b]);
+      return { from: arr[0], to: arr[arr.length - 1], totnum: arr.length, cancel: 0, net_issue: arr.length };
+    });
+  }
+
+  /* entries: [{ platform, month, lines, docs, b2b, cdnr }] (one per platform & month)
+     → merged into a buildGstr1() result `res` (in place) */
+  function mergePlatformData(res, entries, opts) {
+    const J = res.json, R = res.rows, seller = String(opts.stateCode || '').padStart(2, '0');
+    const iss = res.issues, warn = (m, ref) => iss.push({ level: 'warn', msg: m, ref: ref || '' });
+    const uqc = opts.uqc || 'PCS';
+    const b2cs = {}, nil = {}, hsn = { hsn_b2b: {}, hsn_b2c: {} }, eco = {};
+    entries.forEach(en => en.lines.forEach(l => {
+      if (!l.pos) return;
+      const inter = l.pos !== seller;
+      if (l.rt > 0 && !l.registered) {
+        const k = (inter ? 'INTER' : 'INTRA') + '|' + l.pos + '|' + l.rt;
+        const e = b2cs[k] = b2cs[k] || { sply_ty: inter ? 'INTER' : 'INTRA', pos: l.pos, rt: l.rt, txval: 0, iamt: 0, camt: 0, samt: 0 };
+        e.txval += l.txval; e.iamt += l.iamt; e.camt += l.camt; e.samt += l.samt;
+      } else if (l.rt === 0) {
+        const k = (inter ? 'INTR' : 'INTRA') + (l.registered ? 'B2B' : 'B2C'); nil[k] = (nil[k] || 0) + l.txval;
+      }
+      const hk = (l.registered ? 'hsn_b2b' : 'hsn_b2c'), key = (l.hsn || 'NA') + '|' + uqc + '|' + l.rt;
+      const h = hsn[hk][key] = hsn[hk][key] || { hsn_sc: l.hsn || '', uqc, rt: l.rt, qty: 0, txval: 0, iamt: 0, camt: 0, samt: 0 };
+      h.qty += l.qty; h.txval += l.txval; h.iamt += l.iamt; h.camt += l.camt; h.samt += l.samt;
+      if (l.etin) {
+        const c = eco[l.etin] = eco[l.etin] || { etin: l.etin, suppval: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, flag: 'N' };
+        c.suppval += l.txval; c.igst += l.iamt; c.cgst += l.camt; c.sgst += l.samt;
+      }
+    }));
+    // B2CS (state & rate; typ OE — supplies through marketplaces are also reported in Table 14)
+    J.b2cs = J.b2cs || [];
+    Object.values(b2cs).forEach(x => {
+      const tax = x.iamt + x.camt + x.samt;
+      let e = J.b2cs.find(z => z.pos === x.pos && z.rt === x.rt && z.sply_ty === x.sply_ty);
+      if (!e) J.b2cs.push(e = Object.assign({ sply_ty: x.sply_ty, rt: x.rt, typ: 'OE', pos: x.pos, txval: 0 }, x.sply_ty === 'INTER' ? { iamt: 0 } : { camt: 0, samt: 0 }, { csamt: 0 }));
+      e.txval = r2(e.txval + x.txval);
+      if (x.sply_ty === 'INTER') e.iamt = r2(e.iamt + tax);
+      else { const c = r2(x.camt + (x.iamt / 2)), sv = r2(x.samt + (x.iamt / 2)); e.camt = r2(e.camt + c); e.samt = r2(e.samt + sv); }
+    });
+    J.b2cs = J.b2cs.filter(x => r2(x.txval) !== 0).sort((a, b) => a.pos.localeCompare(b.pos) || a.rt - b.rt);
+    R.b2cs = J.b2cs.map(x => ['OE', posLabel(x.pos), '', x.rt, r2(x.txval), 0, '']);
+    // Table 8 — nil rated (all four rows, like the portal)
+    if (Object.keys(nil).length) {
+      J.nil = J.nil || { inv: [] };
+      ['INTRB2B', 'INTRAB2B', 'INTRB2C', 'INTRAB2C'].forEach(k => {
+        let e = J.nil.inv.find(z => z.sply_ty === k);
+        if (!e) J.nil.inv.push(e = { sply_ty: k, nil_amt: 0, expt_amt: 0, ngsup_amt: 0 });
+        e.nil_amt = r2(e.nil_amt + (nil[k] || 0));
+      });
+      const lab = { INTRB2B: 'Inter-State supplies to registered persons', INTRAB2B: 'Intra-State supplies to registered persons', INTRB2C: 'Inter-State supplies to unregistered persons', INTRAB2C: 'Intra-State supplies to unregistered persons' };
+      R.exemp = J.nil.inv.map(e => [lab[e.sply_ty], e.nil_amt, e.expt_amt, e.ngsup_amt]);
+    }
+    // HSN (B2B / B2C)
+    J.hsn = J.hsn || { hsn_b2b: [] };
+    ['hsn_b2b', 'hsn_b2c'].forEach(hk => {
+      const arr = J.hsn[hk] = J.hsn[hk] || [];
+      Object.values(hsn[hk]).forEach(h => {
+        if (!r2(h.txval) && !h.qty) return;
+        let e = arr.find(z => z.hsn_sc === h.hsn_sc && z.uqc === h.uqc && z.rt === h.rt);
+        if (!e) arr.push(e = { num: 0, hsn_sc: h.hsn_sc, uqc: h.uqc, qty: 0, rt: h.rt, txval: 0, iamt: 0, samt: 0, camt: 0, csamt: 0 });
+        e.qty = r2(e.qty + h.qty); e.txval = r2(e.txval + h.txval); e.iamt = r2(e.iamt + h.iamt); e.camt = r2(e.camt + h.camt); e.samt = r2(e.samt + h.samt);
+      });
+      arr.forEach((h, i) => { h.num = i + 1; });
+      (hk === 'hsn_b2b' ? (R.hsnB2B = []) : (R.hsnB2C = []));
+      arr.forEach(h => (hk === 'hsn_b2b' ? R.hsnB2B : R.hsnB2C).push([h.hsn_sc, '', h.uqc + '-' + (UQC[h.uqc] || 'OTHERS'), h.qty, r2(h.txval + h.iamt + h.camt + h.samt), h.rt, h.txval, h.iamt, h.camt, h.samt, 0]));
+    });
+    // Table 14 — per marketplace TCS GSTIN
+    const ecoArr = Object.values(eco).filter(e => r2(e.suppval));
+    if (ecoArr.length) {
+      J.supeco = J.supeco || { clttx: [] };
+      ecoArr.forEach(e => {
+        if (!gstinValid(e.etin) || e.etin[13] !== 'C') warn(`Table 14: "${e.etin}" doesn't look like a marketplace TCS GSTIN (the 14th character should be "C") — check the ECO GSTIN.`);
+        let c = J.supeco.clttx.find(z => z.etin === e.etin);
+        if (!c) J.supeco.clttx.push(c = { etin: e.etin, suppval: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, flag: 'N' });
+        ['suppval', 'igst', 'cgst', 'sgst', 'cess'].forEach(k => { c[k] = r2(c[k] + e[k]); });
+      });
+    }
+    // B2B invoices / credit notes for taxed business orders through marketplaces
+    entries.forEach(en => {
+      (en.b2b || []).forEach(x => {
+        J.b2b = J.b2b || []; let c = J.b2b.find(e => e.ctin === x.ctin); if (!c) J.b2b.push(c = { ctin: x.ctin, inv: [] });
+        let inv = c.inv.find(i => i.inum === x.num);
+        if (!inv) c.inv.push(inv = { inum: String(x.num).slice(0, 16), idt: ddmmyyyy(x.dt), val: r2(x.val), pos: x.pos, rchrg: 'N', inv_typ: 'R', etin: en.etin, itms: [] });
+        inv.itms.push({ num: itemNum(x.rt), itm_det: Object.assign({ txval: r2(x.txval), rt: x.rt }, x.inter ? { iamt: r2(x.tax) } : { camt: r2(x.tax / 2), samt: r2(x.tax - r2(x.tax / 2)) }, { csamt: 0 }) });
+      });
+      (en.cdnr || []).forEach(x => {
+        J.cdnr = J.cdnr || []; let c = J.cdnr.find(e => e.ctin === x.ctin); if (!c) J.cdnr.push(c = { ctin: x.ctin, nt: [] });
+        let nt = c.nt.find(n => n.nt_num === x.num);
+        if (!nt) c.nt.push(nt = { ntty: 'C', nt_num: String(x.num).slice(0, 16), nt_dt: ddmmyyyy(x.dt), val: r2(x.val), pos: x.pos, rchrg: 'N', inv_typ: 'R', itms: [] });
+        nt.itms.push({ num: itemNum(x.rt), itm_det: Object.assign({ txval: r2(x.txval), rt: x.rt }, x.inter ? { iamt: r2(x.tax) } : { camt: r2(x.tax / 2), samt: r2(x.tax - r2(x.tax / 2)) }, { csamt: 0 }) });
+      });
+    });
+    // Table 13 — per platform & month, grouped by number prefix
+    J.doc_issue = J.doc_issue || { doc_det: [] };
+    [[1, 'inv', 'Invoices for outward supply'], [5, 'cn', 'Credit Note'], [4, 'dn', 'Debit Note']].forEach(([num, key, label]) => {
+      let det = J.doc_issue.doc_det.find(d => d.doc_num === num);
+      entries.forEach(en => platformDocSeries(en.docs[key] || []).forEach(sr => {
+        if (!det) J.doc_issue.doc_det.push(det = { doc_num: num, doc_typ: label, docs: [] });
+        det.docs.push(Object.assign({ num: det.docs.length + 1 }, sr));
+        R.docs.push([label, sr.from, sr.to, sr.totnum, sr.cancel]);
+      }));
+    });
+    J.doc_issue.doc_det.sort((a, b) => [1, 5, 4].indexOf(a.doc_num) - [1, 5, 4].indexOf(b.doc_num));
+    // checks
+    entries.forEach(en => {
+      const info = en.info || {}, nm = (ECO[en.platform] || {}).name || en.platform;
+      if (info.unknownStates && info.unknownStates.length) iss.push({ level: 'error', msg: `${nm} ${en.month}: state(s) not recognised — ${info.unknownStates.join(', ')}.` });
+      if (info.months && info.months.length && en.month && info.months.some(m => m && m.slice(-2) !== en.month.slice(-2)))
+        warn(`${nm}: the file uploaded for ${en.month} contains data for ${info.months.join(', ')} — check it's the right month's file.`);
+      if (en.platform === 'AMAZON' && info.exemptCode && en.lines.every(l => !l.rt) && !iss.some(i => /A_GEN_EXEMPT/.test(i.msg)))
+        warn(`Amazon: every line uses the tax code "A_GEN_EXEMPT", so Amazon invoiced these sales without GST (reported in Table 8 as nil-rated). If your products are taxable (e.g. HSN 6304 = 5%), change the Product Tax Code on your Amazon listings and talk to your CA about past invoices.`);
+    });
+    // counts / totals
+    res.counts.b2cs = J.b2cs.length; res.counts.b2b = (J.b2b || []).reduce((a, c) => a + c.inv.length, 0);
+    res.counts.hsnB2B = (J.hsn.hsn_b2b || []).length; res.counts.hsnB2C = (J.hsn.hsn_b2c || []).length;
+    res.counts.docs = (J.doc_issue.doc_det || []).reduce((a, d) => a + d.docs.length, 0);
+    const T = { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 };
+    const add = (d, sg) => { T.taxable += sg * (d.txval || 0); T.igst += sg * (d.iamt || 0); T.cgst += sg * (d.camt || 0); T.sgst += sg * (d.samt || 0); };
+    (J.b2b || []).forEach(c => c.inv.forEach(i => i.itms.forEach(t => add(t.itm_det, 1))));
+    (J.b2cl || []).forEach(c => c.inv.forEach(i => i.itms.forEach(t => add(t.itm_det, 1))));
+    J.b2cs.forEach(x => add(x, 1));
+    (J.cdnr || []).forEach(c => c.nt.forEach(n => n.itms.forEach(t => add(t.itm_det, -1))));
+    Object.keys(T).forEach(k => { res.totals[k] = r2(T[k]); });
+    J.version = J.version || 'GST3.2.3'; J.hash = 'hash';
+    return res;
+  }
+
   function downloadJson(obj, fileName) {
     const blob = new Blob([JSON.stringify(obj)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -769,6 +1063,7 @@
     STATES, UQC, VALID_RATES, stateName, posLabel, uqcCode, uqcLabel, ddmmyyyy, ddMonyyyy, fpOf, gstinOk, taxSplit, r2,
     validate, buildGstr1, gstr1Workbook, buildGstr3b, gstr3bWorkbook, netPayable,
     parse2bJson, parse2bWorkbook, reconcile, downloadJson, isReadyWorkbook, parseReadyWorkbook, mergeReadyReport,
-    isFlipkartGstWorkbook, parseFlipkartGstWorkbook, stateCodeOf, gstr3bFromGstr1
+    isFlipkartGstWorkbook, parseFlipkartGstWorkbook, stateCodeOf, gstr3bFromGstr1,
+    ECO, ecoGstin, gstinValid, gstinCheckChar, stateCodeLoose, rowsToObjects, parseMeesho, parseAmazonMtr, parseFlipkart, platformDocSeries, mergePlatformData
   };
 })(typeof window !== 'undefined' ? window : globalThis);
