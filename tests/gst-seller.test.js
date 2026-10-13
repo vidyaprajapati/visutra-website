@@ -86,6 +86,17 @@ test('GST Online Seller: profile → import (real Q2) → manage → TCS → GST
   const docs = d => d.doc_det.map(x => [x.doc_num, x.docs.map(y => [y.from, y.to, y.totnum])]);
   assert.deepEqual(docs(J.doc_issue), docs(REF.doc_issue));
   REF.supeco.clttx.forEach(e => { const o = J.supeco.clttx.find(x => x.etin === e.etin); assert.ok(o && Math.abs(o.suppval - e.suppval) <= 0.25, e.etin); });
+  // Excel: same sheets & order as the offline tool / gsttool, including Table 14 "eco"
+  const refWb = XLSX.readFile(path.join(FX, 'reference-gsttool-gstr1.xlsx'));
+  const ourWb = w.VTGst.gstr1Workbook(XLSX, w.gsBuild());
+  assert.deepEqual(plain(ourWb.SheetNames), refWb.SheetNames.filter(n => n !== 'cdnr'), 'sheet order (no credit notes to registered buyers here)');
+  const ecoRows = wb => XLSX.utils.sheet_to_json(wb.Sheets.eco, { header: 1 }).filter(r => /u\/s 52/.test(r[0] || ''));
+  const ours = ecoRows(ourWb), ref = ecoRows(refWb);
+  assert.equal(ours.length, 3);
+  ref.forEach((r, i) => {
+    assert.deepEqual(ours[i].slice(0, 3), r.slice(0, 3), 'nature / ECO GSTIN / name');
+    [3, 4, 5, 6].forEach(c => assert.ok(Math.abs(ours[i][c] - r[c]) <= 0.25, `eco ${r[2]} col ${c}: ${ours[i][c]} vs ${r[c]}`));
+  });
   // edit a B2CS row, then reset
   w.openEditor('b2cs'); w.EDIT_ROWS[0].txval = 1000; w.EDIT_ROWS[0].tax = 50;
   w.document.querySelector('#gsMbox input[data-r="0"][data-k="txval"]').value = '1000';
