@@ -1079,6 +1079,38 @@
     return res;
   }
 
+  /* VISUTRA Billing invoices → GSTR-1 docs (same conversion Billing uses,
+     tax exactly as printed on each invoice). hsnOf(productId) fills a
+     missing HSN from the product master. */
+  function docsFromBillingInvoices(list, hsnOf) {
+    return (list || []).map(inv => ({
+      no: inv.invoiceNo, date: inv.date, cancelled: !!inv.deleted,
+      ctin: String((inv.customer && inv.customer.gstin) || '').trim().toUpperCase(),
+      name: inv.customer ? (inv.customer.legalName || inv.customer.name || '') : '',
+      pos: String((inv.customer && inv.customer.stateCode) || '').padStart(2, '0'),
+      inter: !inv.sameState, rchrg: !!inv.reverseCharge, value: inv.grandTotal,
+      tax: { iamt: Number(inv.igst) || 0, camt: Number(inv.cgst) || 0, samt: Number(inv.sgst) || 0 },
+      items: (inv.items || []).filter(li => li.productId || li.name).map(li => ({
+        hsn: li.hsn || (hsnOf ? hsnOf(li.productId) : '') || '', desc: li.name, unit: li.unit,
+        qty: Number(li.qty) || 0, rate: Number(li.gstRate) || 0, taxable: Number(li.taxable) || 0
+      }))
+    }));
+  }
+  /* GSTR-3B from a finished GSTR-1 (ALL sales: marketplaces + Billing) and
+     purchases for ITC: 3.1 / 3.2 from the GSTR-1, Table 4 from purchases,
+     liability, credit and net payable (Rule 88A set-off). */
+  function gstr3bCombined(gstr1Json, purchases, opts) {
+    const res = buildGstr3b([], purchases, opts), sales = gstr3bFromGstr1(gstr1Json), J = res.json;
+    J.sup_details.osup_det = sales.sup_details.osup_det;
+    J.sup_details.osup_nil_exmp = sales.sup_details.osup_nil_exmp;
+    J.inter_sup.unreg_details = sales.inter_sup.unreg_details.slice().sort((a, b) => String(a.pos).localeCompare(String(b.pos)));
+    res.negative32 = J.inter_sup.unreg_details.filter(u => u.txval < 0);   // returns exceeded sales in a state
+    const o = J.sup_details.osup_det, rcm = J.sup_details.isup_rev;
+    res.liability = { igst: r2(o.iamt + rcm.iamt), cgst: r2(o.camt + rcm.camt), sgst: r2(o.samt + rcm.samt), cess: r2(o.csamt || 0) };
+    res.payable = netPayable(res);
+    return res;
+  }
+
   function downloadJson(obj, fileName) {
     const blob = new Blob([JSON.stringify(obj)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -1092,6 +1124,6 @@
     validate, buildGstr1, gstr1Workbook, buildGstr3b, gstr3bWorkbook, netPayable,
     parse2bJson, parse2bWorkbook, reconcile, downloadJson, isReadyWorkbook, parseReadyWorkbook, mergeReadyReport,
     isFlipkartGstWorkbook, parseFlipkartGstWorkbook, stateCodeOf, gstr3bFromGstr1,
-    ECO, ecoGstin, gstinValid, gstinCheckChar, stateCodeLoose, rowsToObjects, parseMeesho, parseAmazonMtr, parseFlipkart, platformDocSeries, mergePlatformData, compactEntry, joinSeries
+    ECO, ecoGstin, gstinValid, gstinCheckChar, stateCodeLoose, rowsToObjects, parseMeesho, parseAmazonMtr, parseFlipkart, platformDocSeries, mergePlatformData, compactEntry, joinSeries, docsFromBillingInvoices, gstr3bCombined
   };
 })(typeof window !== 'undefined' ? window : globalThis);
