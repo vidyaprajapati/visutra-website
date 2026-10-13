@@ -21,7 +21,7 @@
   .gs-hero{background:var(--navy) radial-gradient(circle at 80% 10%,rgba(255,255,255,.05),transparent 40%);color:#fff;padding:22px 30px 120px}
   .gs-hero h1{margin:0 0 6px;font-size:34px;font-weight:800;letter-spacing:-.01em}
   .gs-crumb{font-size:16px}.gs-crumb a{color:#7AA7FF;text-decoration:none}.gs-crumb span{color:#9CA3AF;margin:0 8px}
-  .gs-wrap{display:grid;grid-template-columns:300px 1fr;gap:28px;max-width:1500px;margin:-96px auto 40px;padding:0 24px}
+  .gs-wrap{display:grid;grid-template-columns:300px minmax(0,1fr);gap:28px;max-width:1500px;margin:-96px auto 40px;padding:0 24px}
   .gs-side{background:#fff;border-radius:18px;box-shadow:0 8px 30px rgba(15,23,42,.08);padding:26px 22px;align-self:start;position:sticky;top:16px}
   .gs-side .back{color:var(--muted);font-size:15px;text-decoration:none;display:inline-flex;gap:8px;align-items:center}
   .gs-side h2{font-size:19px;margin:14px 0 18px;padding-bottom:18px;border-bottom:1px solid var(--line)}
@@ -38,11 +38,11 @@
   .gs-card-b{padding:26px 28px}
   .gs-sec{display:none}.gs-sec.on{display:block}
   .gs-panel{background:#F8FAFC;border:1px solid var(--line);border-radius:16px;padding:22px 24px}
-  .gs-grid2{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px 22px;align-items:end}
+  .gs-grid2{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 22px;align-items:end}
   .gs-lbl{display:block;font-size:12.5px;font-weight:700;letter-spacing:.05em;color:#4B5563;text-transform:uppercase;margin-bottom:8px}
   .gs-in{display:flex;align-items:center;border:1px solid #DDE2EA;border-radius:12px;background:#fff;overflow:hidden;height:56px}
   .gs-in i{padding:0 14px 0 18px;color:#6B7280;font-size:20px}
-  .gs-in input,.gs-in select{border:0;outline:0;font:500 17px Inter,sans-serif;flex:1;height:100%;background:transparent;min-width:0;padding-right:12px;color:var(--ink)}
+  .gs-in input,.gs-in select{min-width:0;width:100%;border:0;outline:0;font:500 17px Inter,sans-serif;flex:1;height:100%;background:transparent;min-width:0;padding-right:12px;color:var(--ink)}
   .gs-in:focus-within{border-color:var(--blue);box-shadow:0 0 0 3px rgba(47,111,237,.15)}
   .gs-seg{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .gs-seg button{height:56px;border-radius:12px;border:1px solid #DDE2EA;background:#fff;font:600 17px Inter,system-ui,-apple-system,'Segoe UI',sans-serif;color:#4B5563;cursor:pointer}
@@ -93,7 +93,7 @@
   .pf.soon{opacity:.75}
   .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:26px}
   @media (max-width:1250px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
-  @media (max-width:600px){.kpis{grid-template-columns:1fr}}
+  @media (max-width:600px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.kpi{flex-direction:column;align-items:flex-start;gap:8px;padding:12px}.kpi b{font-size:16px}.kpi small{font-size:11px}}
   .kpi>div{min-width:0}.kpi b{display:block;white-space:nowrap;font-size:clamp(16px,1.25vw,20px);letter-spacing:-.01em}
   .kpi{border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;gap:12px;align-items:center;box-shadow:0 2px 10px rgba(15,23,42,.03)}
   .kpi .ic{width:44px;height:44px;flex:none;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:24px}
@@ -122,6 +122,9 @@
   .dl .btn{min-width:300px;height:110px;font-size:21px;border-radius:12px;flex-direction:row;gap:18px}
   .dl .btn i{font-size:52px}
   .dl .btn.rep{background:#fff;border:1px solid var(--line);color:var(--blue);min-width:220px}
+  .lockbar{display:flex;gap:14px;align-items:center;background:#ECFDF5;border:1px solid #A7F3D0;color:#065F46;border-radius:14px;padding:14px 18px;margin-bottom:18px;font-size:15.5px}
+  .lockbar i{font-size:22px}.lockbar .sp{flex:1}
+  .chk{display:flex;gap:10px;align-items:center;font-size:15px;margin:6px 0}.chk input{width:18px;height:18px}
   .issues{border-radius:12px;padding:12px 16px;margin:0 0 18px;font-size:14.5px}
   .issues.warn{background:#FFFBEB;border:1px solid #FDE68A}.issues.ok{background:#ECFDF5;border:1px solid #A7F3D0;color:#065F46}
   .issues ul{margin:6px 0 0 18px;padding:0}
@@ -159,7 +162,42 @@
   table.ed td{padding:4px;border-top:1px solid var(--line)}
   table.ed input{width:100%;border:1px solid #DDE2EA;border-radius:8px;padding:7px 8px;font:14px Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
   table.ed td.r{text-align:right}
-  @media (max-width:1000px){.gs-wrap{grid-template-columns:1fr;margin-top:-80px}.gs-side{position:static}.gs-grid2{grid-template-columns:1fr}.dl .btn{min-width:100%}}
+  .span2{grid-column:span 2}
+  /* phones & small tablets: tabs instead of a sidebar, stacked headers, scrollable tables */
+  @media (max-width:1000px){
+    .gs-hero{padding:16px 16px 64px}.gs-hero h1{font-size:26px}.gs-crumb{font-size:14px}
+    .gs-wrap{grid-template-columns:minmax(0,1fr);gap:14px;margin-top:-50px;padding:0 10px}
+    .gs-side{position:sticky;top:0;z-index:30;padding:8px;border-radius:14px}
+    .gs-side .back,.gs-side h2{display:none}
+    .gs-nav{flex-direction:row;overflow-x:auto;gap:6px;scrollbar-width:none}.gs-nav::-webkit-scrollbar{display:none}
+    .gs-nav button{flex:none;white-space:nowrap;padding:10px 12px;font-size:14.5px}.gs-nav button i{font-size:16px}
+    .gs-card{border-radius:14px;margin-bottom:16px}
+    .gs-card-h{flex-wrap:wrap;padding:16px;gap:10px}.gs-card-h h3{font-size:18px}
+    .gs-card-b{padding:14px}
+    .gs-grid2{grid-template-columns:minmax(0,1fr)}.span2{grid-column:auto}
+    .gs-seg{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .gs-panel{padding:14px}
+    .gs-in,.gs-seg button{height:50px}.btn-big{height:54px;font-size:17px}
+    .gs-selected{flex-wrap:wrap;padding:14px}.gs-selected h4{font-size:18px}
+    .gs-saved{grid-template-columns:1fr}
+    .gs-pf{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .pf{padding:18px 10px 14px}.pf .logo{width:64px;height:64px}.pf .logo b{width:46px;height:46px;font-size:24px}
+    .pf h5{font-size:16px}.pf .acts .btn{height:44px;font-size:13.5px;padding:8px}
+    .gs-tools .chip{padding:10px 14px;font-size:14px}.gs-search{height:46px}
+    .tblc,.sumc{overflow-x:auto}.tblc table.gt,.sumc table.gt{min-width:560px}
+    .tblc-h h4,.sumc-h h4{font-size:17px}
+    .tblc-h,.sumc-h{flex-wrap:wrap;position:sticky;left:0}.tblc-h .sp,.sumc-h .sp{flex-basis:100%;height:0}
+    .tblc-h .tx{font-size:14px}.tblc-h .tx b{font-size:17px}
+    .sumc-h .btn{white-space:nowrap;padding:8px 12px;font-size:14px}.sumc-h p{font-size:13.5px}
+    .m-eco{flex-direction:column}.m-eco span{border-right:0;border-bottom:1px solid var(--line)}
+    table.gt{font-size:14px}table.gt th,table.gt td{padding:10px}
+    .dl .btn{min-width:100%;height:76px;font-size:18px}.dl .btn i{font-size:38px}
+    .gs-modal{padding:0}.gs-mbox{border-radius:0;min-height:100vh;max-width:none}
+    .gs-mh{border-radius:0;padding:14px}.gs-mb{padding:14px;max-height:none}
+    .mtabs button{font-size:13px;padding:10px 4px}
+    .m-slot{flex-direction:column}.m-slot .nm{border-right:0;border-bottom:1px solid var(--line);min-width:0}
+    .gs-steps{gap:6px}.gs-steps span{padding:6px 8px;font-size:13px}.gs-steps span.ln{width:14px}
+  }
   @media print{.gs-hero,.gs-side,.no-print{display:none!important}.gs-wrap{display:block;margin:0}.gs-card{box-shadow:none}}
 </style>
 </head>
@@ -179,6 +217,7 @@
       <button data-sec="manage"><i class="bi bi-table"></i> Manage Data</button>
       <button data-sec="tcs"><i class="bi bi-arrow-left-right"></i> TCS Reconcile</button>
       <button data-sec="report"><i class="bi bi-file-earmark-arrow-down"></i> GSTR1 Report</button>
+      <button data-sec="gstr3b"><i class="bi bi-calculator"></i> GSTR3B Report</button>
     </nav>
   </aside>
 
@@ -190,7 +229,7 @@
         <div class="gs-card-b">
           <div class="gs-panel">
             <div class="gs-grid2">
-              <div style="grid-column:span 2"><label class="gs-lbl" for="pGstin">GST Number</label>
+              <div class="span2"><label class="gs-lbl" for="pGstin">GST Number</label>
                 <div class="gs-in"><i class="bi bi-person-vcard"></i><input id="pGstin" maxlength="15" placeholder="24ABCDE1234F1Z5" autocomplete="off"></div></div>
               <div><label class="gs-lbl">Return Type</label>
                 <div class="gs-seg" id="pType"><button type="button" data-v="monthly">Monthly</button><button type="button" data-v="quarterly">Quarterly</button></div></div>
@@ -246,6 +285,13 @@
           <div class="drop no-print"><button class="btn btn-ghost" onclick="gsToggleAdd(event)"><i class="bi bi-plus-lg"></i> Add entry <i class="bi bi-chevron-down"></i></button>
             <div class="drop-m" id="addMenu"><button onclick="gsAddEntry('b2cs')">B2CS row (state & rate)</button><button onclick="gsAddEntry('hsn_b2c')">HSN row (B2C)</button><button onclick="gsAddEntry('hsn_b2b')">HSN row (B2B)</button><button onclick="gsAddEntry('docs')">Document series (Table 13)</button></div></div></div>
         <div class="gs-card-b" id="rBody"></div>
+      </div>
+    </section>
+    <!-- ========== GSTR-3B ========== -->
+    <section class="gs-sec" id="sec-gstr3b">
+      <div class="gs-card">
+        <div class="gs-card-h"><div><h3>GSTR3B Report</h3><p>Sales from your GSTR-1, ITC from your purchases, and the tax to pay</p></div></div>
+        <div class="gs-card-b" id="bBody"></div>
       </div>
     </section>
   </main>
