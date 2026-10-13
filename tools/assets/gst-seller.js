@@ -7,7 +7,7 @@
      users/<uid>/gstReturns/<gstin>_<MMYYYY>                 edits, portal TCS values, ECO GSTINs
 */
 var D = { type: 'quarterly', pkey: '', fy: 0 };   // the profile form (applied on "Select GSTIN")
-var GS = { uid: null, gstin: '', type: 'quarterly', pkey: '', fy: 0, saved: [], parts: {}, ret: null, sec: 'profile', filter: 'all', search: '', modal: null };
+var GS = { account: null, purch: null, uid: null, gstin: '', type: 'quarterly', pkey: '', fy: 0, saved: [], parts: {}, ret: null, sec: 'profile', filter: 'all', search: '', modal: null };
 var QUARTERS = [
   { k: 'Q1', label: 'April-June', m: [4, 5, 6] }, { k: 'Q2', label: 'July-September', m: [7, 8, 9] },
   { k: 'Q3', label: 'October-December', m: [10, 11, 12] }, { k: 'Q4', label: 'January-March', m: [1, 2, 3] }];
@@ -30,6 +30,7 @@ var PF = {
   FLIPKART: { name: 'Flipkart', site: 'flipkart.com · Sales / Tax report', badge: 'B2C / B2B', eco: 'FLIPKART', bg: '#2874F0', letter: 'f',
     path: 'Flipkart Portal → Report → Reports Center → Request New Report → Tax Reports → Sales report',
     slots: [{ key: 'sales', label: 'Sales Report', zip: /\.xlsx$/i, need: 'Sales Report' }] },
+  BILLING: { name: 'VISUTRA Billing', site: 'Your own invoices from VISUTRA Billing', badge: 'B2B / B2C', bg: '#C2410C', letter: 'V', billing: true },
   MYNTRA: { name: 'Myntra', badge: 'B2C', bg: '#FF3F6C', letter: 'M', soon: true },
   SNAPDEAL: { name: 'Snapdeal', badge: 'B2C', bg: '#E40046', letter: 's', soon: true }
 };
@@ -74,7 +75,8 @@ function gsGo(sec) {
   if (location.hash !== '#' + sec) history.replaceState(null, '', '#' + sec);
   document.querySelectorAll('.gs-sec').forEach(function (s) { s.classList.toggle('on', s.id === 'sec-' + sec); });
   document.querySelectorAll('#gsNav button').forEach(function (b) { b.classList.toggle('on', b.dataset.sec === sec); });
-  ({ profile: renderProfile, import: renderImport, manage: renderManage, tcs: renderTcs, report: renderReport })[sec]();
+  var on = document.querySelector('#gsNav button.on'); if (on && on.scrollIntoView && window.innerWidth <= 1000) on.scrollIntoView({ block: 'nearest', inline: 'center' });   // phone tabs: keep the current one visible
+  ({ profile: renderProfile, import: renderImport, manage: renderManage, tcs: renderTcs, report: renderReport, gstr3b: renderGstr3b })[sec]();
   window.scrollTo && window.scrollTo(0, 0);
 }
 document.querySelectorAll('#gsNav button').forEach(function (b) { b.addEventListener('click', function () { gsGo(b.dataset.sec); }); });
@@ -101,10 +103,12 @@ function loadRet() {
     if (s.exists) GS.ret = Object.assign(GS.ret, s.data());
     GS.ret.edits = GS.ret.edits || {}; GS.ret.portal = GS.ret.portal || {}; GS.ret.eco = GS.ret.eco || {};
     if (GS.ret.b2cHsn === undefined) GS.ret.b2cHsn = true;
+    if (!GS.ret.filed) delete GS.ret.filed;
   });
 }
 function saveRet() {
-  return col('gstReturns').doc(retId()).set({ gstin: GS.gstin, fp: gsFp(), edits: GS.ret.edits, portal: GS.ret.portal, eco: GS.ret.eco, b2cHsn: GS.ret.b2cHsn, updatedAt: nowIso() });
+  var data = { gstin: GS.gstin, fp: gsFp(), edits: GS.ret.edits, portal: GS.ret.portal, eco: GS.ret.eco, b2cHsn: GS.ret.b2cHsn, itc: GS.ret.itc || { billing: true, buyer: true }, filed: GS.ret.filed || null, updatedAt: nowIso() };
+  return col('gstReturns').doc(retId()).set(data);
 }
 function rememberSelection() {
   try { sessionStorage.setItem('gsSel', JSON.stringify({ gstin: GS.gstin, type: GS.type, pkey: GS.pkey, fy: GS.fy })); } catch (e) {}
@@ -152,8 +156,78 @@ function allEntries() {
   GROUPS.forEach(function (g) { gsMonths().forEach(function (m) { var e = groupMonth(g, m); if (e) out.push(e); }); });
   return out;
 }
-function cardImported(card) { return gsMonths().some(function (m) { return !!cardMonth(card, m); }); }
-function importedCount() { var n = 0; Object.keys(PF).forEach(function (c) { if (!PF[c].soon) gsMonths().forEach(function (m) { if (cardMonth(c, m)) n++; }); }); return n; }
+function cardImported(card) { return card === 'BILLING' ? !!billingPart() : gsMonths().some(function (m) { return !!cardMonth(card, m); }); }
+function importedCount() { var n = billingPart() ? 1 : 0; Object.keys(PF).forEach(function (c) { if (!PF[c].soon && !PF[c].billing) gsMonths().forEach(function (m) { if (cardMonth(c, m)) n++; }); }); return n; }
+/* ---------- VISUTRA Billing (your own invoices) ---------- */
+function billingPart() { return GS.parts['BILLING|' + gsFpMonth() + '|invoices'] || null; }
+function billingDocs() { var b = billingPart(); return b && b.entry && b.entry.docs ? b.entry.docs : []; }
+function accountGstin() { return GS.account ? String(GS.account.gstin || '').trim().toUpperCase() : ''; }
+function billingStats(docs) {
+  var s = { b2b: 0, b2c: 0, nil: 0, hsn: 0, tax: 0, n: 0 };
+  docs.filter(function (d) { return !d.cancelled; }).forEach(function (d) {
+    s.n++; s.tax += (d.tax.iamt || 0) + (d.tax.camt || 0) + (d.tax.samt || 0);
+    d.items.forEach(function (it) { s.hsn += it.taxable; if (!it.rate) s.nil += it.taxable; else if (d.ctin) s.b2b += it.taxable; else s.b2c += it.taxable; });
+  });
+  return s;
+}
+function openBilling() {
+  var acc = accountGstin(), ok = acc && acc === GS.gstin, b = billingPart(), st = b ? billingStats(billingDocs()) : null;
+  openModal('<div class="gs-mh"><b style="width:52px;height:52px;border-radius:12px;display:flex;align-items:center;justify-content:center;font:800 26px Inter,system-ui,sans-serif;color:#fff;background:#C2410C">V</b>' +
+    '<div><h4>VISUTRA Billing</h4><div class="sub">Your own tax invoices (B2B and B2C) for ' + gsMonths().map(monthName).join(', ') + ' ' + gsFpMonth().slice(0, 4) + '</div></div><button class="x" onclick="gsCloseModal()">✕</button></div><div class="gs-mb">' +
+    (ok ? '<p style="font-size:15.5px">Adds the invoices you made in <b>Billing</b> to this GSTR-1, so <b>one file</b> covers marketplace and own sales (uploading two GSTR-1 files for one period can overwrite B2C totals on the portal).</p>'
+      : '<p class="m-err" style="font-size:15.5px">Billing invoices belong to your account\'s GSTIN <b>' + esc(acc || '(not set in Business Profile)') + '</b>, but you selected <b>' + esc(GS.gstin) + '</b>. Select that GSTIN to include them.</p>') +
+    (b ? '<div class="m-sum"><b>Loaded:</b> ' + st.n + ' invoice(s) · B2B ₹' + inr(st.b2b) + ' · B2C ₹' + inr(st.b2c) + (st.nil ? ' · nil ₹' + inr(st.nil) : '') + ' · tax ₹' + inr(st.tax) + '<br><small style="color:#6B7280">Loaded ' + fmtDate(b.importedAt) + ' — reload after adding or changing invoices in Billing.</small></div>' : '') +
+    '</div><div class="gs-mf">' + (b && !isLocked() ? '<button class="btn btn-danger-o" onclick="removeBilling()"><i class="bi bi-trash3"></i> Remove</button><span style="flex:1"></span>' : '') +
+    '<button class="btn btn-ghost" onclick="gsCloseModal()">Close</button>' + (ok ? '<button class="btn btn-blue" ' + (isLocked() ? 'disabled title="This period is marked as filed"' : '') + ' onclick="loadBilling()"><i class="bi bi-arrow-repeat"></i> ' + (b ? 'Reload invoices' : 'Load invoices') + '</button>' : '') + '</div>');
+}
+function loadBilling() {
+  if (isLocked()) return Promise.resolve();
+  var ms = gsMonths();
+  return Promise.all([col('invoices').get(), col('products').get()]).then(function (r) {
+    var hsn = {}; r[1].docs.forEach(function (d) { hsn[d.id] = d.data().hsn; });
+    var inv = r[0].docs.map(function (d) { return d.data(); }).filter(function (x) { return ms.indexOf(String(x.date || '').slice(0, 7)) >= 0; });
+    var docs = VTGst.docsFromBillingInvoices(inv, function (id) { return hsn[id]; });
+    var id = GS.gstin + '_BILLING_' + gsFpMonth() + '_invoices';
+    var doc = { gstin: GS.gstin, card: 'BILLING', month: gsFpMonth(), slot: 'invoices', file: 'VISUTRA Billing', rows: inv.length, entry: { docs: docs }, importedAt: nowIso() };
+    return col('gstImports').doc(id).set(doc).then(function () { GS.parts['BILLING|' + gsFpMonth() + '|invoices'] = Object.assign({ id: id }, doc); openBilling(); });
+  });
+}
+function removeBilling() {
+  if (isLocked() || !confirm('Remove Billing invoices from this return?')) return;
+  var b = billingPart(); col('gstImports').doc(b.id).delete().then(function () { delete GS.parts['BILLING|' + gsFpMonth() + '|invoices']; gsCloseModal(); });
+}
+/* ---------- filed lock ---------- */
+function isLocked() { return !!(GS.ret && GS.ret.filed); }
+function lockedGuard() { if (isLocked()) { alert('This return is marked as filed — it is locked. Unlock it in GSTR1 Report first (only if you have not filed it yet).'); return true; } return false; }
+function lockBar() {
+  return isLocked() ? '<div class="lockbar"><i class="bi bi-lock-fill"></i><div><b>Filed on ' + fmtDate(GS.ret.filed.at) + ' — this return is locked.</b> Imports and edits are frozen so the filed figures can\'t change by accident.</div><span class="sp"></span>' +
+    '<button class="btn btn-ghost no-print" onclick="unlockReturn()">Unlock</button></div>' : '';
+}
+// mirrors Billing's GST month lock for the invoices included here (same account GSTIN only)
+function setBillingMonths(status) {
+  if (!billingPart() || accountGstin() !== GS.gstin) return Promise.resolve();
+  return Promise.all(gsMonths().map(function (m) {
+    var ref = col('gstPeriods').doc(m);
+    return ref.get().then(function (s) {
+      if (s.exists && s.data().status === 'FILED') return;
+      if (status === 'GENERATED' && s.exists && s.data().status === 'GENERATED') return;
+      var data = { status: status, periodLabel: monthShort(gsFpMonth()) + ' (GST Online Seller)' }; data[status === 'FILED' ? 'filedAt' : 'generatedAt'] = nowIso();
+      return ref.set(data, { merge: true });
+    }).catch(function () {});
+  }));
+}
+function markFiled() {
+  if (!confirm('Mark this return (' + GS.gstin + ', ' + monthShort(gsFpMonth()) + ') as filed?\n\nImports and edits get locked. Billing invoices of these months can then no longer be deleted (same lock as Billing).')) return Promise.resolve();
+  GS.ret.filed = { at: nowIso() };
+  return saveRet().then(function () { return setBillingMonths('FILED'); }).then(renderReport);
+}
+function unlockReturn() {
+  var t = prompt('Unlock only if you have NOT filed this return on the GST portal.\n\nType UNLOCK to confirm:');
+  if (t === null) return Promise.resolve();
+  if (t.trim().toUpperCase() !== 'UNLOCK') { alert('Not unlocked (type UNLOCK exactly).'); return Promise.resolve(); }
+  delete GS.ret.filed;
+  return saveRet().then(function () { gsGo(GS.sec); });
+}
 
 /* ---------------- GST PROFILE ---------------- */
 function fillPeriodSelects() {
@@ -191,7 +265,7 @@ function selectGstin(raw, fromSaved) {
   rememberSelection();
   return col('gstProfiles').doc(g).set(data, { merge: true })
     .then(loadSaved).then(loadParts).then(loadRet)
-    .then(function () { renderProfile(); return true; })
+    .then(function () { GS.purch = null; renderProfile(); return true; })
     .catch(function (e) { $('pErr').textContent = 'Could not save: ' + e.message; return false; });
 }
 function renderProfile() {
@@ -257,7 +331,7 @@ function renderImport() {
     if (GS.filter === 'pending') return !done && !d.soon;
     return true;
   });
-  $('iBody').innerHTML = stepper(importedCount() ? 2 : 2) +
+  $('iBody').innerHTML = lockBar() + stepper(isLocked() ? 3 : 2) +
     '<div class="gs-tools"><div class="gs-search"><i class="bi bi-search"></i><input id="iSearch" placeholder="Search for a platform..." value="' + esc(GS.search) + '"></div>' +
     ['all', 'imported', 'pending'].map(function (f) { return '<button class="chip' + (GS.filter === f ? ' on' : '') + '" onclick="GS.filter=\'' + f + '\';renderImport()">' + f.charAt(0).toUpperCase() + f.slice(1) + '</button>'; }).join('') + '</div>' +
     '<div class="gs-warn"><i class="bi bi-exclamation-triangle-fill"></i> Avoid importing an edited file to prevent errors.</div>' +
@@ -273,6 +347,8 @@ function renderImport() {
   var si = $('iSearch'); si.addEventListener('input', function () { GS.search = si.value; var pos = si.selectionStart; renderImport(); var n = $('iSearch'); n.focus(); n.setSelectionRange(pos, pos); });
 }
 function deleteCard(card) {
+  if (lockedGuard()) return;
+  if (PF[card].billing) { openBilling(); return; }
   var ms = gsMonths();
   if (!confirm('Remove all ' + PF[card].name + ' data for ' + ms.map(monthName).join(', ') + '?')) return;
   var keys = Object.keys(GS.parts).filter(function (k) { var p = k.split('|'); return p[0] === card && ms.indexOf(p[1]) >= 0; });
@@ -281,6 +357,7 @@ function deleteCard(card) {
 
 /* ----- platform window ----- */
 function openPlatform(card) {
+  if (PF[card].billing) return openBilling();
   var ms = gsMonths();
   GS.modal = { card: card, month: (GS.modal && GS.modal.card === card && ms.indexOf(GS.modal.month) >= 0) ? GS.modal.month : ms[0] };
   renderPlatformModal();
@@ -300,8 +377,8 @@ function renderPlatformModal() {
     if (have[sl.key]) h += '<div class="m-ok"><i class="bi bi-check-circle-fill"></i> ' + esc(have[sl.key].file) + ' · ' + have[sl.key].rows + ' rows</div>';
     if (sl.after) h += '<div class="m-note">' + sl.after + '</div>';
   });
-  h += '<button class="btn btn-blue" style="height:54px;font-size:18px;padding:0 30px;margin-top:8px" onclick="uploadPlatform()">Upload</button>' +
-    (cm ? ' <button class="btn btn-danger-o" style="margin-top:8px" onclick="deleteMonth(\'' + card + '\',\'' + m + '\', true)"><i class="bi bi-trash3"></i> Remove ' + monthName(m) + ' data</button>' : '');
+  h += '<button class="btn btn-blue" style="height:54px;font-size:18px;padding:0 30px;margin-top:8px" onclick="uploadPlatform()"' + (isLocked() ? ' disabled title="This return is marked as filed"' : '') + '>Upload</button>' +
+    (cm && !isLocked() ? ' <button class="btn btn-danger-o" style="margin-top:8px" onclick="deleteMonth(\'' + card + '\',\'' + m + '\', true)"><i class="bi bi-trash3"></i> Remove ' + monthName(m) + ' data</button>' : '');
   h += '<div class="m-sum" id="mMsg"' + (cm ? '' : ' style="display:none"') + '>' + (cm ? monthSummary(cm) : '') + '</div></div>';
   h += '<div class="gs-mf"><button class="btn btn-ghost" style="background:#64748B;color:#fff;border:0" onclick="gsCloseModal()">Close</button></div>';
   openModal(h);
@@ -340,6 +417,7 @@ function sheetRows(wb, like) {
   return VTGst.rowsToObjects(XLSX, wb.Sheets[n || wb.SheetNames[0]]);
 }
 function uploadPlatform() {
+  if (lockedGuard()) return Promise.resolve();
   var card = GS.modal.card, m = GS.modal.month, d = PF[card], o = { sellerState: sellerState(), etin: ecoGstinFor(d.eco) }, jobs = [], errors = [];
   d.slots.forEach(function (sl) {
     var inp = $('mFile_' + sl.key); if (!inp || !inp.files.length) return;
@@ -374,6 +452,7 @@ function uploadPlatform() {
   });
 }
 function deleteMonth(card, m, fromModal) {
+  if (lockedGuard()) return;
   if (!confirm('Remove ' + PF[card].name + ' data for ' + monthName(m) + '?')) return;
   var keys = Object.keys(GS.parts).filter(function (k) { return k.indexOf(card + '|' + m + '|') === 0; });
   return Promise.all(keys.map(function (k) { return col('gstImports').doc(GS.parts[k].id).delete().then(function () { delete GS.parts[k]; }); }))
@@ -395,10 +474,21 @@ function renderManage() {
   if (needGstin('mBody')) return;
   var groups = GROUPS.map(function (g) { return { g: g, rows: gsMonths().map(function (m) { return { m: m, e: groupMonth(g, m) }; }) }; }).filter(function (x) { return x.rows.some(function (r) { return r.e; }); });
   var all = allEntries(), tot = lineStats([].concat.apply([], all.map(function (e) { return e.lines; })));
-  var h = '<div class="kpis">' +
-    kpi('bi-shop', '#EAF1FE', '#2F6FED', 'Platforms', groups.length) + kpi('bi-currency-rupee', '#E7F8F1', '#0E9F77', 'Taxable sale', '₹' + inr(tot.hsn), '#0E9F77') +
+  var bd = billingDocs(), bs = billingStats(bd);
+  tot.hsn += bs.hsn; tot.tax += bs.tax;
+  var h = lockBar() + '<div class="kpis">' +
+    kpi('bi-shop', '#EAF1FE', '#2F6FED', 'Platforms', groups.length + (bd.length ? 1 : 0)) + kpi('bi-currency-rupee', '#E7F8F1', '#0E9F77', 'Taxable sale', '₹' + inr(tot.hsn), '#0E9F77') +
     kpi('bi-receipt', '#FFF4E5', '#D97706', 'Total tax', '₹' + inr(tot.tax)) + kpi('bi-file-earmark-text', '#E6F7FA', '#0891B2', 'Invoice value', '₹' + inr(tot.hsn + tot.tax)) + '</div>';
-  if (!groups.length) h += '<div class="gs-empty"><div class="ic"><i class="bi bi-cloud-arrow-up"></i></div><h4>Nothing imported yet</h4><p>Import your marketplace files first.</p><button class="btn btn-blue" onclick="gsGo(\'import\')">Go to Import Data</button></div>';
+  if (bd.length) {
+    h += '<div class="tblc"><div class="tblc-h"><span class="lg" style="background:#C2410C">V</span><h4>VISUTRA Billing</h4><span class="bd" style="font-size:13px;font-weight:700;background:#DCFCE7;color:#166534;border-radius:8px;padding:3px 10px">B2B / B2C</span>' +
+      '<span class="sp"></span><span class="tx">Taxable: <b>₹' + inr(bs.hsn) + '</b></span></div><table class="gt"><thead><tr><th>Month</th><th>Invoices</th><th>B2B Sales</th><th>B2C Sales</th><th>Nil Rated</th><th>HSN</th><th style="text-align:center">Actions</th></tr></thead><tbody>' +
+      gsMonths().map(function (m) {
+        var ms = billingStats(bd.filter(function (d) { return String(d.date).slice(0, 7) === m; }));
+        var c = function (v) { return Math.abs(v) < 0.005 ? '<td class="dash">—</td>' : '<td>' + inr(v) + '</td>'; };
+        return '<tr><td><b>' + monthName(m) + '</b></td><td>' + ms.n + '</td>' + c(ms.b2b) + c(ms.b2c) + c(ms.nil) + c(ms.hsn) + '<td style="text-align:center"><button class="btn btn-ghost" style="padding:8px 12px" onclick="openBilling()"><i class="bi bi-arrow-repeat"></i></button></td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  if (!groups.length && !bd.length) h += '<div class="gs-empty"><div class="ic"><i class="bi bi-cloud-arrow-up"></i></div><h4>Nothing imported yet</h4><p>Import your marketplace files first.</p><button class="btn btn-blue" onclick="gsGo(\'import\')">Go to Import Data</button></div>';
   groups.forEach(function (x) {
     var d = PF[x.g.cards[0]], gl = [].concat.apply([], x.rows.filter(function (r) { return r.e; }).map(function (r) { return r.e.lines; }));
     h += '<div class="tblc"><div class="tblc-h"><span class="lg" style="background:' + d.bg + '">' + d.letter + '</span><h4>' + d.name + '</h4>' + (x.g.eco !== 'AMAZON' ? '<span class="bd" style="font-size:13px;font-weight:700;background:#DCFCE7;color:#166534;border-radius:8px;padding:3px 10px">' + d.badge.replace(' / B2B', '') + '</span>' : '') +
@@ -417,6 +507,7 @@ function kpi(icon, bg, fg, label, value, vcolor) {
   return '<div class="kpi"><span class="ic" style="background:' + bg + ';color:' + fg + '"><i class="bi ' + icon + '"></i></span><div><small>' + label + '</small><b' + (vcolor ? ' style="color:' + vcolor + '"' : '') + '>' + value + '</b></div></div>';
 }
 function deleteGroupMonth(eco, m) {
+  if (lockedGuard()) return;
   var g = GROUPS.filter(function (x) { return x.eco === eco; })[0];
   if (!confirm('Remove ' + PF[g.cards[0]].name + ' data for ' + monthName(m) + '?')) return;
   var keys = Object.keys(GS.parts).filter(function (k) { var p = k.split('|'); return g.cards.indexOf(p[0]) >= 0 && p[1] === m; });
@@ -532,7 +623,7 @@ function uploadPortalTcs() {
 /* ---------------- GSTR1 REPORT ---------------- */
 var UQC_DESC = { PCS: 'PIECES', NOS: 'NUMBERS', SET: 'SETS', KGS: 'KILOGRAMS', MTR: 'METERS', BOX: 'BOX', PAC: 'PACKS', OTH: 'OTHERS' };
 function gsBuild() {
-  var st = sellerState(), res = VTGst.buildGstr1([], { gstin: GS.gstin, stateCode: st, period: gsFpMonth() });
+  var st = sellerState(), res = VTGst.buildGstr1(billingDocs(), { gstin: GS.gstin, stateCode: st, period: gsFpMonth() });   // own invoices + marketplaces = ONE GSTR-1
   var entries = allEntries();
   if (entries.length) VTGst.mergePlatformData(res, entries, { stateCode: st, uqc: 'PCS' });
   if (entries.some(function (e) { return e.stock; })) res.issues.push({ level: 'warn', msg: 'Amazon stock-transfer (FBA) file received — stock moved to another state is a supply to your own GSTIN there (B2B). It is not added automatically: add it as a B2B invoice.' });
@@ -581,7 +672,7 @@ function renderReport() {
       (extra || '') + (editKey ? '<button class="btn btn-ghost no-print" onclick="openEditor(\'' + editKey + '\')"><i class="bi bi-eye"></i> View / Edit</button>' : '') + '</div>' + body + '</div>';
   };
   var errs = res.issues.filter(function (i) { return i.level === 'error'; });
-  var h = res.issues.length ? '<div class="issues warn"><b>Check before filing: ' + errs.length + ' error(s), ' + (res.issues.length - errs.length) + ' warning(s)</b><ul>' + res.issues.map(function (i) { return '<li>' + esc(i.msg) + '</li>'; }).join('') + '</ul></div>' : '<div class="issues ok"><b>✓ No problems found.</b></div>';
+  var h = lockBar() + (res.issues.length ? '<div class="issues warn"><b>Check before filing: ' + errs.length + ' error(s), ' + (res.issues.length - errs.length) + ' warning(s)</b><ul>' + res.issues.map(function (i) { return '<li>' + esc(i.msg) + '</li>'; }).join('') + '</ul></div>' : '<div class="issues ok"><b>✓ No problems found.</b></div>');
   if ((J.b2b || []).length) {
     var items = []; J.b2b.forEach(function (c) { c.inv.forEach(function (i) { i.itms.forEach(function (t) { items.push(t.itm_det); }); }); });
     h += card('4', 'bi-building', '#EEF2FF', '#4F46E5', 'B2B Invoices', 'Sales to GST-registered buyers', sumTable(items));
@@ -612,15 +703,18 @@ function renderReport() {
     '<hr style="border:0;border-top:1px solid var(--line);margin:20px 0"><h3 style="text-align:center;color:var(--blue);margin:0 0 6px;font-size:26px">Return of ' + monthName(gsFpMonth()) + ' - ' + gsFpMonth().slice(0, 4) + '</h3>' +
     '<div class="dl no-print"><button class="btn btn-blue" onclick="downloadExcel()"><i class="bi bi-file-earmark-excel-fill"></i><span>GSTR1<br>Excel Download</span></button>' +
     '<button class="btn btn-blue" onclick="downloadJson()"><i class="bi bi-filetype-json"></i><span>GSTR1<br>Json Download</span></button>' +
-    '<button class="btn rep" onclick="window.print()"><i class="bi bi-file-earmark-bar-graph"></i><span>Report<br>(PDF)</span></button></div></div>';
+    '<button class="btn rep" onclick="window.print()"><i class="bi bi-file-earmark-bar-graph"></i><span>Report<br>(PDF)</span></button></div>' +
+    '<div class="no-print" style="text-align:center;margin-top:18px">' + (isLocked() ? '<span style="color:#065F46"><i class="bi bi-lock-fill"></i> Marked as filed on ' + fmtDate(GS.ret.filed.at) + '</span>'
+      : '<button class="btn btn-green" style="height:52px;font-size:17px;padding:0 26px" onclick="markFiled()"><i class="bi bi-check2-circle"></i> Mark as filed</button><div style="color:#6B7280;font-size:13.5px;margin-top:6px">After you upload the JSON and file on the GST portal — locks this return' + (billingPart() ? ' and these months\' Billing invoices' : '') + '.</div>') + '</div></div>';
   $('rBody').innerHTML = h;
 }
-function toggleB2cHsn() { GS.ret.b2cHsn = !GS.ret.b2cHsn; saveRet().then(renderReport); }
+function toggleB2cHsn() { if (lockedGuard()) return; GS.ret.b2cHsn = !GS.ret.b2cHsn; saveRet().then(renderReport); }
 function fileTag() { return GS.gstin + '_' + (GS.type === 'quarterly' ? 'quarterly_' : 'monthly_') + gsFp(); }
 function downloadJson() {
   var res = gsBuild(), errs = res.issues.filter(function (i) { return i.level === 'error'; }).length;
   if (errs && !confirm(errs + ' problem(s) could make the GST portal reject this file. Download anyway?')) return;
   VTGst.downloadJson(res.json, 'GSTR1_returns_' + fileTag() + '.json');
+  setBillingMonths('GENERATED');
 }
 function downloadExcel() { var res = gsBuild(); XLSX.writeFile(VTGst.gstr1Workbook(XLSX, res), 'GSTR1_' + fileTag() + '.xlsx'); }
 
@@ -667,6 +761,7 @@ function collectEditor() {
   });
 }
 function saveEditor() {
+  if (lockedGuard()) return;
   collectEditor();
   if (EDIT_KEY === 'b2cs' && EDIT_ROWS.some(function (r) { return !/^\d{2}$/.test(String(r.pos)); })) { alert('State codes must be 2 digits (e.g. 09 for Uttar Pradesh).'); return; }
   if (EDIT_KEY === 'supeco' && EDIT_ROWS.some(function (r) { return !VTGst.gstinValid(r.etin); })) { alert('An ECO GSTIN is not valid — check it.'); return; }
@@ -674,12 +769,77 @@ function saveEditor() {
   saveRet().then(function () { gsCloseModal(); renderReport(); });
 }
 function resetEditor() {
+  if (lockedGuard()) return;
   if (!confirm('Discard your changes to this section and use the imported data again?')) return;
   delete GS.ret.edits[EDIT_KEY]; saveRet().then(function () { gsCloseModal(); renderReport(); });
 }
 function gsToggleAdd(e) { e.stopPropagation(); $('addMenu').classList.toggle('on'); }
 document.addEventListener('click', function () { var m = $('addMenu'); if (m) m.classList.remove('on'); });
-function gsAddEntry(key) { $('addMenu').classList.remove('on'); if (!GS.gstin) { gsGo('profile'); return; } openEditor(key, undefined, true); drawEditor(EDIT_ROWS.length - 1); }
+function gsAddEntry(key) { $('addMenu').classList.remove('on'); if (!GS.gstin) { gsGo('profile'); return; } if (lockedGuard()) return; openEditor(key, undefined, true); drawEditor(EDIT_ROWS.length - 1); }
+
+/* ---------------- GSTR-3B ---------------- */
+function loadPurchases() {
+  var ms = gsMonths(), st = sellerState();
+  return Promise.all([col('purchases').get(), col('suppliers').get(), col('buyerPurchases').get(), col('buyerSuppliers').get()]).then(function (r) {
+    var sup = {}, bsup = {}; r[1].docs.forEach(function (d) { sup[d.id] = d.data(); }); r[3].docs.forEach(function (d) { bsup[d.id] = d.data(); });
+    var mk = function (x, map) {
+      var g = String(x.gstin || (map[x.supplierId] || {}).gstin || '').trim().toUpperCase();
+      return { date: x.date, gstin: g, inter: g ? g.slice(0, 2) !== st : false, itcEligible: x.itcEligible, rchrg: !!x.reverseCharge,
+        items: (x.items || []).map(function (li) { return { rate: Number(li.gstRate) || 0, taxable: Number(li.taxable) || 0 }; }) };
+    };
+    var inPeriod = function (x) { return !x.deleted && ms.indexOf(String(x.date || '').slice(0, 7)) >= 0; };
+    GS.purch = { key: GS.gstin + gsFp(), billing: r[0].docs.map(function (d) { return d.data(); }).filter(inPeriod).map(function (x) { return mk(x, sup); }),
+      buyer: r[2].docs.map(function (d) { return d.data(); }).filter(inPeriod).map(function (x) { return mk(x, bsup); }) };
+  });
+}
+function gstr3bRes() {
+  var use = GS.ret.itc || { billing: true, buyer: true }, p = GS.purch || { billing: [], buyer: [] };
+  var purchases = [].concat(use.billing ? p.billing : [], use.buyer ? p.buyer : []);
+  return VTGst.gstr3bCombined(gsBuild().json, purchases, { gstin: GS.gstin, period: gsFpMonth() });
+}
+function renderGstr3b() {
+  if (needGstin('bBody')) return;
+  if (!GS.purch || GS.purch.key !== GS.gstin + gsFp()) { $('bBody').innerHTML = '<p style="color:#6B7280">Loading purchases…</p>'; loadPurchases().then(renderGstr3b); return; }
+  var res = gstr3bRes(), J = res.json, s = J.sup_details, e = J.itc_elg, use = GS.ret.itc || { billing: true, buyer: true };
+  var sum = function (o) { return (o.igst || 0) + (o.cgst || 0) + (o.sgst || 0) + (o.cess || 0); };
+  var pay = res.payable, payT = pay.reduce(function (a, b) { return a + b; }, 0);
+  var row = function (label, o) { return '<tr><td>' + label + '</td><td>' + (o.txval != null ? inr(o.txval) : '') + '</td><td>' + inr(o.iamt || 0) + '</td><td>' + inr(o.camt || 0) + '</td><td>' + inr(o.samt || 0) + '</td></tr>'; };
+  var h = lockBar() + '<div class="kpis">' + kpi('bi-box-arrow-up-right', '#FFF4E5', '#D97706', 'Output tax', '₹' + inr(sum(res.liability))) +
+    kpi('bi-box-arrow-in-down-left', '#E7F8F1', '#0E9F77', 'ITC available', '₹' + inr(sum(res.credit))) +
+    kpi('bi-cash-coin', payT > 0 ? '#FFE4E6' : '#E7F8F1', payT > 0 ? '#E11D48' : '#0E9F77', 'Pay in cash (approx.)', '₹' + inr(payT), payT > 0 ? '#E11D48' : '#0E9F77') +
+    kpi('bi-receipt', '#EAF1FE', '#2F6FED', 'Purchases used', (use.billing ? GS.purch.billing.length : 0) + (use.buyer ? GS.purch.buyer.length : 0)) + '</div>';
+  h += '<div class="gs-panel" style="margin-bottom:22px"><b>ITC from:</b>' +
+    '<label class="chk"><input type="checkbox" ' + (use.billing ? 'checked' : '') + ' onchange="setItc(\'billing\',this.checked)"> Billing → Purchase Entry (' + GS.purch.billing.length + ' purchase(s) in the period)</label>' +
+    '<label class="chk"><input type="checkbox" ' + (use.buyer ? 'checked' : '') + ' onchange="setItc(\'buyer\',this.checked)"> Buyer → Purchase Entry (' + GS.purch.buyer.length + ' purchase(s) in the period)</label>' +
+    '<div style="color:#6B7280;font-size:13.5px">Claim ITC only for invoices that appear in your GSTR-2B — check them in <a href="../billing/buyer/purchases-gstr.html">Buyer → GST &amp; ITC</a> (GSTR-2B reconciliation).</div></div>';
+  h += '<div class="sumc"><div class="sumc-h"><span class="ic" style="background:#FFF4E5;color:#D97706"><i class="bi bi-box-arrow-up-right"></i></span><div><h4>3.1 - Outward supplies</h4><p>From this period\'s GSTR-1 (marketplaces + Billing)</p></div></div>' +
+    '<table class="gt"><thead><tr><th>Nature of supplies</th><th>Taxable (₹)</th><th>IGST (₹)</th><th>CGST (₹)</th><th>SGST (₹)</th></tr></thead><tbody>' +
+    row('(a) Outward taxable supplies', s.osup_det) + row('(b) Zero rated', s.osup_zero) + row('(c) Nil rated, exempted', s.osup_nil_exmp) + row('(d) Inward supplies (reverse charge)', s.isup_rev) + row('(e) Non-GST', s.osup_nongst) + '</tbody></table></div>';
+  var un = J.inter_sup.unreg_details;
+  if (res.negative32 && res.negative32.length) h += '<div class="issues warn"><b>⚠ Table 3.2 has a negative value</b> for ' + res.negative32.map(function (u) { return esc(VTGst.stateName(u.pos)) + ' (₹' + inr(u.txval) + ')'; }).join(', ') +
+    ' — returns in that state were more than sales this period. The GST portal may not accept a negative figure there; it is usually entered as 0 (check with your CA).</div>';
+  h += '<div class="sumc"><div class="sumc-h"><span class="ic" style="background:#EEF2FF;color:#4F46E5"><i class="bi bi-geo-alt"></i></span><div><h4>3.2 - Inter-state supplies to unregistered persons</h4><p>' + un.length + ' state(s)</p></div></div>' +
+    '<table class="gt"><thead><tr><th>Place of supply</th><th>Taxable (₹)</th><th>IGST (₹)</th></tr></thead><tbody>' +
+    (un.length ? un.map(function (u) { return '<tr><td>' + u.pos + ' - ' + esc(VTGst.stateName(u.pos)) + '</td><td>' + inr(u.txval) + '</td><td>' + inr(u.iamt) + '</td></tr>'; }).join('') : '<tr><td colspan="3" class="dash" style="text-align:center">none</td></tr>') + '</tbody></table></div>';
+  var oth = e.itc_avl.filter(function (x) { return x.ty === 'OTH'; })[0] || {}, inel = e.itc_inelg.filter(function (x) { return x.ty === 'OTH'; })[0] || {};
+  h += '<div class="sumc"><div class="sumc-h"><span class="ic" style="background:#E7F8F1;color:#0E9F77"><i class="bi bi-box-arrow-in-down-left"></i></span><div><h4>4 - Eligible ITC</h4><p>' + res.itcCount + ' purchase line(s) with a supplier GSTIN' + (res.noItcCount ? ' · ' + res.noItcCount + ' without (not eligible)' : '') + '</p></div></div>' +
+    '<table class="gt"><thead><tr><th>Details</th><th>IGST (₹)</th><th>CGST (₹)</th><th>SGST (₹)</th></tr></thead><tbody>' +
+    '<tr><td>(A)(5) All other ITC</td><td>' + inr(oth.iamt) + '</td><td>' + inr(oth.camt) + '</td><td>' + inr(oth.samt) + '</td></tr>' +
+    '<tr><td>(C) Net ITC available</td><td>' + inr(e.itc_net.iamt) + '</td><td>' + inr(e.itc_net.camt) + '</td><td>' + inr(e.itc_net.samt) + '</td></tr>' +
+    '<tr><td>(D)(2) Ineligible (no supplier GSTIN)</td><td>' + inr(inel.iamt) + '</td><td>' + inr(inel.camt) + '</td><td>' + inr(inel.samt) + '</td></tr></tbody></table></div>';
+  h += '<div class="sumc"><div class="sumc-h"><span class="ic" style="background:#FFE4E6;color:#E11D48"><i class="bi bi-cash-coin"></i></span><div><h4>Tax payable</h4><p>ITC set off in the legal order (Rule 88A: IGST credit first)</p></div></div>' +
+    '<table class="gt"><thead><tr><th></th><th>IGST (₹)</th><th>CGST (₹)</th><th>SGST (₹)</th><th>Cess (₹)</th></tr></thead><tbody>' +
+    '<tr><td>Output tax (3.1 a + d)</td><td>' + inr(res.liability.igst) + '</td><td>' + inr(res.liability.cgst) + '</td><td>' + inr(res.liability.sgst) + '</td><td>' + inr(res.liability.cess) + '</td></tr>' +
+    '<tr><td>ITC</td><td>' + inr(res.credit.igst) + '</td><td>' + inr(res.credit.cgst) + '</td><td>' + inr(res.credit.sgst) + '</td><td>' + inr(res.credit.cess) + '</td></tr>' +
+    '<tr class="tot"><td>Pay in cash (approx.)</td><td>' + inr(pay[0]) + '</td><td>' + inr(pay[1]) + '</td><td>' + inr(pay[2]) + '</td><td>' + inr(pay[3]) + '</td></tr></tbody></table>' +
+    '<p style="color:#6B7280;font-size:13.5px;padding:0 20px 14px;margin:0">TCS collected by the marketplaces (Table 14) is credited to your <b>cash ledger</b> once you accept it on the portal (Returns → TDS and TCS credit received) — it reduces the cash you pay. Interest / late fee are not included.</p></div>';
+  h += '<div class="dl no-print"><button class="btn btn-blue" onclick="download3bExcel()"><i class="bi bi-file-earmark-excel-fill"></i><span>GSTR3B<br>Excel Download</span></button>' +
+    '<button class="btn btn-blue" onclick="download3bJson()"><i class="bi bi-filetype-json"></i><span>GSTR3B<br>Json Download</span></button></div>';
+  $('bBody').innerHTML = h;
+}
+function setItc(k, on) { GS.ret.itc = Object.assign({ billing: true, buyer: true }, GS.ret.itc || {}); GS.ret.itc[k] = on; saveRet().then(renderGstr3b); }
+function download3bJson() { VTGst.downloadJson(gstr3bRes().json, 'GSTR3B_' + fileTag() + '.json'); }
+function download3bExcel() { XLSX.writeFile(VTGst.gstr3bWorkbook(XLSX, gstr3bRes(), { periodLabel: monthShort(gsFpMonth()) }), 'GSTR3B_' + fileTag() + '.xlsx'); }
 
 /* ---------------- modal ---------------- */
 function openModal(html, small) { var b = $('gsMbox'); b.className = 'gs-mbox' + (small ? ' sm' : ''); b.innerHTML = html; $('gsModal').classList.add('on'); }
@@ -695,11 +855,12 @@ function gsCloseModal() { $('gsModal').classList.remove('on'); if (GS.sec === 'i
   firebase.auth().onAuthStateChanged(function (user) {
     if (!user) return;
     GS.uid = user.uid;
-    loadSaved().then(function () {
+    db.collection('users').doc(user.uid).get().then(function (s) { GS.account = s.exists ? s.data() : {}; }).catch(function () { GS.account = {}; })
+    .then(loadSaved).then(function () {
       if (!GS.gstin) return;
       $('pGstin').value = GS.gstin;
       return loadParts().then(loadRet);
-    }).then(function () { gsGo(['profile', 'import', 'manage', 'tcs', 'report'].indexOf(start) >= 0 ? start : 'profile'); });
+    }).then(function () { gsGo(['profile', 'import', 'manage', 'tcs', 'report', 'gstr3b'].indexOf(start) >= 0 ? start : 'profile'); });
   });
   gsGo('profile');
 })();
