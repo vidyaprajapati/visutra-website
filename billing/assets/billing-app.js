@@ -3585,7 +3585,7 @@ function downloadGstr1Json(){
 }
 function downloadGstr1Excel(){
   if(!gstRes1) return;
-  XLSX.writeFile(VTGst.gstr1Workbook(XLSX, gstRes1), `GSTR1_${gstFileTag()}.xlsx`);
+  XLSX.writeFile(VTGst.gstr1Workbook(XLSX, gstRes1, { checksSheet: true }), `GSTR1_${gstFileTag()}.xlsx`);
   lockGstMonths('GENERATED');
 }
 function downloadGstr3bJson(){ if(gstRes3b){ VTGst.downloadJson(gstRes3b.json, `GSTR3B_${gstFileTag()}.json`); lockGstMonths('GENERATED'); } }
