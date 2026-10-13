@@ -247,7 +247,8 @@
     const pad = a => { const r = a.slice(); while (r.length < headers.length) r.push(''); return r; };
     return XLSX.utils.aoa_to_sheet([pad([title]), pad(summaryHeads), pad(summaryVals), headers].concat(data));
   }
-  function gstr1Workbook(XLSX, res) {
+  // opts.checksSheet: add a CHECK-BEFORE-FILING sheet (Billing). Default: exactly the offline tool's sheets.
+  function gstr1Workbook(XLSX, res, opts) {
     const wb = XLSX.utils.book_new(), R = res.rows;
     const colSum = (rows, i) => r2(sum(rows, r => r[i]));
     const uniq = (rows, i) => new Set(rows.map(r => r[i])).size;
@@ -259,6 +260,9 @@
       ['No. of Invoices', '', 'Total Inv Value', '', '', '', 'Total Taxable Value', 'Total Cess', ''],
       [uniq(R.b2cl, 0), '', r2(sum([...new Map(R.b2cl.map(r => [r[0], r[2]])).values()], v => v)), '', '', '', colSum(R.b2cl, 6), colSum(R.b2cl, 7), ''],
       ['Invoice Number', 'Invoice date', 'Invoice Value', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount', 'E-Commerce GSTIN'], R.b2cl), 'b2cl');
+    XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary For B2CS(7)',
+      ['', '', '', '', 'Total Taxable Value', 'Total Cess', ''], ['', '', '', '', colSum(R.b2cs, 4), colSum(R.b2cs, 5), ''],
+      ['Type', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount', 'E-Commerce GSTIN'], R.b2cs), 'b2cs');
     if (R.cdnr && R.cdnr.length) XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary For CDNR(9B)',
       ['No. of Recipients', '', 'No. of Notes', '', '', '', '', '', 'Total Note Value', '', '', 'Total Taxable Value', 'Total Cess'],
       [uniq(R.cdnr, 0), '', uniq(R.cdnr, 2), '', '', '', '', '', r2(sum([...new Map(R.cdnr.map(r => [r[2], r[8]])).values()], v => v)), '', '', colSum(R.cdnr, 11), colSum(R.cdnr, 12)],
@@ -266,21 +270,26 @@
     if (R.cdnur && R.cdnur.length) XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary For CDNUR(9B)',
       ['', 'No. of Notes', '', '', '', 'Total Note Value', '', '', 'Total Taxable Value', 'Total Cess'], ['', uniq(R.cdnur, 1), '', '', '', colSum(R.cdnur, 5), '', '', colSum(R.cdnur, 8), colSum(R.cdnur, 9)],
       ['UR Type', 'Note Number', 'Note Date', 'Note Type', 'Place Of Supply', 'Note Value', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount'], R.cdnur), 'cdnur');
-    XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary For B2CS(7)',
-      ['', '', '', '', 'Total Taxable Value', 'Total Cess', ''], ['', '', '', '', colSum(R.b2cs, 4), colSum(R.b2cs, 5), ''],
-      ['Type', 'Place Of Supply', 'Applicable % of Tax Rate', 'Rate', 'Taxable Value', 'Cess Amount', 'E-Commerce GSTIN'], R.b2cs), 'b2cs');
     const hsnHead = ['HSN', 'Description', 'UQC', 'Total Quantity', 'Total Value', 'Rate', 'Taxable Value', 'Integrated Tax Amount', 'Central Tax Amount', 'State/UT Tax Amount', 'Cess Amount'];
     [['hsn(b2b)', R.hsnB2B, 'Summary For HSN(12) - B2B'], ['hsn(b2c)', R.hsnB2C, 'Summary For HSN(12) - B2C']].forEach(([name, rows, title]) =>
       XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, title,
         ['No. of HSN', '', '', '', 'Total Value', '', 'Total Taxable Value', 'Total Integrated Tax', 'Total Central Tax', 'Total State/UT Tax', 'Total Cess'],
         [rows.length, '', '', '', colSum(rows, 4), '', colSum(rows, 6), colSum(rows, 7), colSum(rows, 8), colSum(rows, 9), colSum(rows, 10)], hsnHead, rows), name));
-    XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary of documents issued during the tax period (13)',
-      ['', '', '', 'Total Number', 'Total Cancelled'], ['', '', '', sum(R.docs, r => r[3]), sum(R.docs, r => r[4])],
-      ['Nature of Document', 'Sr. No. From', 'Sr. No. To', 'Total Number', 'Cancelled'], R.docs), 'docs');
     XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary For Nil rated, exempted and non GST outward supplies (8)',
       ['', 'Total Nil Rated Supplies', 'Total Exempted Supplies', 'Total Non-GST Supplies'], ['', colSum(R.exemp, 1), 0, 0],
       ['Description', 'Nil Rated Supplies', 'Exempted(other than nil rated/non GST supply)', 'Non-GST Supplies'], R.exemp), 'exemp');
-    if (res.issues && res.issues.length) {
+    // Table 14 — supplies through e-commerce operators (the offline tool's "eco" sheet), from the final JSON
+    const clttx = ((res.json && res.json.supeco && res.json.supeco.clttx) || []).filter(e => e && e.etin);
+    const ecoName = g => { const k = Object.keys(ECO).find(x => ECO[x].pan === String(g).slice(2, 12)); return k ? ECO[k].name.toLowerCase() : ''; };
+    const ecoRows = clttx.map(e => ['Liable to collect tax u/s 52(TCS)', e.etin, ecoName(e.etin), r2(e.suppval), r2(e.igst), r2(e.cgst), r2(e.sgst), r2(e.cess || 0)]);
+    XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary For Supplies through ECO-14',
+      ['', 'No. of E-Commerce Operator', '', 'Total Net Value of Supplies', 'Total Integrated Tax', 'Total Central Tax ', 'Total State/UT Tax ', 'Total Cess'],
+      ['', ecoRows.length, '', colSum(ecoRows, 3), colSum(ecoRows, 4), colSum(ecoRows, 5), colSum(ecoRows, 6), colSum(ecoRows, 7)],
+      ['Nature of Supply', 'GSTIN of E-Commerce Operator', 'E-Commerce Operator Name', 'Net value of supplies', 'Integrated tax', 'Central tax', 'State/UT tax', 'Cess'], ecoRows), 'eco');
+    XLSX.utils.book_append_sheet(wb, sheetWithSummary(XLSX, 'Summary of documents issued during the tax period (13)',
+      ['', '', '', 'Total Number', 'Total Cancelled'], ['', '', '', sum(R.docs, r => r[3]), sum(R.docs, r => r[4])],
+      ['Nature of Document', 'Sr. No. From', 'Sr. No. To', 'Total Number', 'Cancelled'], R.docs), 'docs');
+    if (opts && opts.checksSheet && res.issues && res.issues.length) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Level', 'Problem', 'Where']].concat(res.issues.map(i => [i.level.toUpperCase(), i.msg, i.ref]))), 'CHECK-BEFORE-FILING');
     }
     return wb;
