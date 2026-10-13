@@ -377,6 +377,7 @@ function renderPlatformModal() {
     if (have[sl.key]) h += '<div class="m-ok"><i class="bi bi-check-circle-fill"></i> ' + esc(have[sl.key].file) + ' · ' + have[sl.key].rows + ' rows</div>';
     if (sl.after) h += '<div class="m-note">' + sl.after + '</div>';
   });
+  h += '<div id="mAlarm" style="display:none"></div>';
   h += '<button class="btn btn-blue" style="height:54px;font-size:18px;padding:0 30px;margin-top:8px" onclick="uploadPlatform()"' + (isLocked() ? ' disabled title="This return is marked as filed"' : '') + '>Upload</button>' +
     (cm && !isLocked() ? ' <button class="btn btn-danger-o" style="margin-top:8px" onclick="deleteMonth(\'' + card + '\',\'' + m + '\', true)"><i class="bi bi-trash3"></i> Remove ' + monthName(m) + ' data</button>' : '');
   h += '<div class="m-sum" id="mMsg"' + (cm ? '' : ' style="display:none"') + '>' + (cm ? monthSummary(cm) : '') + '</div></div>';
@@ -407,47 +408,188 @@ function readWorkbook(file, slot) {
     return loadJsZip().then(function () { return file.arrayBuffer(); }).then(function (b) { return JSZip.loadAsync(b); }).then(function (zip) {
       var names = Object.keys(zip.files).filter(function (n) { return !zip.files[n].dir && slot.zip.test(n); });
       if (!names.length) throw new Error('"' + file.name + '" has no ' + slot.label + ' inside.');
-      return zip.files[names[0]].async('arraybuffer').then(function (b) { return { wb: /\.csv$/i.test(names[0]) ? XLSX.read(decode(b), { type: 'string', raw: true }) : XLSX.read(b, { type: 'array' }), name: file.name + ' › ' + names[0].split('/').pop() }; });
+      return zip.files[names[0]].async('arraybuffer').then(function (b) { return { wb: /\.csv$/i.test(names[0]) ? XLSX.read(decode(b), { type: 'string', raw: true }) : XLSX.read(b, { type: 'array' }), name: file.name + ' › ' + names[0].split('/').pop(), inner: names[0].split('/').pop(), bytes: b }; });
     });
   }
-  return file.arrayBuffer().then(function (b) { return { wb: /\.csv$/i.test(file.name) ? XLSX.read(decode(b), { type: 'string', raw: true }) : XLSX.read(b, { type: 'array' }), name: file.name }; });
+  return file.arrayBuffer().then(function (b) { return { wb: /\.csv$/i.test(file.name) ? XLSX.read(decode(b), { type: 'string', raw: true }) : XLSX.read(b, { type: 'array' }), name: file.name, inner: file.name, bytes: b }; });
 }
 function sheetRows(wb, like) {
   var n = like ? wb.SheetNames.filter(function (x) { return x.toLowerCase().indexOf(like) >= 0; })[0] : null;
   return VTGst.rowsToObjects(XLSX, wb.Sheets[n || wb.SheetNames[0]]);
 }
+/* ================= Upload checks ("alarm") =================
+   Before anything is saved, each file is identified (what report is it?),
+   inspected (month, seller GSTIN, rows, fingerprint) and checked against the
+   slot, the month tab, the return period, the selected GSTIN and the files
+   already uploaded. Any problem → nothing is saved, a red alarm explains it. */
+var KIND_LABEL = {
+  MEESHO_SALES: 'Meesho tcs_sales.xlsx', MEESHO_RETURNS: 'Meesho tcs_sales_return.xlsx', MEESHO_INVOICES: 'Meesho Tax_invoice_details.xlsx',
+  AMAZON_B2C: 'Amazon MTR B2C report', AMAZON_B2B: 'Amazon MTR B2B report', AMAZON_STOCK: 'Amazon stock-transfer report',
+  FLIPKART_SALES: 'Flipkart Sales Report', FLIPKART_GSTR: 'Flipkart "Report for GSTR-1 and GSTR-8" (not the Sales Report)',
+  AMAZON_READY: 'Amazon "GST Ready-to-File" report (not the Merchant Tax Report)', UNKNOWN: 'a file this tool doesn\'t recognise' };
+var EXPECT = { MEESHO: { sales: 'MEESHO_SALES', returns: 'MEESHO_RETURNS', invoices: 'MEESHO_INVOICES' }, AMAZON: { mtr: 'AMAZON_B2C' },
+  AMAZON_B2B: { mtr: 'AMAZON_B2B', stock: 'AMAZON_STOCK' }, FLIPKART: { sales: 'FLIPKART_SALES' } };
+function kindHome(kind) {   // which card & slot a detected file belongs to
+  for (var c in EXPECT) for (var sl in EXPECT[c]) if (EXPECT[c][sl] === kind) return { card: c, slot: sl };
+  return null;
+}
+function firstRowKeys(wb, sheetName) {
+  var ws = wb.Sheets[sheetName || wb.SheetNames[0]]; if (!ws) return [];
+  var rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: false });
+  var r = rows.find(function (x) { return x.some(function (c) { return String(c).trim() !== ''; }); }) || [];
+  return r.map(function (c) { return String(c).trim().toLowerCase(); });
+}
+function detectKind(wb, fileName) {
+  var name = String(fileName || ''), sheets = wb.SheetNames.map(function (x) { return x.toLowerCase(); });
+  if (sheets.some(function (x) { return /sales report/.test(x); })) return 'FLIPKART_SALES';
+  try { if (VTGst.isFlipkartGstWorkbook(wb)) return 'FLIPKART_GSTR'; } catch (e) {}
+  try { if (VTGst.isReadyWorkbook(wb)) return 'AMAZON_READY'; } catch (e) {}
+  var k = firstRowKeys(wb), has = function (x) { return k.indexOf(x) >= 0; };
+  if (has('total_taxable_sale_value') || has('total_taxable_sale_v')) return /return/i.test(name) ? 'MEESHO_RETURNS' : 'MEESHO_SALES';
+  if (has('invoice no.') && has('type')) return 'MEESHO_INVOICES';
+  if (has('transaction type') && has('tax exclusive gross')) return /stock|transfer/i.test(name) ? 'AMAZON_STOCK' : (has('customer bill to gstid') ? 'AMAZON_B2B' : 'AMAZON_B2C');
+  if (/stock|transfer/i.test(name)) return 'AMAZON_STOCK';
+  return 'UNKNOWN';
+}
+function dateMonth(v) {
+  if (typeof v === 'number' && v > 20000) return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 7);
+  var t = String(v == null ? '' : v).trim(), m;
+  if ((m = t.match(/^(\d{4})-(\d{1,2})/))) return m[1] + '-' + m[2].padStart(2, '0');
+  if ((m = t.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/))) return m[3] + '-' + m[2].padStart(2, '0');
+  return '';
+}
+function fingerprint(bytes) {   // FNV-1a over the file's bytes (same file = same fingerprint)
+  var u = new Uint8Array(bytes), h = 0x811c9dc5;
+  for (var i = 0; i < u.length; i++) { h ^= u[i]; h = Math.imul(h, 0x01000193) >>> 0; }
+  return u.length + '-' + h.toString(16);
+}
+function countMonths(list) { var c = {}; list.forEach(function (m) { if (m) c[m] = (c[m] || 0) + 1; }); return c; }
+// what's inside: rows for the parser, month counts, seller GSTIN
+function inspectFile(kind, wb, cardHint, slotHint) {
+  var out = { kind: kind, months: {}, gstin: '', count: 0 };
+  var col = function (rows, name) { var v = ''; rows.some(function (r) { var x = r[name]; if (x != null && String(x).trim()) { v = String(x).trim().toUpperCase(); return true; } }); return v; };
+  if (kind === 'FLIPKART_SALES') {
+    out.sales = sheetRows(wb, 'sales report'); out.cash = wb.SheetNames.some(function (x) { return /cash back/i.test(x); }) ? sheetRows(wb, 'cash back') : [];
+    out.count = out.sales.length + out.cash.length;
+    out.months = countMonths(out.sales.filter(function (r) { return /^sale$/i.test(String(r['Event Type'] || '').trim()); }).map(function (r) { return dateMonth(r['Buyer Invoice Date'] || r['Order Date']); }));
+    out.gstin = col(out.sales, 'Seller GSTIN');
+    return out;
+  }
+  out.rows = (kind === 'FLIPKART_GSTR' || kind === 'AMAZON_READY') ? [] : sheetRows(wb, kind === 'MEESHO_INVOICES' ? 'invoice' : null);
+  out.count = out.rows.length;
+  if (kind === 'MEESHO_SALES' || kind === 'MEESHO_RETURNS') {
+    out.months = countMonths(out.rows.map(function (r) {
+      var mn = parseInt(r.month_number, 10), fy = parseInt(r.financial_year, 10);
+      if (!mn || !fy) return dateMonth(r.order_date);
+      var y = fy;   // Jan–Mar: "financial_year" could be the FY start or the calendar year — follow the order dates
+      if (mn <= 3) { var od = String(r.order_date || ''); if (od.indexOf(String(fy + 1)) === 0) y = fy + 1; }
+      return y + '-' + String(mn).padStart(2, '0');
+    }));
+    out.gstin = col(out.rows, 'gstin');
+  } else if (kind === 'MEESHO_INVOICES') {
+    out.months = countMonths(out.rows.map(function (r) { return dateMonth(r['Order Date'] || r['Invoice Date']); }));
+  } else if (kind === 'AMAZON_B2C' || kind === 'AMAZON_B2B' || kind === 'AMAZON_STOCK') {
+    out.months = countMonths(out.rows.filter(function (r) { return !/cancel|refund/i.test(String(r['Transaction Type'] || '')); }).map(function (r) { return dateMonth(r['Invoice Date'] || r['Shipment Date']); }));
+    out.gstin = col(out.rows, 'Seller Gstin');
+  }
+  return out;
+}
+function mainMonthOf(counts) { var ks = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; }); return ks[0] || ''; }
+function checkUpload(card, slot, month, prep) {
+  var errors = [], warnings = [], ins = prep.ins, want = EXPECT[card][slot], kind = ins.kind;
+  var isStockOk = slot === 'stock' && (kind === 'AMAZON_STOCK' || /stock|transfer/i.test(prep.got.inner || ''));
+  if (kind !== want && !isStockOk) {
+    var renamedReturn = slot === 'returns' && kind === 'MEESHO_SALES' && !/tcs_sales/i.test(prep.got.inner || '');   // renamed file: can't tell sales from returns
+    if (!renamedReturn) {
+      var home = kindHome(kind), where = home ? (home.card === card ? ' — put it in the <b>' + PF[card].slots.filter(function (x) { return x.key === home.slot; })[0].label + '</b> slot.' : ' — use the <b>' + PF[home.card].name + '</b> card.') : '';
+      errors.push({ msg: 'Wrong file: this is <b>' + KIND_LABEL[kind] + '</b>, but this slot needs <b>' + KIND_LABEL[want] + '</b>' + where });
+      return { errors: errors, warnings: warnings };
+    }
+  }
+  if (!ins.count) { errors.push({ msg: 'This file has <b>no data rows</b>. Download the report again.' }); return { errors: errors, warnings: warnings }; }
+  if (ins.gstin && ins.gstin !== GS.gstin) errors.push({ msg: 'Wrong GSTIN: this file belongs to <b>' + esc(ins.gstin) + '</b>, but you are filing for <b>' + esc(GS.gstin) + '</b>.' });
+  var main = mainMonthOf(ins.months), total = Object.keys(ins.months).reduce(function (a, k) { return a + ins.months[k]; }, 0);
+  if (main && main !== month) {
+    if (gsMonths().indexOf(main) >= 0) errors.push({ msg: 'Wrong month: this file is for <b>' + monthName(main) + ' ' + main.slice(0, 4) + '</b>, but you are on the <b>' + monthName(month) + '</b> tab.', move: main });
+    else errors.push({ msg: 'Wrong period: this file is for <b>' + monthName(main) + ' ' + main.slice(0, 4) + '</b> — not part of this return (' + gsMonths().map(function (x) { return monthName(x).slice(0, 3); }).join('–') + ' ' + gsFpMonth().slice(0, 4) + '). Check the month you downloaded, or change the period in GST Profile.' });
+  } else if (main && total) {
+    var other = total - (ins.months[main] || 0);
+    if (other / total > 0.10) warnings.push(Math.round(other / total * 100) + '% of this file is from other months (' + Object.keys(ins.months).filter(function (k) { return k !== main; }).map(function (k) { return monthName(k).slice(0, 3); }).join(', ') + ') — did you download a custom date range?');
+  }
+  Object.keys(GS.parts).forEach(function (k) {
+    var p = GS.parts[k]; if (!p.fileHash || p.fileHash !== prep.hash || k === card + '|' + month + '|' + slot) return;
+    var ex = PF[p.card] ? PF[p.card].slots.filter(function (x) { return x.key === p.slot; })[0] : null;
+    errors.push({ msg: 'Same file twice: this exact file is already uploaded as <b>' + (PF[p.card] ? PF[p.card].name : p.card) + ' · ' + (ex ? ex.label : p.slot) + '</b> for <b>' + monthName(p.month) + '</b>.' });
+  });
+  return { errors: errors, warnings: warnings };
+}
+function alarmBeep() {
+  try { if (navigator.vibrate) navigator.vibrate([180, 80, 180]); } catch (e) {}
+  try {
+    var C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+    var c = new C(), o = c.createOscillator(), g = c.createGain(); o.type = 'square'; o.frequency.value = 880; g.gain.value = 0.04;
+    o.connect(g); g.connect(c.destination); o.start();
+    setTimeout(function () { o.frequency.value = 620; }, 160); setTimeout(function () { o.stop(); c.close(); }, 340);
+  } catch (e) {}
+}
+function prepareUpload(card, sl, got) {
+  var kind = detectKind(got.wb, got.inner || got.name);
+  return { sl: sl, got: got, hash: fingerprint(got.bytes), ins: inspectFile(kind, got.wb) };
+}
+function savePrepared(card, month, prep) {
+  var sl = prep.sl, d = PF[card], o = { sellerState: sellerState(), etin: ecoGstinFor(d.eco) }, ins = prep.ins, parsed;
+  if (card === 'FLIPKART') parsed = VTGst.parseFlipkart(ins.sales, ins.cash, o);
+  else if (card === 'MEESHO') parsed = sl.key === 'sales' ? VTGst.parseMeesho(ins.rows, [], [], o) : sl.key === 'returns' ? VTGst.parseMeesho([], ins.rows, [], o) : VTGst.parseMeesho([], [], ins.rows, o);
+  else if (sl.key === 'stock') parsed = { lines: [], docs: { inv: [], cn: [], dn: [] }, info: { stock: true } };
+  else parsed = VTGst.parseAmazonMtr(ins.rows, card === 'AMAZON_B2B' ? 'B2B' : 'B2C', o);
+  var entry = VTGst.compactEntry(Object.assign({ platform: d.eco, month: month, etin: o.etin }, parsed));
+  var id = GS.gstin + '_' + card + '_' + month + '_' + sl.key;
+  var doc = { gstin: GS.gstin, card: card, month: month, slot: sl.key, file: prep.got.name, rows: ins.count, fileHash: prep.hash, entry: entry, importedAt: nowIso() };
+  return col('gstImports').doc(id).set(doc).then(function () { GS.parts[card + '|' + month + '|' + sl.key] = Object.assign({ id: id }, doc); });
+}
+function showAlarms(alarms, warnings, savedLabels) {
+  var box = $('mAlarm'); if (!box) return;
+  if (!alarms.length && !warnings.length && !(savedLabels && savedLabels.length)) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  var h = '';
+  if (alarms.length) h += '<div class="m-alarm"><div class="m-alarm-h"><i class="bi bi-exclamation-octagon-fill"></i> ' + (alarms.length === 1 ? 'This file was NOT uploaded' : alarms.length + ' files were NOT uploaded') + '</div><ul>' +
+    alarms.map(function (a, i) { return '<li><b>' + esc(a.slot) + ':</b> ' + a.msg + (a.move ? ' <button class="btn btn-blue" style="padding:6px 12px;margin-left:6px" onclick="moveUpload(' + i + ')">Upload into ' + monthName(a.move) + '</button>' : '') + '</li>'; }).join('') + '</ul></div>';
+  if (warnings.length) h += '<div class="m-warnbox"><i class="bi bi-exclamation-triangle-fill"></i> ' + warnings.map(esc).join('<br>') + '</div>';
+  if (savedLabels && savedLabels.length) h += '<div style="color:#065F46;font-size:14px;margin-top:6px"><i class="bi bi-check-circle-fill"></i> Uploaded: ' + savedLabels.map(esc).join(', ') + '</div>';
+  box.style.display = ''; box.innerHTML = h;
+  GS.alarms = alarms;
+}
+function moveUpload(i) {
+  var a = (GS.alarms || [])[i]; if (!a || !a.move) return Promise.resolve();
+  var card = GS.modal.card, chk = checkUpload(card, a.prep.sl.key, a.move, a.prep);
+  if (chk.errors.length) { alarmBeep(); showAlarms(chk.errors.map(function (e) { return Object.assign({ slot: a.prep.sl.label }, e, { prep: a.prep }); }), chk.warnings); return Promise.resolve(); }
+  return savePrepared(card, a.move, a.prep).then(function () {
+    GS.modal.month = a.move; renderPlatformModal();
+    showAlarms([], chk.warnings, [a.prep.sl.label + ' → ' + monthName(a.move)]);
+    if (GS.sec === 'import') renderImport();
+  });
+}
 function uploadPlatform() {
   if (lockedGuard()) return Promise.resolve();
-  var card = GS.modal.card, m = GS.modal.month, d = PF[card], o = { sellerState: sellerState(), etin: ecoGstinFor(d.eco) }, jobs = [], errors = [];
+  var card = GS.modal.card, m = GS.modal.month, d = PF[card], jobs = [], alarms = [], warnings = [], saved = [];
   d.slots.forEach(function (sl) {
     var inp = $('mFile_' + sl.key); if (!inp || !inp.files.length) return;
     jobs.push(readWorkbook(inp.files[0], sl).then(function (got) {
-      var parsed, rows;
-      if (card === 'FLIPKART') {
-        if (!got.wb.SheetNames.some(function (x) { return /sales report/i.test(x); })) throw new Error(got.name + ': no "Sales Report" sheet — download Reports Center → Tax Reports → Sales report.');
-        var sr = sheetRows(got.wb, 'sales report'), cb = got.wb.SheetNames.some(function (x) { return /cash back/i.test(x); }) ? sheetRows(got.wb, 'cash back') : [];
-        rows = sr.length + cb.length; parsed = VTGst.parseFlipkart(sr, cb, o);
-      } else {
-        var r = sheetRows(got.wb, card === 'MEESHO' && sl.key === 'invoices' ? 'invoice' : null); rows = r.length;
-        if (sl.need && r.length && !Object.keys(r[0]).some(function (k) { return k.trim().toLowerCase() === sl.need.toLowerCase(); }))
-          throw new Error(got.name + ' doesn\'t look like ' + sl.label + ' (column "' + sl.need + '" not found).');
-        if (card === 'MEESHO') parsed = sl.key === 'sales' ? VTGst.parseMeesho(r, [], [], o) : sl.key === 'returns' ? VTGst.parseMeesho([], r, [], o) : VTGst.parseMeesho([], [], r, o);
-        else if (sl.key === 'stock') parsed = { lines: [], docs: { inv: [], cn: [], dn: [] }, info: { stock: true } };
-        else parsed = VTGst.parseAmazonMtr(r, card === 'AMAZON_B2B' ? 'B2B' : 'B2C', o);
-      }
-      var entry = VTGst.compactEntry(Object.assign({ platform: d.eco, month: m, etin: o.etin }, parsed));
-      var id = GS.gstin + '_' + card + '_' + m + '_' + sl.key;
-      var doc = { gstin: GS.gstin, card: card, month: m, slot: sl.key, file: got.name, rows: rows, entry: entry, importedAt: nowIso() };
-      return col('gstImports').doc(id).set(doc).then(function () { GS.parts[card + '|' + m + '|' + sl.key] = Object.assign({ id: id }, doc); });
-    }).catch(function (e) { errors.push(e.message || String(e)); }));
+      var prep = prepareUpload(card, sl, got), chk = checkUpload(card, sl.key, m, prep);
+      if (chk.errors.length) { chk.errors.forEach(function (e) { alarms.push(Object.assign({ slot: sl.label }, e, { prep: prep })); }); return; }
+      chk.warnings.forEach(function (w) { warnings.push(sl.label + ': ' + w); });
+      return savePrepared(card, m, prep).then(function () { saved.push(sl.label); });
+    }).catch(function (e) { alarms.push({ slot: sl.label, msg: esc(e.message || String(e)) }); }));
   });
   var msg = $('mMsg');
   if (!jobs.length) { msg.style.display = ''; msg.innerHTML = '<span class="m-err">Choose at least one file to upload.</span>'; return Promise.resolve(); }
-  msg.style.display = ''; msg.textContent = 'Reading…';
+  msg.style.display = ''; msg.textContent = 'Checking…';
   return Promise.all(jobs).then(function () {
     renderPlatformModal();
-    var cm = cardMonth(card, m), mm = $('mMsg');
-    if (errors.length) { mm.style.display = ''; mm.innerHTML = '<span class="m-err">' + errors.map(esc).join('<br>') + '</span>' + (cm ? '<br>' + monthSummary(cm) : ''); }
+    // Meesho: sales and returns swapped? (returns are normally far fewer)
+    var ps = GS.parts[card + '|' + m + '|sales'], pr = GS.parts[card + '|' + m + '|returns'];
+    if (card === 'MEESHO' && ps && pr && pr.rows > ps.rows) warnings.push('tcs_sales_return has more rows (' + pr.rows + ') than tcs_sales (' + ps.rows + ') — are the two files swapped?');
+    showAlarms(alarms, warnings, alarms.length || warnings.length ? saved : null);   // a clean upload needs no extra message
+    if (alarms.length) alarmBeep();
     if (GS.sec === 'import') renderImport();
   });
 }
@@ -613,10 +755,14 @@ function parsePortalTcs(wb) {
 function uploadPortalTcs() {
   var inp = $('tFile'); if (!inp.files.length) { $('tMsg').innerHTML = '<span class="m-err">Choose the file first.</span>'; return Promise.resolve(); }
   return readWorkbook(inp.files[0], { zip: /\.(xlsx|xls|csv)$/i, label: 'Excel' }).then(function (got) {
-    var res = parsePortalTcs(got.wb);
-    if (!res.found) { $('tMsg').innerHTML = '<span class="m-err">No marketplace rows found in this file. Click a value in the table to type it instead.</span>'; return; }
+    var res = parsePortalTcs(got.wb), ms = gsMonths(), outside = [];
+    if (!res.found) { alarmBeep(); $('tMsg').innerHTML = '<span class="m-err"><b>Wrong file?</b> No marketplace rows found in this file. Click a value in the table to type it instead.</span>'; return; }
+    Object.keys(res.values).forEach(function (eco) { Object.keys(res.values[eco]).forEach(function (m) { if (ms.indexOf(m) < 0) { outside.push(m); delete res.values[eco][m]; } }); });
+    if (!Object.keys(res.values).some(function (eco) { return Object.keys(res.values[eco]).length; })) {
+      alarmBeep(); $('tMsg').innerHTML = '<span class="m-err"><b>Wrong period:</b> this TCS report is for ' + outside.filter(function (x, i, a) { return a.indexOf(x) === i; }).map(monthShort).join(', ') + ' — not ' + ms.map(monthShort).join(', ') + '. Nothing was added.</span>'; return;
+    }
     Object.keys(res.values).forEach(function (eco) { GS.ret.portal[eco] = Object.assign(GS.ret.portal[eco] || {}, res.values[eco]); });
-    return saveRet().then(function () { renderTcs(); $('tMsg').innerHTML = '<span style="color:#065F46">✓ Read ' + res.found + ' row(s) from ' + esc(got.name) + '.</span>'; });
+    return saveRet().then(function () { renderTcs(); $('tMsg').innerHTML = '<span style="color:#065F46">✓ Read ' + res.found + ' row(s) from ' + esc(got.name) + '.</span>' + (outside.length ? '<br><span style="color:#B45309">Ignored rows for months outside this return: ' + outside.filter(function (x, i, a) { return a.indexOf(x) === i; }).map(monthShort).join(', ') + '.</span>' : ''); });
   }).catch(function (e) { $('tMsg').innerHTML = '<span class="m-err">' + esc(e.message) + '</span>'; });
 }
 
