@@ -49,10 +49,53 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- ---------------------------------------------------------------------
+-- ACCOUNT APPROVAL: every NEW sign-up starts PENDING and can't read or write
+-- anything until an admin approves it (accounts from before this feature have
+-- no row and count as approved).
+-- ---------------------------------------------------------------------
+create table if not exists public.account_approvals (
+  uid uuid primary key,
+  email text, name text, business_type text, mobile text, username text,
+  status text not null default 'PENDING' check (status in ('PENDING', 'APPROVED', 'REJECTED')),
+  created_at timestamptz not null default now(),
+  decided_at timestamptz, decided_by text
+);
+alter table public.account_approvals enable row level security;
+drop policy if exists account_approvals_self on public.account_approvals;
+create policy account_approvals_self on public.account_approvals for select to authenticated using (uid = auth.uid());
+revoke insert, update, delete on public.account_approvals from anon, authenticated;
+grant select on public.account_approvals to authenticated;
+
+create or replace function public.vt_account_ok() returns boolean
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if auth.uid() is null then return false; end if;
+  if exists (select 1 from public.account_approvals where uid = auth.uid() and status <> 'APPROVED') then
+    return coalesce(public.vt_is_store_admin(), false);
+  end if;
+  return true;
+end $$;
+
+-- a new account (Supabase Auth) → a PENDING approval row, with the sign-up details
+create or replace function public.vt_new_signup() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare m jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); s jsonb;
+begin
+  s := coalesce(m->'vt_signup', '{}'::jsonb);
+  insert into public.account_approvals(uid, email, name, business_type, mobile, username)
+  values (new.id, new.email, coalesce(s->>'fullName', m->>'full_name'), s->>'businessType', s->>'mobileNumber', s->>'username')
+  on conflict (uid) do nothing;
+  return new;
+end $$;
+drop trigger if exists vt_new_signup on auth.users;
+create trigger vt_new_signup after insert on auth.users for each row execute function public.vt_new_signup();
+
+-- ---------------------------------------------------------------------
 -- READ rules
 -- ---------------------------------------------------------------------
 drop policy if exists docs_select on public.docs;
 create policy docs_select on public.docs for select to authenticated using (
+  (select public.vt_account_ok()) and (
   -- your own profile and everything under users/<you>/…
   owner = public.vt_uid()
   -- a linked buyer may read a seller's ACTIVE, buyer-visible products
@@ -69,7 +112,7 @@ create policy docs_select on public.docs for select to authenticated using (
   -- nobody can list anyone else's)
   or (top in ('usernames','buyerDirectory') and data->>'uid' = public.vt_uid())
   or (top = 'public_invoices' and data->>'sellerUid' = public.vt_uid())
-);
+));
 -- NOTE: usernames, buyerDirectory and public_invoices are NOT listable at
 -- all (the old rules allowed only single-document reads). They're read one
 -- document at a time through vt_get_public() below.
@@ -81,16 +124,18 @@ create policy docs_select on public.docs for select to authenticated using (
 -- ---------------------------------------------------------------------
 drop policy if exists docs_insert on public.docs;
 create policy docs_insert on public.docs for insert to authenticated with check (
+  (select public.vt_account_ok()) and (
   owner = public.vt_uid()
   or top in ('sellerLinks','buyerDirectory','marketplaceOrders','invoiceDeleteRequests',
              'paymentConfirmations','paymentDeleteRequests','public_invoices','orders','usernames')
-);
+));
 drop policy if exists docs_update on public.docs;
 create policy docs_update on public.docs for update to authenticated
   using (
+    (select public.vt_account_ok()) and (
     owner = public.vt_uid()
     or top in ('sellerLinks','buyerDirectory','marketplaceOrders','invoiceDeleteRequests',
-               'paymentConfirmations','paymentDeleteRequests','public_invoices','orders','usernames')
+               'paymentConfirmations','paymentDeleteRequests','public_invoices','orders','usernames'))
   )
   with check (
     owner = public.vt_uid()
@@ -99,7 +144,7 @@ create policy docs_update on public.docs for update to authenticated
   );
 drop policy if exists docs_delete on public.docs;
 create policy docs_delete on public.docs for delete to authenticated using (
-  owner = public.vt_uid() or top in ('buyerDirectory','orders')
+  (select public.vt_account_ok()) and (owner = public.vt_uid() or top in ('buyerDirectory','orders'))
 );
 
 -- ---------------------------------------------------------------------
@@ -479,6 +524,9 @@ begin
   if p_path like 'buyerDirectory/%' and auth.uid() is null then
     raise exception 'VT_DENIED: sign in first';
   end if;
+  if p_path like 'buyerDirectory/%' and not public.vt_account_ok() then
+    raise exception 'VT_DENIED: account waiting for approval';
+  end if;
   select path, data, version into r from public.docs where path = p_path;
   if not found then return null; end if;
   return jsonb_build_object('path', r.path, 'data', r.data, 'version', r.version);
@@ -785,6 +833,37 @@ create or replace function public.vt_is_store_admin() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.store_admins where lower(email) = lower(auth.jwt()->>'email'))
 $$;
+
+-- account approvals: status for the signed-in person; list / decide for admins
+create or replace function public.vt_my_account_status() returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce((select status from public.account_approvals where uid = auth.uid()), 'APPROVED')
+$$;
+create or replace function public.vt_account_approvals() returns setof public.account_approvals
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.vt_is_store_admin() then raise exception 'VT_DENIED: admins only'; end if;
+  return query select * from public.account_approvals order by (status = 'PENDING') desc, created_at desc;
+end $$;
+create or replace function public.vt_set_account_status(p_uid uuid, p_status text) returns public.account_approvals
+language plpgsql security definer set search_path = public as $$
+declare r public.account_approvals;
+begin
+  if not public.vt_is_store_admin() then raise exception 'VT_DENIED: admins only'; end if;
+  if p_status not in ('APPROVED', 'REJECTED', 'PENDING') then raise exception 'VT_BAD_STATUS: %', p_status; end if;
+  update public.account_approvals set status = p_status, decided_at = now(), decided_by = auth.jwt()->>'email'
+   where uid = p_uid returning * into r;
+  if not found then raise exception 'VT_NOT_FOUND: no sign-up %', p_uid; end if;
+  return r;
+end $$;
+create or replace function public.vt_pending_signups() returns int
+language sql stable security definer set search_path = public as $$
+  select case when public.vt_is_store_admin() then (select count(*)::int from public.account_approvals where status = 'PENDING') else 0 end
+$$;
+grant execute on function public.vt_my_account_status() to authenticated;
+grant execute on function public.vt_account_approvals() to authenticated;
+grant execute on function public.vt_set_account_status(uuid, text) to authenticated;
+grant execute on function public.vt_pending_signups() to authenticated;
 
 drop policy if exists store_products_public on public.store_products;
 create policy store_products_public on public.store_products for select to anon, authenticated
