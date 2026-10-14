@@ -77,9 +77,18 @@ function makeClient(getIdentity, stats) {
       else if (name === 'vt_get_public') { sql = 'select public.vt_get_public($1) as r'; params = [args.p_path]; }
       else if (name === 'vt_export_mine') { sql = 'select coalesce(json_agg(d), \'[]\') as r from public.vt_export_mine() d'; params = []; }
       else if (/^[a-z_][a-z0-9_]*$/.test(name)) {   // any other database function, like Supabase's /rpc/<name>
+        // Like PostgREST: a set of rows → array of objects, one row type → object, a scalar → value
         const keys = Object.keys(args || {});
-        sql = `select public.${name}(${keys.map((k, i) => `${k} => $${i + 1}`).join(', ')}) as r`;
+        const call = `public.${name}(${keys.map((k, i) => `${k} => $${i + 1}`).join(', ')})`;
         params = keys.map(k => (args[k] !== null && typeof args[k] === 'object') ? JSON.stringify(args[k]) : args[k]);
+        return pool.query("select p.proretset, t.typtype from pg_proc p join pg_type t on t.oid = p.prorettype where p.proname = $1 and p.pronamespace = 'public'::regnamespace limit 1", [name])
+          .then(meta => {
+            const m = meta.rows[0] || {};
+            const q = m.proretset ? `select coalesce(json_agg(t), '[]'::json) as r from ${call} t`
+              : m.typtype === 'c' ? `select row_to_json(t) as r from ${call} t` : `select ${call} as r`;
+            return asUser(getIdentity(), c => c.query(q, params));
+          })
+          .then(r => ({ data: r.rows[0] ? r.rows[0].r : null, error: null }), e => ({ data: null, error: { message: e.message } }));
       }
       else return Promise.resolve({ data: null, error: { message: 'unknown rpc ' + name } });
       return asUser(getIdentity(), c => c.query(sql, params)).then(r => ({ data: r.rows[0].r, error: null }), e => ({ data: null, error: { message: e.message } }));
@@ -89,6 +98,7 @@ function makeClient(getIdentity, stats) {
       getUser: async () => { const id = getIdentity(); return { data: { user: id ? userObj(id) : null } }; },
       onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
       signOut: async () => ({}),
+      signInWithPassword: async () => { const id = getIdentity(); return id ? { data: { user: userObj(id), session: { user: userObj(id), access_token: 't' } } } : { error: { message: 'Invalid login credentials' } }; },
     }
   };
 }
