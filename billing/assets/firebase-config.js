@@ -17,6 +17,10 @@ const EMAILJS_SERVICE_ID = "service_1g6knan";
 const EMAILJS_TEMPLATE_ID = "template_ds08b1e";
 const EMAILJS_ORDER_TEMPLATE_ID = "template_r7i6awt";
 
+// New sign-ups wait for approval; this address gets the "new sign-up" email
+// (must also be in store_admins to approve — see SETUP-GUIDE).
+const VT_ADMIN_NOTIFY_EMAIL = "support@visutra.in";
+
 // reCAPTCHA (a Google service) is switched off. Supabase Auth has its own
 // rate limiting against bots.
 const RECAPTCHA_SITE_KEY = "";

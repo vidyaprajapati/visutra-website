@@ -37,7 +37,11 @@ async function vtLoadApprovalBar(user, base) {
     const ds = await db.collection('users').doc(user.uid).collection('labelOrderDrafts').get();
     oldDrafts = ds.docs.map(x => x.data()).filter(x => x.date && x.date < today);
   } catch (e) {}
+  // admins: new sign-ups waiting for approval (0 for everyone else)
+  let pendingSignups = 0;
+  try { const r = await firebase.supabase().rpc('vt_pending_signups'); pendingSignups = (r && !r.error && r.data) || 0; } catch (e) {}
   const parts = [], buyerCount = invDelForBuyer.length + payDelForBuyer.length, sellerCount = invDelForSeller.length + payConfirm.length + payDelForSeller.length;
+  if (pendingSignups) parts.push(`${pendingSignups} new sign-up(s) waiting for approval`);
   if (oldDrafts.length) parts.push(`${oldDrafts.length} label order(s) not sent yet (from ${[...new Set(oldDrafts.map(x => x.date))].sort().join(', ')})`);
   if (invDelForBuyer.length) parts.push(`${invDelForBuyer.length} invoice deletion request(s) from sellers`);
   if (payDelForBuyer.length) parts.push(`${payDelForBuyer.length} payment deletion request(s) from sellers`);
@@ -56,6 +60,7 @@ async function vtLoadApprovalBar(user, base) {
   }
   const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const links = [];
+  if (pendingSignups) links.push(`<a class="btn small primary" href="${base}admin-approvals.html">Review sign-ups</a>`);
   if (oldDrafts.length) links.push(`<a class="btn small primary" href="${base}buyer/label-order.html">Send label order</a>`);
   if (buyerCount) links.push(`<a class="btn small primary" href="${base}buyer/dashboard.html">Review as buyer</a>`);
   if (sellerCount) links.push(`<a class="btn small primary" href="${base}app.html#customer-dashboard">Review as seller</a>`);

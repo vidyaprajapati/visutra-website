@@ -376,14 +376,35 @@
     async linkWithCredential(cred) { await this.updatePassword(cred.password); return { user: this }; }
   }
 
+  // Account approval: PENDING / REJECTED accounts are signed out at once (the
+  // database also refuses them all data). Missing function (schema not yet
+  // updated) → treated as approved, so nobody is locked out by a half update.
+  async function accountStatus() {
+    try { const { data, error } = await sb().rpc('vt_my_account_status'); return error ? 'APPROVED' : (data || 'APPROVED'); }
+    catch (e) { return 'APPROVED'; }
+  }
+  function accountError(status) {
+    const e = new Error(status === 'REJECTED'
+      ? 'This account was not approved. Contact support@visutra.in if you think this is a mistake.'
+      : 'Your account is waiting for approval by VISUTRA. You\'ll get an email as soon as it is approved — then you can sign in.');
+    e.code = status === 'REJECTED' ? 'auth/account-rejected' : 'auth/account-pending';
+    return e;
+  }
+  function toLoginWith(status) {
+    if (location.pathname.indexOf(LOGIN_PATH) >= 0) return;
+    location.href = LOGIN_PATH + '?account=' + String(status).toLowerCase();
+  }
+
   class Auth {
     constructor() {
       this.currentUser = null;
       this._listeners = [];
       this._ready = false;
       const client = sb();
-      client.auth.getSession().then(({ data }) => {
-        this._set(data && data.session ? data.session.user : null);
+      client.auth.getSession().then(async ({ data }) => {
+        let u = data && data.session ? data.session.user : null;
+        if (u) { const st = await accountStatus(); if (st !== 'APPROVED') { await client.auth.signOut().catch(() => {}); u = null; toLoginWith(st); } }
+        this._set(u);
         this._ready = true;
         this._emit();
       }).catch(() => { this._ready = true; this._emit(); });
@@ -397,7 +418,13 @@
         // you come back to the tab; passing those on made every page re-run its
         // start-up (Billing jumped to Business Profile, forms lost their input).
         // Firebase's onAuthStateChanged never fired for those, so neither do we.
-        if (this._ready && before !== after) this._emit();
+        if (this._ready && before !== after) {
+          if (!after) { this._emit(); return; }
+          accountStatus().then(st => {   // a newly signed-in account must be approved
+            if (st === 'APPROVED') { this._emit(); return; }
+            client.auth.signOut().catch(() => {}); this._set(null); this._emit(); toLoginWith(st);
+          });
+        }
       });
     }
     _set(u) {
@@ -414,6 +441,8 @@
     async signInWithEmailAndPassword(email, password) {
       const { data, error } = await sb().auth.signInWithPassword({ email, password });
       if (error) throw authError(error);
+      const st = await accountStatus();
+      if (st !== 'APPROVED') { await sb().auth.signOut().catch(() => {}); this._set(null); throw accountError(st); }
       this._set(data.user);
       return { user: this.currentUser };
     }
