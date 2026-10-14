@@ -84,6 +84,7 @@
       <p class="sub">We sent a verification link to <b id="verifyEmail"></b>. Click it, then come back here and sign in. Not in your inbox after a few minutes? Check spam/junk before resending.</p>
       <button class="btn" onclick="resendVerification()">Resend verification email</button>
       <p class="msg" id="verifyMsg"></p>
+      <p class="sub" style="margin-top:10px">🔒 <b>Then your account needs approval by VISUTRA.</b> You'll get an email as soon as it's approved — after that you can sign in.</p>
     </div>
   </div>
 </div>
@@ -91,6 +92,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="assets/vt-firebase-compat.js"></script>
 <script src="assets/firebase-config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 let mode = 'signin';
 
@@ -114,6 +116,27 @@ function setMode(m){
   document.getElementById('authMsg').textContent = '';
 }
 
+/* New sign-up → email to VISUTRA with an Approve link (the account itself is
+   already PENDING in the database; this is only the notification). */
+function notifyAdminOfSignup(u){
+  try{
+    if(typeof emailjs === 'undefined' || typeof VT_ADMIN_NOTIFY_EMAIL === 'undefined' || !EMAILJS_ORDER_TEMPLATE_ID) return;
+    emailjs.init(EMAILJS_PUBLIC_KEY);
+    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_ORDER_TEMPLATE_ID, {
+      to_email: VT_ADMIN_NOTIFY_EMAIL, to_name: 'VISUTRA',
+      email_subject: 'New sign-up waiting for approval: ' + (u.name || u.email),
+      headline: 'A new account is waiting for your approval',
+      detail_line: [u.name, u.email, u.businessType, u.mobile ? 'Mobile ' + u.mobile : '', u.username ? '@' + u.username : ''].filter(Boolean).join(' · '),
+      view_link: window.location.origin + '/billing/admin-approvals.html?uid=' + encodeURIComponent(u.uid)
+    }).catch(err => console.error('Sign-up notification failed:', err));
+  }catch(e){ console.error(e); }
+}
+// sent back here by the approval check
+(function(){
+  const st = new URLSearchParams(location.search).get('account');
+  if(st === 'pending') setTimeout(() => showMsg('Your account is waiting for approval by VISUTRA. You\'ll get an email as soon as it is approved — then you can sign in.', false), 0);
+  if(st === 'rejected') setTimeout(() => showMsg('This account was not approved. Contact support@visutra.in if you think this is a mistake.', false), 0);
+})();
 function showMsg(text, ok){
   const el = document.getElementById('authMsg');
   el.textContent = text;
@@ -182,6 +205,7 @@ async function submitAuth(){
       // switched off in Supabase, it's signed in now and saved straight away.
       const signupData = { fullName: name, businessType, mobileNumber: mobile, username, location: location || null };
       const cred = await auth.createUserWithEmailAndPassword(email, pw, signupData);
+      notifyAdminOfSignup({ uid: cred.user.uid, name, email, businessType, mobile, username });
       if(!auth.currentUser){
         document.getElementById('verifyEmail').textContent = email;
         document.getElementById('authCard').classList.add('hidden');
@@ -189,6 +213,7 @@ async function submitAuth(){
         return;
       }
 
+      try {
       await db.collection('users').doc(cred.user.uid).set({
         email, fullName: name, businessType, mobileNumber: mobile, username,
         location: location || null,
@@ -197,6 +222,7 @@ async function submitAuth(){
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       await db.collection('usernames').doc(username).set({ uid: cred.user.uid, email });
+      } catch (e) { /* account waiting for approval — the profile is saved at the first sign-in */ }
 
       // The account now exists and is signed in either way — sendEmailVerification
       // can fail (rate limit, quota, transient network error) without that
@@ -227,6 +253,7 @@ async function submitAuth(){
       let cred;
       try{ cred = await auth.signInWithEmailAndPassword(email, pw); }
       catch(err){
+        if(err.code === 'auth/account-pending' || err.code === 'auth/account-rejected'){ showMsg(err.message, false); return; }
         if(err.code === 'auth/email-not-verified'){
           document.getElementById('verifyEmail').textContent = email;
           document.getElementById('authCard').classList.add('hidden');

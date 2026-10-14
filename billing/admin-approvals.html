@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Account approvals | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.bunny.net/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+<script src="/pwa.js" defer></script>
+<style>
+  .ap-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 16px}
+  .ap-tabs button{border:1px solid var(--line,#E7E2D8);background:#fff;border-radius:999px;padding:8px 16px;font:600 14px inherit;cursor:pointer}
+  .ap-tabs button.on{background:#1D4ED8;border-color:#1D4ED8;color:#fff}
+  .ap-card{border:1px solid var(--line,#E7E2D8);border-radius:14px;padding:14px 16px;margin-bottom:12px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;background:#fff}
+  .ap-card.hl{border:2px solid #F59E0B;background:#FFFBEB}
+  .ap-card .who{flex:1;min-width:220px}
+  .ap-card .who b{font-size:16px}
+  .ap-card .meta{color:#57534E;font-size:13.5px;margin-top:3px}
+  .st{font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px}
+  .st.PENDING{background:#FEF3C7;color:#92400E}.st.APPROVED{background:#DCFCE7;color:#166534}.st.REJECTED{background:#FFE4E6;color:#9F1239}
+  .ap-actions{display:flex;gap:8px}
+  .btn-ok{background:#15803D;color:#fff;border-color:#15803D}
+  .btn-no{background:#fff;color:#B91C1C;border-color:#FCA5A5}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"><b>Account approvals</b></a>
+  <div class="topbar-right"><a class="btn small" href="app.html">Billing</a><div id="userMenuMount"></div></div>
+</div>
+<div class="shell" style="display:block;max-width:980px;margin:0 auto">
+  <div class="main">
+    <div class="card">
+      <h2>New sign-ups</h2>
+      <p class="sub">Every new account waits here until you approve it. Until then the person can't sign in or see any data. Approving sends them an email.</p>
+      <div class="ap-tabs" id="apTabs"></div>
+      <div id="apList"><p class="sub">Loading…</p></div>
+      <p class="msg" id="apMsg"></p>
+    </div>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="assets/vt-firebase-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="assets/user-menu.js"></script>
+<script>
+var AP = { rows: [], filter: 'PENDING', hl: new URLSearchParams(location.search).get('uid') || '' };
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function when(t){ if(!t) return ''; const d = new Date(t); return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }); }
+function showMsg(t, ok){ const m = document.getElementById('apMsg'); m.textContent = t; m.className = 'msg ' + (ok ? 'success' : 'error'); }
+
+async function loadApprovals(){
+  const { data, error } = await firebase.supabase().rpc('vt_account_approvals');
+  if(error){
+    document.getElementById('apList').innerHTML = /admins only/i.test(error.message)
+      ? '<p class="msg error">Only VISUTRA admins can see this page.</p>'
+      : '<p class="msg error">Could not load: ' + esc(error.message) + ' — has the latest supabase/schema.sql been run?</p>';
+    document.getElementById('apTabs').innerHTML = '';
+    return;
+  }
+  AP.rows = data || [];
+  if(AP.hl){ const r = AP.rows.find(x => x.uid === AP.hl); if(r) AP.filter = r.status; }
+  render();
+}
+function render(){
+  const count = s => AP.rows.filter(r => r.status === s).length;
+  document.getElementById('apTabs').innerHTML = [['PENDING', 'Waiting'], ['APPROVED', 'Approved'], ['REJECTED', 'Rejected'], ['ALL', 'All']].map(([k, t]) =>
+    `<button class="${AP.filter === k ? 'on' : ''}" onclick="AP.filter='${k}';render()">${t} (${k === 'ALL' ? AP.rows.length : count(k)})</button>`).join('');
+  const list = AP.rows.filter(r => AP.filter === 'ALL' || r.status === AP.filter);
+  document.getElementById('apList').innerHTML = list.length ? list.map(r => `
+    <div class="ap-card${r.uid === AP.hl ? ' hl' : ''}" id="ap-${esc(r.uid)}">
+      <div class="who"><b>${esc(r.name || '(no name)')}</b> <span class="st ${r.status}">${r.status === 'PENDING' ? 'Waiting' : r.status === 'APPROVED' ? 'Approved' : 'Rejected'}</span>
+        <div class="meta">${esc(r.email || '')}${r.username ? ' · @' + esc(r.username) : ''}${r.business_type ? ' · ' + esc(r.business_type) : ''}${r.mobile ? ' · ' + esc(r.mobile) : ''}</div>
+        <div class="meta">Signed up ${when(r.created_at)}${r.decided_at ? ' · ' + (r.status === 'APPROVED' ? 'approved' : r.status === 'REJECTED' ? 'rejected' : 'changed') + ' ' + when(r.decided_at) + (r.decided_by ? ' by ' + esc(r.decided_by) : '') : ''}</div></div>
+      <div class="ap-actions">
+        ${r.status !== 'APPROVED' ? `<button class="btn btn-ok" onclick="decide('${esc(r.uid)}','APPROVED')">✓ Approve</button>` : ''}
+        ${r.status !== 'REJECTED' ? `<button class="btn btn-no" onclick="decide('${esc(r.uid)}','REJECTED')">✕ Reject</button>` : ''}
+      </div>
+    </div>`).join('') : '<p class="sub">Nothing here.</p>';
+  const hl = AP.hl && document.getElementById('ap-' + AP.hl); if(hl && hl.scrollIntoView) hl.scrollIntoView({ block: 'center' });
+}
+async function decide(uid, status){
+  const r = AP.rows.find(x => x.uid === uid); if(!r) return;
+  if(status === 'REJECTED' && !confirm('Reject ' + (r.name || r.email) + '? They won\'t be able to sign in.')) return;
+  const { data, error } = await firebase.supabase().rpc('vt_set_account_status', { p_uid: uid, p_status: status });
+  if(error){ showMsg('Could not save: ' + error.message, false); return; }
+  Object.assign(r, data);
+  if(status === 'APPROVED') sendApprovedEmail(r);
+  showMsg((r.name || r.email) + (status === 'APPROVED' ? ' approved — they can sign in now (an email is on its way).' : ' rejected.'), true);
+  render();
+}
+function sendApprovedEmail(r){
+  try{
+    if(typeof emailjs === 'undefined' || !r.email) return;
+    emailjs.init(EMAILJS_PUBLIC_KEY);
+    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_ORDER_TEMPLATE_ID, {
+      to_email: r.email, to_name: r.name || r.email,
+      email_subject: 'Your VISUTRA account is approved',
+      headline: 'Welcome to VISUTRA — your account is approved',
+      detail_line: 'You can sign in now with your username or email and password.',
+      view_link: location.origin + '/billing/login.html'
+    }).catch(e => console.error('Approval email failed:', e));
+  }catch(e){ console.error(e); }
+}
+firebase.auth().onAuthStateChanged(function(user){
+  if(!user){ location.href = 'login.html?redirect=' + encodeURIComponent('admin-approvals.html' + location.search); return; }
+  if(typeof vtMountUserMenu === 'function') try { vtMountUserMenu(user); } catch (e) {}
+  loadApprovals();
+});
+</script>
+</body>
+</html>
