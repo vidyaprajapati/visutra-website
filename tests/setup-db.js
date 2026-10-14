@@ -19,6 +19,8 @@ const DB = process.env.PGDATABASE_TEST || 'visutra_test';
   // The pieces of Supabase the schema relies on: roles + auth.uid() / auth.jwt()
   await c.query(`
     create schema if not exists auth;
+    -- (Supabase's own sign-up table — the account-approval trigger sits on it)
+    create table if not exists auth.users (id uuid primary key, email text, raw_user_meta_data jsonb, created_at timestamptz default now());
     create or replace function auth.jwt() returns jsonb language sql stable as $$
       select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
     create or replace function auth.uid() returns uuid language sql stable as $$
