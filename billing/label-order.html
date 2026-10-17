@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Label-Based Auto Order | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.bunny.net/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+<link rel="apple-touch-icon" href="/assets/app-icons/apple-touch-icon.png">
+<script src="/pwa.js" defer></script>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Label-Based Auto Order</b></a>
+  <div class="topbar-right">
+    <a class="btn small" href="place-order.html">Product Select Order</a>
+    <a class="btn small" href="my-orders.html">My Orders</a>
+    <div id="userMenuMount"></div>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="sidebar" id="buyerSidebarMount"></div>
+  <div class="main">
+
+  <div class="card" id="notBuyerCard" style="display:none">
+    <h2>Buyer Features Not Enabled</h2>
+    <p class="sub">Turn on Buyer Features from <a href="../account.html">My Account</a> first, then get linked by a seller from their Customers page.</p>
+  </div>
+
+  <div class="card">
+    <h2>Upload Shipping Labels</h2>
+    <p class="sub">Upload one or more Amazon, Meesho, or Flipkart shipping-label PDFs (the kind you download to print and stick on the parcel — the label and/or tax invoice in the same file). Each page is scanned for a marketplace SKU. Nothing is uploaded anywhere — parsing happens entirely in your browser, same as the free Label Cropper tool. Every unit found here is deducted from that product's <a href="stock.html">Stock</a> right away (it's being dispatched), and the order below only asks the seller for whatever's short after your own stock covers as much of it as possible — a zero-inventory target, not a top-up.</p>
+    <input type="file" id="labelFiles" accept="application/pdf" multiple>
+    <button class="btn primary" style="margin-left:8px" onclick="processFiles()">Process Labels</button>
+    <p class="msg" id="uploadMsg"></p>
+  </div>
+
+  <div class="card" id="unmappedCard" style="display:none">
+    <h2>⚠ New SKUs Found</h2>
+    <p class="sub">These aren't defined in your <a href="buyer-sku-master.html">Buyer SKU Master</a> yet. Define each one there (pick the seller + product it belongs to), then re-process the same files — one mapping resolves every occurrence, including these.</p>
+    <table><thead><tr><th>Marketplace</th><th>SKU</th><th>Qty seen</th><th></th></tr></thead>
+    <tbody id="unmappedTable"></tbody></table>
+  </div>
+
+  <div class="card" id="summaryCard" style="display:none">
+    <h2>Today's Order Summary</h2>
+    <p class="sub">Accumulates across every batch of labels you process today — upload a few now, a few more later, it all adds up into one summary per seller. "Balance to Order" is what's actually sent — your own stock (after today's dispatches are deducted) covers the rest. If stock covers everything, sending just marks the labels processed with no order created. Clears after sending, ready for tomorrow.</p>
+    <div id="summaryBySeller"></div>
+  </div>
+
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../assets/vt-firebase-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script src="../assets/user-menu.js"></script>
+<script src="../assets/label-sku-extract.js"></script>
+<script src="../assets/label-stock-core.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js".replace('pdf.min.js', 'pdf.worker.min.js');
+
+let currentUser = null;
+let buyerData = {};
+let mappingsCache = [];       // this buyer's ACTIVE buyerSkuMappings
+let unmappedFound = {};       // "marketplace_sku" -> { marketplace, sku, qty } — just for this session's upload feedback
+// "Today" in the buyer's LOCAL time (IST) — toISOString() is UTC, which
+// changed the day at 5:30 AM IST.
+function localDayKey(d){ d = d || new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+let todayKey = localDayKey();
+// EVERY unsent draft (any day), keyed by draft id — an unsent day stays on
+// screen until it's sent or discarded (it used to vanish the next day).
+let draftsCache = {};
+
+auth.onAuthStateChanged(async user => {
+  const verified = user && (user.emailVerified || user.providerData.some(p => p.providerId === 'google.com'));
+  if(!verified){ window.location.href = '../login.html?redirect=' + encodeURIComponent('buyer/label-order.html'); return; }
+
+  const snap = await db.collection('users').doc(user.uid).get();
+  if(!snap.exists || !snap.data().profileComplete){
+    window.location.href = '../complete-profile.html?redirect=' + encodeURIComponent('buyer/label-order.html');
+    return;
+  }
+
+  currentUser = user;
+  buyerData = snap.data() || {};
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '../' });
+  renderBuyerSidebar('label-order', '../');
+
+  const isBuyer = !!(buyerData.roles && buyerData.roles.buyer);
+  document.getElementById('notBuyerCard').style.display = isBuyer ? 'none' : 'block';
+
+  await loadMappings();
+  await loadSellerEmails();
+  await loadDrafts();
+  await consumeCropperHandoff();
+});
+
+async function loadMappings(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').get();
+  mappingsCache = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(m => m.status === 'ACTIVE');
+}
+let sellerEmailById = {}; // sellerUid -> sellerEmail, for the order-placed email
+async function loadSellerEmails(){
+  const snap = await db.collection('sellerLinks').where('buyerUid', '==', currentUser.uid).get();
+  snap.docs.forEach(d => {
+    const l = d.data();
+    if(l.status === 'ACTIVE') sellerEmailById[l.sellerUid] = l.sellerEmail || '';
+  });
+}
+function findMapping(marketplace, sku){
+  const field = { AMAZON: 'amazonSku', MEESHO: 'meeshoSku', FLIPKART: 'flipkartSku' }[marketplace];
+  if(!field) return null;
+  // A field can hold several SKUs ("A, B, C"); SKUs switched off in Buyer
+  // SKU Master are skipped (see mappingMatchesSku()).
+  return mappingsCache.find(m => mappingMatchesSku(m, marketplace, sku)) || null;
+}
+
+/* Picks up SKUs detected on the free Label Cropper tool (sessionStorage,
+   same-origin handoff — see tools/label-cropper.html's "Send to Label-Based
+   Auto Order" button) so the buyer never has to upload that same file here
+   a second time. Consumed once and cleared, so refreshing this page doesn't
+   reprocess it again. */
+async function consumeCropperHandoff(){
+  let raw;
+  try{ raw = sessionStorage.getItem('vlc_detected_skus'); }catch(e){ return; }
+  if(!raw) return;
+  sessionStorage.removeItem('vlc_detected_skus');
+  let payload;
+  try{ payload = JSON.parse(raw); }catch(e){ return; }
+  if(!payload || !Array.isArray(payload.items) || !payload.items.length) return;
+  showMsg('uploadMsg', `Loaded ${payload.items.length} SKU(s) detected on Label Cropper (${payload.fileName || 'uploaded file'}) — no re-upload needed.`, true);
+  await processHits(payload.items);
+}
+
+async function processFiles(){
+  const files = document.getElementById('labelFiles').files;
+  if(!files.length){ showMsg('uploadMsg', 'Choose at least one PDF.', false); return; }
+  showMsg('uploadMsg', 'Reading labels…', true);
+
+  const hits = [];
+  for(const file of files){
+    try{
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      for(let i = 1; i <= pdf.numPages; i++){
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const text = content.items.map(it => it.str).join(' ');
+        const pageHits = extractAllMarketplaceItems(text);
+        for(const hit of pageHits){
+          // Shipment (order-ID) key — two orders of the same SKU are never
+          // mistaken for one another, and it matches Label Cropper's key.
+          const key = labelKey(hit.marketplace, hit.sku, text);
+          hits.push({ ...hit, key, packKey: packingKey(hit.marketplace, text), pageHash: key });
+        }
+      }
+    }catch(err){
+      showMsg('uploadMsg', `Could not read ${file.name}: ${err.message}`, false);
+      return;
+    }
+  }
+
+  if(!hits.length){
+    showMsg('uploadMsg', 'No marketplace SKU could be detected in the uploaded file(s). You can still map and order manually from Product Select Order.', false);
+    return;
+  }
+  await processHits(hits, files.length);
+}
+
+/* Shared by both the direct file upload above and the Label Cropper
+   handoff — takes a flat list of {marketplace, sku, qty, pageHash} and
+   merges each into today's running per-seller draft (or the Unmapped SKUs
+   queue if it isn't mapped yet). */
+async function processHits(hits, fileCount){
+  unmappedFound = {};
+  let mergedCount = 0, skippedCount = 0, selfCount = 0;
+  for(const hit of hits){
+    if(await isAlreadyProcessed(hit.pageHash)){ skippedCount++; continue; } // already part of a SENT order
+    const mapping = findMapping(hit.marketplace, hit.sku);
+    if(mapping){
+      if(mapping.sellerId === currentUser.uid){
+        // Mapped to one of your OWN products ("Myself" in Buyer SKU Master)
+        // — there's no seller to order from, so this page (which only ever
+        // builds an order draft) has nothing to do with it. Use the Label
+        // Cropper instead for your own products — it crops/downloads AND
+        // tracks packaging/label stock without needing an order at all.
+        selfCount++;
+        continue;
+      }
+      const wasNew = await mergeItemIntoDraft(mapping, hit);
+      if(wasNew){
+        mergedCount++;
+        await deductStockForLabel(mapping, hit); // dispatching this unit — comes straight off your own stock, zero-inventory target
+      } else {
+        skippedCount++; // already sitting in today's unsent draft
+      }
+    } else {
+      const key = `${hit.marketplace}_${hit.sku}`;
+      if(!unmappedFound[key]) unmappedFound[key] = { marketplace: hit.marketplace, sku: hit.sku, qty: 0 };
+      unmappedFound[key].qty += hit.qty;
+      await reportUnmappedSku(hit.marketplace, hit.sku); // also drops it into the persistent Unmapped SKUs queue on Buyer SKU Master
+    }
+  }
+
+  const msg = `Found ${hits.length} item(s)` + (fileCount ? ` across ${fileCount} file(s)` : '') + `. ${mergedCount} added to today's summary.` +
+    (selfCount ? ` ${selfCount} matched your own products — no order needed for those; use the Label Cropper to print them.` : '') +
+    (skippedCount ? ` ${skippedCount} already counted (sent earlier, or already in today's summary).` : '');
+  showMsg('uploadMsg', msg, true);
+  renderUnmapped();
+  await loadDrafts();
+}
+
+async function isAlreadyProcessed(pageHash){
+  try{
+    const snap = await db.collection('users').doc(currentUser.uid).collection('processedLabels').doc(pageHash).get();
+    return snap.exists;
+  }catch(err){ return false; }
+}
+
+/* Merges one detected item into today's running draft for its seller
+   (users/{buyerUid}/labelOrderDrafts/{todayKey}_{sellerId}). Returns true if
+   it was newly added, false if this exact label page was already merged in
+   earlier today (so re-processing the same file twice in one day doesn't
+   double the quantity before it's even been sent). */
+async function mergeItemIntoDraft(mapping, hit){
+  const draftId = pendingDraftId(mapping.sellerId);   // one consolidated pending order per seller
+  const ref = db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').doc(draftId);
+  let added = false;
+  await db.runTransaction(async tx => {
+    const snap = await tx.get(ref);
+    const data = snap.exists ? snap.data() : {
+      date: todayKey, firstDate: todayKey, lastDate: todayKey, dates: [], sellerId: mapping.sellerId, sellerName: mapping.sellerName,
+      itemsByProduct: {}, pageHashes: []
+    };
+    if((data.pageHashes || []).includes(hit.pageHash)) return; // this label page is already in the pending order
+    added = true;
+    data.dates = [...new Set([...(data.dates || [data.date].filter(Boolean)), todayKey])].sort();
+    data.firstDate = data.dates[0]; data.lastDate = data.dates[data.dates.length - 1]; data.date = data.firstDate;
+    const p = data.itemsByProduct[mapping.productId] || {
+      productName: mapping.sellerProductName || mapping.productName, sellerSku: mapping.sellerSku, mappingId: mapping.id,
+      qty: 0, breakdown: { amazon: 0, meesho: 0, flipkart: 0 }
+    };
+    p.qty += hit.qty;
+    p.breakdown[hit.marketplace.toLowerCase()] = (p.breakdown[hit.marketplace.toLowerCase()] || 0) + hit.qty;
+    data.itemsByProduct[mapping.productId] = p;
+    data.pageHashes = [...(data.pageHashes || []), hit.pageHash];
+    data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+    tx.set(ref, data);
+  });
+  return added;
+}
+
+/* A label being printed/dispatched IS a sale-out of your own stock — this
+   product doesn't get a separate "label" stock count, it's the same number
+   Stock and Buyer SKU Master show. Deducted once per unique label page
+   (the caller only calls this when mergeItemIntoDraft() says the page is
+   genuinely new), so re-processing the same PDF never double-deducts.
+   Kept in sync locally on mappingsCache too, so the "Balance to Order"
+   figure below reflects it immediately without a re-fetch. */
+async function deductStockForLabel(mapping, hit){
+  // Shared rule (label-stock-core.js): once per product line per shipment,
+  // tracked in buyerProcessedLabels — the same record Label Cropper (Buyer)
+  // uses, so a label handled on both pages is only deducted once.
+  const r = await VLS.buyerProductOnce(currentUser.uid, { ...hit, key: hit.key || hit.pageHash }, mapping, 'upload-labels');
+  if(r === 'deducted') mapping.stock = (mapping.stock || 0) - hit.qty; // mapping is the object in mappingsCache — mutate in place
+}
+
+// A demand entry may predate this feature (drafts saved before mappingId
+// was recorded on each item) — fall back to the same (sellerId, productId)
+// lookup the rest of the app uses in that case.
+function resolveMappingForItem(sellerId, productIdKey, item){
+  if(item.mappingId){
+    const m = mappingsCache.find(x => x.id === item.mappingId);
+    if(m) return m;
+  }
+  return mappingsCache.find(m => m.sellerId === sellerId && m.productId === productIdKey) || null;
+}
+// Zero-inventory balance: your own stock covers as much of today's demand
+// as it can first, and only the shortfall — stock gone negative — is worth
+// asking the seller for. Positive/zero stock after dispatching means
+// nothing to order for this product right now.
+function balanceToOrder(mapping){
+  if(!mapping) return null; // unresolvable — caller falls back to full demand
+  return Math.max(0, -(mapping.stock || 0));
+}
+
+async function loadDrafts(){
+  todayKey = localDayKey();
+  try { await consolidateDrafts(currentUser.uid); } catch (e) { console.error('merging pending label orders', e); }
+  const snap = await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').get();
+  draftsCache = {};
+  snap.docs.forEach(d => { draftsCache[d.id] = { id: d.id, ...d.data() }; });
+  renderSummary();
+}
+/* ONE consolidated pending order per seller: every label printed — any
+   marketplace, any day, Label Cropper or this page — adds into
+   labelOrderDrafts/pending_<sellerId> until it is sent. (Older per-day pieces
+   "<date>_<sellerId>" are merged into it automatically.) */
+function pendingDraftId(sellerId){ return 'pending_' + sellerId; }
+function mergeDraftData(into, from){
+  into.itemsByProduct = into.itemsByProduct || {};
+  Object.entries(from.itemsByProduct || {}).forEach(([pid, p]) => {
+    const q = into.itemsByProduct[pid] || { productName: p.productName, sellerSku: p.sellerSku, mappingId: p.mappingId, qty: 0, breakdown: { amazon: 0, meesho: 0, flipkart: 0 } };
+    q.qty += Number(p.qty) || 0;
+    Object.entries(p.breakdown || {}).forEach(([mk, n]) => { q.breakdown[mk] = (q.breakdown[mk] || 0) + (Number(n) || 0); });
+    if (!q.mappingId && p.mappingId) q.mappingId = p.mappingId;
+    into.itemsByProduct[pid] = q;
+  });
+  const hashes = new Set(into.pageHashes || []); (from.pageHashes || []).forEach(h => hashes.add(h)); into.pageHashes = [...hashes];
+  const days = new Set(into.dates || []); (from.dates || [from.date]).filter(Boolean).forEach(d => days.add(d)); into.dates = [...days].sort();
+  into.firstDate = into.dates[0] || into.firstDate || ''; into.lastDate = into.dates[into.dates.length - 1] || into.lastDate || '';
+  into.date = into.firstDate;   // (the 🔔 reminder reads "date" = oldest unsent day)
+  return into;
+}
+async function consolidateDrafts(uid){
+  const col = db.collection('users').doc(uid).collection('labelOrderDrafts');
+  const snap = await col.get(), bySeller = {};
+  snap.docs.forEach(d => { const x = d.data(); (bySeller[x.sellerId] = bySeller[x.sellerId] || []).push(d.id); });
+  for (const sid of Object.keys(bySeller)) {
+    const ids = bySeller[sid], pid = pendingDraftId(sid);
+    if (ids.length === 1 && ids[0] === pid) continue;
+    await db.runTransaction(async tx => {
+      const pref = col.doc(pid), ps = await tx.get(pref);
+      const olds = [];
+      for (const id of ids.filter(i => i !== pid)) { const s = await tx.get(col.doc(id)); if (s.exists) olds.push({ id, data: s.data() }); }
+      if (!olds.length) return;
+      const merged = ps.exists ? ps.data() : { sellerId: sid, sellerName: olds[0].data.sellerName, itemsByProduct: {}, pageHashes: [], dates: [] };
+      olds.forEach(o => mergeDraftData(merged, o.data));
+      merged.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+      tx.set(pref, merged);
+      olds.forEach(o => tx.delete(col.doc(o.id)));
+    });
+  }
+}
+function dayRange(g){
+  const f = g.firstDate || g.date, l = g.lastDate || f;
+  const fmt = k => { const [y, m, d] = String(k || '').split('-').map(Number); return y ? new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''; };
+  return !f ? '' : f === l ? fmt(f) : fmt(f) + ' – ' + fmt(l);
+}
+function dayLabel(key){ const [y, m, d] = String(key || '').split('-').map(Number); return y ? new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : key; }
+
+/* Same queue as Buyer SKU Master's "Report a new marketplace SKU" — one
+   shared queue, so a SKU detected here and one reported manually there both
+   show up (and resolve) together. */
+async function reportUnmappedSku(marketplace, sku){
+  const docId = `${marketplace}_${sku}`.replace(/[\/\s]+/g, '_');
+  const ref = db.collection('users').doc(currentUser.uid).collection('unmappedSkus').doc(docId);
+  const today = new Date().toISOString().slice(0, 10);
+  try{
+    await db.runTransaction(async tx => {
+      const snap = await tx.get(ref);
+      if(snap.exists){
+        tx.update(ref, { occurrences: firebase.firestore.FieldValue.increment(1), lastSeen: today });
+      } else {
+        tx.set(ref, { marketplace, sku, firstDetected: today, lastSeen: today, occurrences: 1, status: 'UNMAPPED' });
+      }
+    });
+  }catch(err){ /* non-fatal — worst case it just isn't queued this one time */ }
+}
+
+function renderUnmapped(){
+  const keys = Object.keys(unmappedFound);
+  document.getElementById('unmappedCard').style.display = keys.length ? 'block' : 'none';
+  document.getElementById('unmappedTable').innerHTML = keys.map(k => {
+    const u = unmappedFound[k];
+    return `<tr><td>${esc(u.marketplace)}</td><td>${esc(u.sku)}</td><td>${u.qty}</td>
+      <td><a class="btn small" href="buyer-sku-master.html">Define SKU</a></td></tr>`;
+  }).join('');
+}
+
+function renderSummary(){
+  const draftIds = Object.keys(draftsCache).sort((a, b) => String(draftsCache[a].sellerName).localeCompare(String(draftsCache[b].sellerName)));
+  document.getElementById('summaryCard').style.display = draftIds.length ? 'block' : 'none';
+  document.getElementById('summaryBySeller').innerHTML = draftIds.map(did => {
+    const g = draftsCache[did], sid = g.sellerId, old = (g.firstDate || g.date) && (g.firstDate || g.date) < todayKey, nDays = (g.dates || [g.date]).filter(Boolean).length;
+    const products = Object.entries(g.itemsByProduct).map(([productIdKey, p]) => ({
+      ...p, mapping: resolveMappingForItem(sid, productIdKey, p)
+    }));
+    const rows = products.map(p => {
+      const bal = balanceToOrder(p.mapping);
+      const stockNow = p.mapping ? (p.mapping.stock || 0) : null;
+      return `<tr><td>${esc(p.productName)}</td><td>${esc(p.sellerSku||'—')}</td>
+      <td>${p.breakdown.amazon ? 'Amazon: '+p.breakdown.amazon+'<br>' : ''}${p.breakdown.meesho ? 'Meesho: '+p.breakdown.meesho+'<br>' : ''}${p.breakdown.flipkart ? 'Flipkart: '+p.breakdown.flipkart : ''}</td>
+      <td>${p.qty}</td>
+      <td>${stockNow===null ? '—' : stockNow}</td>
+      <td><b>${bal===null ? p.qty : bal}</b>${bal===0 ? ' <span class="badge">Covered by stock</span>' : ''}</td></tr>`;
+    }).join('');
+    const anyToOrder = products.some(p => (balanceToOrder(p.mapping) ?? p.qty) > 0);
+    return `<div style="margin-bottom:22px;padding:${old ? '12px 14px' : '0 0 18px'};border-bottom:1px solid var(--line);${old ? 'background:#FFF7ED;border:1.5px solid #F2B266;border-radius:12px' : ''}">
+      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">${esc(g.sellerName)} <span style="font-weight:400;font-size:13px;color:var(--muted)">· all pending labels · printed ${esc(dayRange(g))}${nDays > 1 ? ' (' + nDays + ' days)' : ''}</span>
+        ${old ? '<span class="badge warn">📅 not sent yet — from an earlier day</span>' : ''}</h3>
+      <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Labels printed</th><th>Stock Now</th><th>Balance to Order</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+      <button class="btn primary" style="margin-top:10px" onclick="placeAutoOrder('${did}')">${anyToOrder ? `Send Order to ${esc(g.sellerName)}` : 'Mark Labels Processed (no order needed)'}</button>
+      <button class="btn small" style="margin-top:10px" onclick="discardDraft('${did}')" title="Remove this draft without sending an order (e.g. you ordered another way)">Discard</button>
+      <p class="msg" id="autoOrderMsg-${did}"></p>
+    </div>`;
+  }).join('') || '<p class="sub">No fully-mapped items to order yet.</p>';
+}
+
+async function placeAutoOrder(draftId){
+  const g = draftsCache[draftId];
+  if(!g) return;
+  const sellerId = g.sellerId, msgId = `autoOrderMsg-${draftId}`;
+  if(!buyerData.businessName || !buyerData.stateCode){
+    showMsg(msgId, 'Complete your Business Profile (Billing → Business Profile) before placing an order.', false);
+    return;
+  }
+  showMsg(msgId, 'Checking stock…', true);
+  try{
+    // Re-resolve against the freshest stock we have (updated in place by
+    // every deductStockForLabel() call this session) right before building
+    // the order — a zero-inventory order is only as good as the balance
+    // figure it's built from. Items fully covered by stock (balance 0) are
+    // left out of the order entirely; the seller has nothing to fulfil for
+    // those right now.
+    const items = [];
+    for(const [productId, p] of Object.entries(g.itemsByProduct)){
+      const mapping = resolveMappingForItem(sellerId, productId, p);
+      const bal = balanceToOrder(mapping);
+      const qty = bal === null ? p.qty : bal; // unresolvable mapping (shouldn't normally happen) — fall back to full demand rather than silently order nothing
+      if(qty <= 0) continue;
+      items.push({ productId, productName: p.productName, sellerSku: p.sellerSku, qty, marketplaceBreakdown: { ...p.breakdown } });
+    }
+
+    let orderNumber = null, orderRef = null;
+    if(items.length){
+      showMsg(msgId, 'Sending order…', true);
+      orderRef = db.collection('marketplaceOrders').doc();
+      orderNumber = `VIS-ORD-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${orderRef.id.slice(-6).toUpperCase()}`;
+      await orderRef.set({
+        orderNumber, orderType: 'LABEL_AUTO',
+        buyerUid: currentUser.uid, buyerEmail: currentUser.email || '',
+        buyerBusiness: {
+          businessName: buyerData.businessName || '', gstin: buyerData.gstin || '',
+          address: buyerData.address || '', state: buyerData.state || '', stateCode: buyerData.stateCode || '',
+          email: currentUser.email || ''
+        },
+        sellerUid: sellerId, sellerName: g.sellerName,
+        items, note: `Labels dispatched ${dayRange(g)}`, labelsDate: g.lastDate || g.date || todayKey, labelsFrom: g.firstDate || g.date || todayKey, status: 'PENDING',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }
+
+    // Mark every label page that contributed to today's draft as processed,
+    // so re-uploading the same PDF later won't double-count it — this
+    // happens whether or not an order was actually needed, since the
+    // DEMAND (and its stock deduction) already happened either way.
+    await Promise.all((g.pageHashes || []).map(hash =>
+      db.collection('users').doc(currentUser.uid).collection('processedLabels').doc(hash)
+        .set({ orderId: orderRef ? orderRef.id : null, processedAt: firebase.firestore.FieldValue.serverTimestamp() })
+    ));
+
+    // Today's draft for this seller has now been handled — clear it so
+    // tomorrow (or the next batch today) starts fresh rather than
+    // double-counting.
+    await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').doc(g.id).delete();
+    delete draftsCache[draftId];
+    renderSummary();
+
+    if(!items.length){
+      showMsg(msgId, `No order needed — your existing stock covers all of today's demand for ${g.sellerName}. Labels marked as processed.`, true);
+      return;
+    }
+
+    showMsg(msgId, `Order ${orderNumber} sent to ${g.sellerName}. Notifying seller…`, true);
+    const emailResult = await sendOrderNotification(
+      sellerEmailById[sellerId], g.sellerName,
+      `New Order Received – VISUTRA – Order #${orderNumber}`,
+      `You've received a new label-based order from ${buyerData.businessName || currentUser.email}.`,
+      items.map(i => `${i.productName} × ${i.qty}`).join(', '),
+      `${window.location.origin}/billing/seller/order-receive.html?id=${orderRef.id}`
+    );
+    if(emailResult.sent){
+      showMsg(msgId, `Order ${orderNumber} sent to ${g.sellerName} and they've been emailed. Track it from My Orders.`, true);
+    } else if(emailResult.reason === 'not_configured'){
+      showMsg(msgId, `Order ${orderNumber} placed — but the seller wasn't emailed (order email isn't set up on this site yet). They'll still see it in their Order Receive portal.`, true);
+    } else {
+      showMsg(msgId, `Order ${orderNumber} placed — but notifying the seller by email failed (${emailResult.error || emailResult.reason}). They'll still see it in their Order Receive portal.`, true);
+    }
+  }catch(err){
+    showMsg(msgId, err.message, false);
+  }
+}
+
+/* Remove an unsent draft without ordering (e.g. you ordered another way).
+   Its label pages are marked processed, so re-uploading the same PDF won't
+   bring it back; stock already taken off for those dispatched labels stays. */
+async function discardDraft(draftId){
+  const g = draftsCache[draftId];
+  if(!g) return;
+  if(!confirm(`Discard the unsent order draft for ${g.sellerName} (labels printed ${dayRange(g)})? No order is sent. Your stock stays as it is — those labels were dispatched.`)) return;
+  await Promise.all((g.pageHashes || []).map(hash =>
+    db.collection('users').doc(currentUser.uid).collection('processedLabels').doc(hash)
+      .set({ orderId: null, discarded: true, processedAt: firebase.firestore.FieldValue.serverTimestamp() })));
+  await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').doc(g.id).delete();
+  delete draftsCache[draftId];
+  renderSummary();
+}
+async function sendOrderNotification(toEmail, toName, subject, headline, detailLine, viewLink){
+  if(!toEmail) return { sent: false, reason: 'no_recipient_email' };
+  if(!EMAILJS_ORDER_TEMPLATE_ID || EMAILJS_ORDER_TEMPLATE_ID.indexOf('PASTE_YOUR') === 0) return { sent: false, reason: 'not_configured' };
+  try{
+    emailjs.init(EMAILJS_PUBLIC_KEY);
+    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_ORDER_TEMPLATE_ID, {
+      to_email: toEmail, to_name: toName || toEmail,
+      email_subject: subject, headline, detail_line: detailLine, view_link: viewLink
+    });
+    return { sent: true };
+  }catch(err){
+    console.error('Order notification email failed:', err);
+    return { sent: false, reason: 'send_failed', error: err.message || String(err) };
+  }
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function showMsg(id, text, ok){
+  const el = document.getElementById(id);
+  if(!el) return;
+  el.textContent = text;
+  el.className = 'msg ' + (ok ? 'ok' : 'error');
+}
+</script>
+<script src="../assets/vt-excel.js"></script>
+</body>
+</html>
