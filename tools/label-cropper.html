@@ -511,8 +511,9 @@ let packagingCache = [];     // this buyer's buyerProductPackaging — assignmen
 let packagingSizesCache = []; // this buyer's buyerPackagingSizes — shared packaging stock pools, one per size
 let labelSizesCache = [];     // this buyer's buyerLabelSizes — shared label stock pools, one per size
 let sellerEmailById = {};
-let todayKey = new Date().toISOString().slice(0, 10);
-let todayDraftsCache = {};   // sellerId -> labelOrderDrafts/{todayKey}_{sellerId}
+// "today" in local (Indian) time — toISOString() is UTC and changed the day at 5:30 AM IST
+let todayKey = (d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)(new Date());
+let todayDraftsCache = {};   // sellerId -> labelOrderDrafts/pending_{sellerId} (the consolidated pending order)
 // Seller-side data (only used when "Who's printing?" = Seller). These are the
 // SAME collections the Billing app uses: users/{uid}/products for stock and
 // users/{uid}/skuMappings (rawKey -> productId) for marketplace SKU mapping,
@@ -989,20 +990,67 @@ async function reportUnmappedSku(marketplace, sku){
 /* Same shape as billing/buyer/label-order.html's mergeItemIntoDraft — kept in
    sync deliberately, since both write to the same users/{uid}/labelOrderDrafts
    collection and must merge identically. */
+/* ONE consolidated pending order per seller: every label printed — any
+   marketplace, any day, Label Cropper or this page — adds into
+   labelOrderDrafts/pending_<sellerId> until it is sent. (Older per-day pieces
+   "<date>_<sellerId>" are merged into it automatically.) */
+function pendingDraftId(sellerId){ return 'pending_' + sellerId; }
+function mergeDraftData(into, from){
+  into.itemsByProduct = into.itemsByProduct || {};
+  Object.entries(from.itemsByProduct || {}).forEach(([pid, p]) => {
+    const q = into.itemsByProduct[pid] || { productName: p.productName, sellerSku: p.sellerSku, mappingId: p.mappingId, qty: 0, breakdown: { amazon: 0, meesho: 0, flipkart: 0 } };
+    q.qty += Number(p.qty) || 0;
+    Object.entries(p.breakdown || {}).forEach(([mk, n]) => { q.breakdown[mk] = (q.breakdown[mk] || 0) + (Number(n) || 0); });
+    if (!q.mappingId && p.mappingId) q.mappingId = p.mappingId;
+    into.itemsByProduct[pid] = q;
+  });
+  const hashes = new Set(into.pageHashes || []); (from.pageHashes || []).forEach(h => hashes.add(h)); into.pageHashes = [...hashes];
+  const days = new Set(into.dates || []); (from.dates || [from.date]).filter(Boolean).forEach(d => days.add(d)); into.dates = [...days].sort();
+  into.firstDate = into.dates[0] || into.firstDate || ''; into.lastDate = into.dates[into.dates.length - 1] || into.lastDate || '';
+  into.date = into.firstDate;   // (the 🔔 reminder reads "date" = oldest unsent day)
+  return into;
+}
+async function consolidateDrafts(uid){
+  const col = db.collection('users').doc(uid).collection('labelOrderDrafts');
+  const snap = await col.get(), bySeller = {};
+  snap.docs.forEach(d => { const x = d.data(); (bySeller[x.sellerId] = bySeller[x.sellerId] || []).push(d.id); });
+  for (const sid of Object.keys(bySeller)) {
+    const ids = bySeller[sid], pid = pendingDraftId(sid);
+    if (ids.length === 1 && ids[0] === pid) continue;
+    await db.runTransaction(async tx => {
+      const pref = col.doc(pid), ps = await tx.get(pref);
+      const olds = [];
+      for (const id of ids.filter(i => i !== pid)) { const s = await tx.get(col.doc(id)); if (s.exists) olds.push({ id, data: s.data() }); }
+      if (!olds.length) return;
+      const merged = ps.exists ? ps.data() : { sellerId: sid, sellerName: olds[0].data.sellerName, itemsByProduct: {}, pageHashes: [], dates: [] };
+      olds.forEach(o => mergeDraftData(merged, o.data));
+      merged.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+      tx.set(pref, merged);
+      olds.forEach(o => tx.delete(col.doc(o.id)));
+    });
+  }
+}
+function dayRange(g){
+  const f = g.firstDate || g.date, l = g.lastDate || f;
+  const fmt = k => { const [y, m, d] = String(k || '').split('-').map(Number); return y ? new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''; };
+  return !f ? '' : f === l ? fmt(f) : fmt(f) + ' – ' + fmt(l);
+}
 async function mergeItemIntoDraft(mapping, hit){
-  const draftId = `${todayKey}_${mapping.sellerId}`;
+  const draftId = pendingDraftId(mapping.sellerId);   // one consolidated pending order per seller
   const ref = db.collection('users').doc(cropperUser.uid).collection('labelOrderDrafts').doc(draftId);
   let added = false;
   await db.runTransaction(async tx => {
     const snap = await tx.get(ref);
     const data = snap.exists ? snap.data() : {
-      date: todayKey, sellerId: mapping.sellerId, sellerName: mapping.sellerName,
+      date: todayKey, firstDate: todayKey, lastDate: todayKey, dates: [], sellerId: mapping.sellerId, sellerName: mapping.sellerName,
       itemsByProduct: {}, pageHashes: []
     };
     if((data.pageHashes || []).includes(hit.pageHash)) return;
     added = true;
+    data.dates = [...new Set([...(data.dates || [data.date].filter(Boolean)), todayKey])].sort();
+    data.firstDate = data.dates[0]; data.lastDate = data.dates[data.dates.length - 1]; data.date = data.firstDate;
     const p = data.itemsByProduct[mapping.productId] || {
-      productName: mapping.sellerProductName || mapping.productName, sellerSku: mapping.sellerSku,
+      productName: mapping.sellerProductName || mapping.productName, sellerSku: mapping.sellerSku, mappingId: mapping.id,
       qty: 0, breakdown: { amazon: 0, meesho: 0, flipkart: 0 }
     };
     p.qty += hit.qty;
@@ -1014,9 +1062,9 @@ async function mergeItemIntoDraft(mapping, hit){
   });
   return added;
 }
-async function loadTodayDrafts(){
-  const snap = await db.collection('users').doc(cropperUser.uid).collection('labelOrderDrafts')
-    .where('date', '==', todayKey).get();
+async function loadTodayDrafts(){   // (all pending labels, not just today's)
+  try { await consolidateDrafts(cropperUser.uid); } catch (e) { console.error('merging pending label orders', e); }
+  const snap = await db.collection('users').doc(cropperUser.uid).collection('labelOrderDrafts').get();
   todayDraftsCache = {};
   snap.docs.forEach(d => { todayDraftsCache[d.data().sellerId] = { id: d.id, ...d.data() }; });
   renderOrderSummary();
@@ -1041,14 +1089,15 @@ function renderOrderSummary(){
       <td style="padding:4px 6px"><b>${p.qty}</b></td></tr>
     `).join('');
     return `<div style="margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line,#E4D8BD)">
-      <h3 style="font-size:15px;margin:0 0 10px">${escapeHtml(g.sellerName)}</h3>
+      <h3 style="font-size:15px;margin:0 0 10px">${escapeHtml(g.sellerName)} <span style="font-weight:400;font-size:12.5px;color:var(--ink-soft,#6B6255)">· all pending labels · printed ${escapeHtml(dayRange(g))}</span></h3>
       <table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
         <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Product</th>
         <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Seller SKU</th>
         <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Marketplace breakdown</th>
         <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Total Qty</th>
       </tr></thead><tbody>${rows}</tbody></table>
-      <button class="vlc-btn accent" style="display:inline-block;width:auto;padding:8px 16px;margin-top:10px" onclick="placeAutoOrder('${escapeAttr(sid)}')">Send Order to ${escapeHtml(g.sellerName)}</button>
+      <a class="vlc-btn accent" style="display:inline-block;width:auto;padding:8px 16px;margin-top:10px;text-decoration:none" href="../billing/buyer/label-order.html" title="Sends the balance to order (labels minus the stock you have)">Review &amp; send order to ${escapeHtml(g.sellerName)} →</a>
+      <button style="display:none" onclick="placeAutoOrder('${escapeAttr(sid)}')">Send Order to ${escapeHtml(g.sellerName)}</button>
       <p id="vlcAutoOrderMsg-${escapeAttr(sid)}" style="font-size:12.5px;margin:8px 0 0"></p>
     </div>`;
   }).join('') || '';
