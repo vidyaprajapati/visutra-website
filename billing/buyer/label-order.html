@@ -62,6 +62,7 @@
 <script src="../assets/vt-firebase-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="../assets/order-merge.js"></script>
 <script src="../assets/label-sku-extract.js"></script>
 <script src="../assets/label-stock-core.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
@@ -232,19 +233,19 @@ async function isAlreadyProcessed(pageHash){
    earlier today (so re-processing the same file twice in one day doesn't
    double the quantity before it's even been sent). */
 async function mergeItemIntoDraft(mapping, hit){
-  // already in an earlier day's unsent draft → don't add (or deduct stock) twice
-  if(Object.values(draftsCache).some(d => d.date !== todayKey && (d.pageHashes || []).includes(hit.pageHash))) return false;
-  const draftId = `${todayKey}_${mapping.sellerId}`;
+  const draftId = pendingDraftId(mapping.sellerId);   // one consolidated pending order per seller
   const ref = db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').doc(draftId);
   let added = false;
   await db.runTransaction(async tx => {
     const snap = await tx.get(ref);
     const data = snap.exists ? snap.data() : {
-      date: todayKey, sellerId: mapping.sellerId, sellerName: mapping.sellerName,
+      date: todayKey, firstDate: todayKey, lastDate: todayKey, dates: [], sellerId: mapping.sellerId, sellerName: mapping.sellerName,
       itemsByProduct: {}, pageHashes: []
     };
-    if((data.pageHashes || []).includes(hit.pageHash)) return; // already merged in today, before it was sent
+    if((data.pageHashes || []).includes(hit.pageHash)) return; // this label page is already in the pending order
     added = true;
+    data.dates = [...new Set([...(data.dates || [data.date].filter(Boolean)), todayKey])].sort();
+    data.firstDate = data.dates[0]; data.lastDate = data.dates[data.dates.length - 1]; data.date = data.firstDate;
     const p = data.itemsByProduct[mapping.productId] || {
       productName: mapping.sellerProductName || mapping.productName, sellerSku: mapping.sellerSku, mappingId: mapping.id,
       qty: 0, breakdown: { amazon: 0, meesho: 0, flipkart: 0 }
@@ -295,10 +296,56 @@ function balanceToOrder(mapping){
 
 async function loadDrafts(){
   todayKey = localDayKey();
+  try { await consolidateDrafts(currentUser.uid); } catch (e) { console.error('merging pending label orders', e); }
   const snap = await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').get();
   draftsCache = {};
   snap.docs.forEach(d => { draftsCache[d.id] = { id: d.id, ...d.data() }; });
   renderSummary();
+}
+/* ONE consolidated pending order per seller: every label printed — any
+   marketplace, any day, Label Cropper or this page — adds into
+   labelOrderDrafts/pending_<sellerId> until it is sent. (Older per-day pieces
+   "<date>_<sellerId>" are merged into it automatically.) */
+function pendingDraftId(sellerId){ return 'pending_' + sellerId; }
+function mergeDraftData(into, from){
+  into.itemsByProduct = into.itemsByProduct || {};
+  Object.entries(from.itemsByProduct || {}).forEach(([pid, p]) => {
+    const q = into.itemsByProduct[pid] || { productName: p.productName, sellerSku: p.sellerSku, mappingId: p.mappingId, qty: 0, breakdown: { amazon: 0, meesho: 0, flipkart: 0 } };
+    q.qty += Number(p.qty) || 0;
+    Object.entries(p.breakdown || {}).forEach(([mk, n]) => { q.breakdown[mk] = (q.breakdown[mk] || 0) + (Number(n) || 0); });
+    if (!q.mappingId && p.mappingId) q.mappingId = p.mappingId;
+    into.itemsByProduct[pid] = q;
+  });
+  const hashes = new Set(into.pageHashes || []); (from.pageHashes || []).forEach(h => hashes.add(h)); into.pageHashes = [...hashes];
+  const days = new Set(into.dates || []); (from.dates || [from.date]).filter(Boolean).forEach(d => days.add(d)); into.dates = [...days].sort();
+  into.firstDate = into.dates[0] || into.firstDate || ''; into.lastDate = into.dates[into.dates.length - 1] || into.lastDate || '';
+  into.date = into.firstDate;   // (the 🔔 reminder reads "date" = oldest unsent day)
+  return into;
+}
+async function consolidateDrafts(uid){
+  const col = db.collection('users').doc(uid).collection('labelOrderDrafts');
+  const snap = await col.get(), bySeller = {};
+  snap.docs.forEach(d => { const x = d.data(); (bySeller[x.sellerId] = bySeller[x.sellerId] || []).push(d.id); });
+  for (const sid of Object.keys(bySeller)) {
+    const ids = bySeller[sid], pid = pendingDraftId(sid);
+    if (ids.length === 1 && ids[0] === pid) continue;
+    await db.runTransaction(async tx => {
+      const pref = col.doc(pid), ps = await tx.get(pref);
+      const olds = [];
+      for (const id of ids.filter(i => i !== pid)) { const s = await tx.get(col.doc(id)); if (s.exists) olds.push({ id, data: s.data() }); }
+      if (!olds.length) return;
+      const merged = ps.exists ? ps.data() : { sellerId: sid, sellerName: olds[0].data.sellerName, itemsByProduct: {}, pageHashes: [], dates: [] };
+      olds.forEach(o => mergeDraftData(merged, o.data));
+      merged.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+      tx.set(pref, merged);
+      olds.forEach(o => tx.delete(col.doc(o.id)));
+    });
+  }
+}
+function dayRange(g){
+  const f = g.firstDate || g.date, l = g.lastDate || f;
+  const fmt = k => { const [y, m, d] = String(k || '').split('-').map(Number); return y ? new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''; };
+  return !f ? '' : f === l ? fmt(f) : fmt(f) + ' – ' + fmt(l);
 }
 function dayLabel(key){ const [y, m, d] = String(key || '').split('-').map(Number); return y ? new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : key; }
 
@@ -331,35 +378,61 @@ function renderUnmapped(){
   }).join('');
 }
 
+/* Seller prices (for the cost estimate) and the buyer's still-pending order with each seller
+   (a new send is added INTO it) — loaded once per seller, then the summary redraws. */
+const sellerPricesLocal = {}, pendingOrderBySeller = {}, extrasRequested = {};
+function ensureSummaryExtras(sellerIds){
+  sellerIds.filter(sid => sid && !extrasRequested[sid]).forEach(async sid => {
+    extrasRequested[sid] = true;
+    try{
+      sellerPricesLocal[sid] = await vtSellerPrices(sid);
+      const by = await vtPendingOrdersBySeller(currentUser.uid);
+      pendingOrderBySeller[sid] = (by[sid] || [])[0] || null;
+    }catch(e){ sellerPricesLocal[sid] = sellerPricesLocal[sid] || {}; }
+    renderSummary();
+  });
+}
 function renderSummary(){
-  const draftIds = Object.keys(draftsCache).sort((a, b) => String(draftsCache[a].date).localeCompare(String(draftsCache[b].date)) || String(draftsCache[a].sellerName).localeCompare(String(draftsCache[b].sellerName)));
+  const draftIds = Object.keys(draftsCache).sort((a, b) => String(draftsCache[a].sellerName).localeCompare(String(draftsCache[b].sellerName)));
   document.getElementById('summaryCard').style.display = draftIds.length ? 'block' : 'none';
   document.getElementById('summaryBySeller').innerHTML = draftIds.map(did => {
-    const g = draftsCache[did], sid = g.sellerId, old = g.date && g.date < todayKey;
+    const g = draftsCache[did], sid = g.sellerId, old = (g.firstDate || g.date) && (g.firstDate || g.date) < todayKey, nDays = (g.dates || [g.date]).filter(Boolean).length;
     const products = Object.entries(g.itemsByProduct).map(([productIdKey, p]) => ({
       ...p, mapping: resolveMappingForItem(sid, productIdKey, p)
     }));
+    const prices = sellerPricesLocal[sid] || {};
+    const costItems = products.map(p => ({ productId: p.mapping ? p.mapping.productId : null, qty: (balanceToOrder(p.mapping) ?? p.qty) })).filter(i => i.qty > 0);
+    const orderCost = vtOrderCost(costItems.map(i => ({ ...i, productId: i.productId })), prices);
+    const pend = pendingOrderBySeller[sid];
     const rows = products.map(p => {
       const bal = balanceToOrder(p.mapping);
       const stockNow = p.mapping ? (p.mapping.stock || 0) : null;
+      const q = bal === null ? p.qty : bal, pr = p.mapping ? prices[p.mapping.productId] : null;
+      const lineCost = pr ? vtMoney(q * pr.price * (1 + (pr.gstRate || 0) / 100)) : '—';
       return `<tr><td>${esc(p.productName)}</td><td>${esc(p.sellerSku||'—')}</td>
       <td>${p.breakdown.amazon ? 'Amazon: '+p.breakdown.amazon+'<br>' : ''}${p.breakdown.meesho ? 'Meesho: '+p.breakdown.meesho+'<br>' : ''}${p.breakdown.flipkart ? 'Flipkart: '+p.breakdown.flipkart : ''}</td>
       <td>${p.qty}</td>
       <td>${stockNow===null ? '—' : stockNow}</td>
-      <td><b>${bal===null ? p.qty : bal}</b>${bal===0 ? ' <span class="badge">Covered by stock</span>' : ''}</td></tr>`;
+      <td><b>${q}</b>${bal===0 ? ' <span class="badge">Covered by stock</span>' : ''}</td>
+      <td style="white-space:nowrap">${q > 0 ? lineCost : '—'}</td></tr>`;
     }).join('');
     const anyToOrder = products.some(p => (balanceToOrder(p.mapping) ?? p.qty) > 0);
     return `<div style="margin-bottom:22px;padding:${old ? '12px 14px' : '0 0 18px'};border-bottom:1px solid var(--line);${old ? 'background:#FFF7ED;border:1.5px solid #F2B266;border-radius:12px' : ''}">
-      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">${esc(g.sellerName)} <span style="font-weight:400;font-size:13px;color:var(--muted)">· labels of ${esc(dayLabel(g.date))}</span>
+      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">${esc(g.sellerName)} <span style="font-weight:400;font-size:13px;color:var(--muted)">· all pending labels · printed ${esc(dayRange(g))}${nDays > 1 ? ' (' + nDays + ' days)' : ''}</span>
         ${old ? '<span class="badge warn">📅 not sent yet — from an earlier day</span>' : ''}</h3>
-      <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Dispatched ${old ? 'on ' + esc(dayLabel(g.date)) : 'Today'}</th><th>Stock Now</th><th>Balance to Order</th></tr></thead>
+      <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Labels printed</th><th>Stock Now</th><th>Balance to Order</th><th>Cost (incl. GST)</th></tr></thead>
       <tbody>${rows}</tbody></table>
+      <div style="margin-top:8px;font-size:14px">🧾 <b>Order cost: ${anyToOrder0(products) ? vtMoney(orderCost.total) : '₹0.00'}</b>
+        <span style="color:var(--muted);font-size:12px">${vtMoney(orderCost.taxable)} + ${vtMoney(orderCost.gst)} GST at ${esc(g.sellerName)}'s current prices${orderCost.unpriced ? ' · ' + orderCost.unpriced + ' item(s) priced on acceptance' : ''}</span></div>
+      ${pend ? `<div style="margin-top:6px;font-size:12.5px;color:#7A4A00;background:#FFF4DF;border:1px solid #F2D9A6;border-radius:8px;padding:6px 10px">📦 You already have a pending order <b>${esc(pend.orderNumber)}</b> with ${esc(g.sellerName)} that they haven't accepted yet — this will be <b>added into it</b>, so they handle everything as one order.</div>` : ''}
       <button class="btn primary" style="margin-top:10px" onclick="placeAutoOrder('${did}')">${anyToOrder ? `Send Order to ${esc(g.sellerName)}` : 'Mark Labels Processed (no order needed)'}</button>
       <button class="btn small" style="margin-top:10px" onclick="discardDraft('${did}')" title="Remove this draft without sending an order (e.g. you ordered another way)">Discard</button>
       <p class="msg" id="autoOrderMsg-${did}"></p>
     </div>`;
   }).join('') || '<p class="sub">No fully-mapped items to order yet.</p>';
+  ensureSummaryExtras(draftIds.map(d => draftsCache[d].sellerId));
 }
+function anyToOrder0(products){ return products.some(p => (balanceToOrder(p.mapping) ?? p.qty) > 0); }
 
 async function placeAutoOrder(draftId){
   const g = draftsCache[draftId];
@@ -386,12 +459,12 @@ async function placeAutoOrder(draftId){
       items.push({ productId, productName: p.productName, sellerSku: p.sellerSku, qty, marketplaceBreakdown: { ...p.breakdown } });
     }
 
-    let orderNumber = null, orderRef = null;
+    let orderNumber = null, orderRef = null, placed = null;
     if(items.length){
       showMsg(msgId, 'Sending order…', true);
       orderRef = db.collection('marketplaceOrders').doc();
       orderNumber = `VIS-ORD-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${orderRef.id.slice(-6).toUpperCase()}`;
-      await orderRef.set({
+      placed = await vtPlaceOrMergeOrder(currentUser.uid, orderRef, {
         orderNumber, orderType: 'LABEL_AUTO',
         buyerUid: currentUser.uid, buyerEmail: currentUser.email || '',
         buyerBusiness: {
@@ -400,10 +473,11 @@ async function placeAutoOrder(draftId){
           email: currentUser.email || ''
         },
         sellerUid: sellerId, sellerName: g.sellerName,
-        items, note: g.date && g.date !== todayKey ? `Labels dispatched on ${dayLabel(g.date)}` : '', labelsDate: g.date || todayKey, status: 'PENDING',
+        items, note: `Labels dispatched ${dayRange(g)}`, labelsDate: g.lastDate || g.date || todayKey, labelsFrom: g.firstDate || g.date || todayKey, status: 'PENDING',
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
+      if(placed.merged){ orderRef = db.collection('marketplaceOrders').doc(placed.orderId); orderNumber = placed.orderNumber; }
     }
 
     // Mark every label page that contributed to today's draft as processed,
@@ -427,16 +501,21 @@ async function placeAutoOrder(draftId){
       return;
     }
 
-    showMsg(msgId, `Order ${orderNumber} sent to ${g.sellerName}. Notifying seller…`, true);
+    const merged = !!(placed && placed.merged);
+    const allItems = merged ? placed.items : items;
+    pendingOrderBySeller[sellerId] = null; extrasRequested[sellerId] = false;
+    showMsg(msgId, merged ? `Added to your pending order ${orderNumber} with ${g.sellerName} (it now has ${allItems.length} product${allItems.length > 1 ? 's' : ''}). Notifying seller…`
+                          : `Order ${orderNumber} sent to ${g.sellerName}. Notifying seller…`, true);
     const emailResult = await sendOrderNotification(
       sellerEmailById[sellerId], g.sellerName,
-      `New Order Received – VISUTRA – Order #${orderNumber}`,
-      `You've received a new label-based order from ${buyerData.businessName || currentUser.email}.`,
-      items.map(i => `${i.productName} × ${i.qty}`).join(', '),
+      merged ? `Order Updated – more items added – VISUTRA – Order #${orderNumber}` : `New Order Received – VISUTRA – Order #${orderNumber}`,
+      merged ? `${buyerData.businessName || currentUser.email} added more items to their pending order — it is still ONE order for you to accept.`
+             : `You've received a new label-based order from ${buyerData.businessName || currentUser.email}.`,
+      allItems.map(i => `${i.productName} × ${i.qty}`).join(', '),
       `${window.location.origin}/billing/seller/order-receive.html?id=${orderRef.id}`
     );
     if(emailResult.sent){
-      showMsg(msgId, `Order ${orderNumber} sent to ${g.sellerName} and they've been emailed. Track it from My Orders.`, true);
+      showMsg(msgId, merged ? `Added to pending order ${orderNumber} and ${g.sellerName} has been emailed. Track it from My Orders.` : `Order ${orderNumber} sent to ${g.sellerName} and they've been emailed. Track it from My Orders.`, true);
     } else if(emailResult.reason === 'not_configured'){
       showMsg(msgId, `Order ${orderNumber} placed — but the seller wasn't emailed (order email isn't set up on this site yet). They'll still see it in their Order Receive portal.`, true);
     } else {
@@ -453,7 +532,7 @@ async function placeAutoOrder(draftId){
 async function discardDraft(draftId){
   const g = draftsCache[draftId];
   if(!g) return;
-  if(!confirm(`Discard the unsent order draft for ${g.sellerName} (labels of ${dayLabel(g.date)})? No order is sent. Your stock stays as it is — those labels were dispatched.`)) return;
+  if(!confirm(`Discard the unsent order draft for ${g.sellerName} (labels printed ${dayRange(g)})? No order is sent. Your stock stays as it is — those labels were dispatched.`)) return;
   await Promise.all((g.pageHashes || []).map(hash =>
     db.collection('users').doc(currentUser.uid).collection('processedLabels').doc(hash)
       .set({ orderId: null, discarded: true, processedAt: firebase.firestore.FieldValue.serverTimestamp() })));
@@ -479,8 +558,20 @@ async function sendOrderNotification(toEmail, toName, subject, headline, detailL
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function showMsg(id, text, ok){
-  const el = document.getElementById(id);
-  if(!el) return;
+  let el = document.getElementById(id);
+  if(!el){
+    // The draft's own message line disappears the moment it is sent (the draft is cleared),
+    // so the result of sending ("Order sent" / "Added to your pending order") goes to a
+    // page-level line instead of being lost.
+    el = document.getElementById('sendResultMsg');
+    if(!el){
+      const card = document.getElementById('summaryCard');
+      if(!card || !card.parentNode) return;
+      el = document.createElement('p'); el.id = 'sendResultMsg'; el.className = 'msg';
+      el.style.cssText = 'margin:0 0 14px;padding:10px 14px;border-radius:10px;background:#fff;border:1px solid var(--line,#E4D8BD)';
+      card.parentNode.insertBefore(el, card);
+    }
+  }
   el.textContent = text;
   el.className = 'msg ' + (ok ? 'ok' : 'error');
 }
