@@ -285,6 +285,22 @@ begin
             and ch <@ array['status','acceptedAt','respondedAt','rejectionReason'])
         or (o->>'sellerUid' = me and o->>'status' = 'REJECTED' and ch <@ array['stockReversed']
             and n->>'stockReversed' = 'true')
+        -- ONE pending order per buyer+seller: while the seller has not accepted or
+        -- rejected it, the buyer may add more items to it (a later send is merged
+        -- into the same order instead of becoming another one) ...
+        or (o->>'buyerUid' = me and o->>'status' = 'PENDING' and n->>'status' = 'PENDING'
+            and coalesce(o->>'orderType', '') in ('LABEL_AUTO', 'PRODUCT_SELECT')
+            and ch <@ array['items','note','labelsDate','labelsFrom','mergedCount','mergedNumbers','updatedAt'])
+        -- ... and may fold an extra pending order into that one (status MERGED), but only
+        -- into a still-pending order of the same buyer and seller
+        or (o->>'buyerUid' = me and o->>'status' = 'PENDING' and n->>'status' = 'MERGED'
+            and coalesce(o->>'orderType', '') in ('LABEL_AUTO', 'PRODUCT_SELECT')
+            and ch <@ array['status','mergedInto','updatedAt']
+            and exists (select 1 from public.docs d
+                        where d.path = 'marketplaceOrders/' || coalesce(n->>'mergedInto', '-')
+                          and d.path <> new.path
+                          and d.data->>'buyerUid' = me and d.data->>'sellerUid' = o->>'sellerUid'
+                          and d.data->>'status' = 'PENDING'))
       ), false) then raise exception 'VT_DENIED: marketplaceOrders update'; end if;
     else raise exception 'VT_DENIED: marketplaceOrders delete'; end if;
 
