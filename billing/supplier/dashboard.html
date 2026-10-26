@@ -63,6 +63,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../assets/vt-firebase-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
+<script src="../assets/table-sort.js"></script>
 <script>
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = n => '₹' + (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -133,9 +134,9 @@ function renderBlock(b, i){
       <button onclick="tab(${i},'pur',this)">Purchases</button>
       <button onclick="tab(${i},'pay',this)">Payments</button>
     </div>
-    <div class="sd-pane sd-scroll" data-pane="led"><table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th class="num">Purchase</th><th class="num">Payment</th><th class="num">Balance</th></tr></thead><tbody>${ledgerHtml}</tbody></table></div>
-    <div class="sd-pane sd-scroll hidden" data-pane="pur"><table><thead><tr><th>Date</th><th>Invoice / items</th><th class="num">Taxable</th><th class="num">GST</th><th class="num">Total</th></tr></thead><tbody>${purHtml}</tbody></table></div>
-    <div class="sd-pane sd-scroll hidden" data-pane="pay"><table><thead><tr><th>Date</th><th class="num">Amount</th><th>Mode</th><th>Note</th></tr></thead><tbody>${payHtml}</tbody></table></div>
+    <div class="sd-pane sd-scroll" data-pane="led"><table data-vt-sort data-vt-statement><thead><tr><th>Date</th><th>Type</th><th>Details</th><th class="num">Purchase</th><th class="num">Payment</th><th class="num">Balance</th></tr></thead><tbody>${ledgerHtml}</tbody></table></div>
+    <div class="sd-pane sd-scroll hidden" data-pane="pur"><table data-vt-sort><thead><tr><th>Date</th><th>Invoice / items</th><th class="num">Taxable</th><th class="num">GST</th><th class="num">Total</th></tr></thead><tbody>${purHtml}</tbody></table></div>
+    <div class="sd-pane sd-scroll hidden" data-pane="pay"><table data-vt-sort><thead><tr><th>Date</th><th class="num">Amount</th><th>Mode</th><th>Note</th></tr></thead><tbody>${payHtml}</tbody></table></div>
   </div>`;
 }
 
@@ -168,6 +169,7 @@ async function load(user){
   const c = document.getElementById('content');
   c.innerHTML = '<h1 class="sd-hello">Your account</h1><p class="sub" style="color:var(--muted);margin:0 0 12px">Read-only view of what you supplied, what you have been paid and what is still due. Updated live from your buyer\'s records.</p>' + blocks.map(renderBlock).join('');
   c.classList.remove('hidden');
+  if(window.vtEnhanceTables) window.vtEnhanceTables();   // "Sort by" for the ledger, purchases and payments
 }
 
 let started = false;
