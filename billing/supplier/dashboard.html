@@ -1,1 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Supplier Dashboard | VISUTRA</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.bunny.net/css2?family=Bricolage+Grotesque:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+<style>
+  .sd-wrap{max-width:1000px;margin:0 auto;padding:26px 18px 70px}
+  .sd-hello{margin:0 0 4px;font-family:var(--display);font-size:clamp(22px,3.5vw,30px)}
+  .sd-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:14px 0 18px}
+  .sd-stat{border:1px solid var(--thread);border-radius:12px;padding:14px 16px;background:#fff}
+  .sd-stat small{display:block;font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:6px}
+  .sd-stat b{font-family:var(--display);font-size:clamp(18px,3vw,25px)}
+  .sd-stat.due b{color:var(--paprika-dark)}
+  .sd-stat.clear b{color:#1E7B3C}
+  .sd-tabs{display:flex;gap:8px;margin:6px 0 12px;flex-wrap:wrap}
+  .sd-tabs button{padding:8px 16px;border-radius:999px;border:1.5px solid var(--thread);background:#fff;font-family:var(--mono);font-size:12px;cursor:pointer}
+  .sd-tabs button.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .sd-scroll{overflow-x:auto}
+  .num{text-align:right;white-space:nowrap}
+  .sd-items{margin:6px 0 2px;font-size:12.5px;color:var(--muted)}
+  .sd-items summary{cursor:pointer;color:var(--indigo)}
+  .sd-items table{margin-top:6px;font-size:12.5px}
+  .sd-tools{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .sd-tools a{display:block;padding:14px 16px;border:1px solid var(--thread);border-radius:12px;text-decoration:none;color:inherit;background:#fff;font-weight:600}
+  .sd-tools a span{display:block;font-weight:400;font-size:12.5px;color:var(--muted);margin-top:3px}
+  .sd-tools a:hover{background:var(--ivory)}
+  .sd-state{text-align:center;padding:40px 10px;color:var(--muted)}
+  @media(max-width:700px){.sd-stats{grid-template-columns:1fr}.sd-tools{grid-template-columns:1fr}}
+  @media print{.topbar,.sd-tabs,.sd-noprint{display:none!important}.sd-pane{display:block!important}}
+</style>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Supplier Dashboard</b></a>
+  <div class="topbar-right">
+    <span class="user" id="who"></span>
+    <button class="btn small sd-noprint" onclick="window.print()">Print</button>
+    <button class="btn small" onclick="logout()">Sign out</button>
+  </div>
+</div>
 
+<div class="sd-wrap">
+  <div id="state" class="sd-state">Loading your account…</div>
+  <div id="content" class="hidden"></div>
+
+  <div class="card sd-noprint hidden" id="toolsCard" style="margin-top:22px">
+    <h2>Free tools for you</h2>
+    <p class="sub">VISUTRA's seller tools are free for suppliers too — labels, barcodes, QR codes, shipping-label preparation and GST return files.</p>
+    <div class="sd-tools">
+      <a href="../../tools/tools-home.html">🧰 Free Tools<span>Labels, barcodes, QR codes, GST return files</span></a>
+      <a href="../portal.html">🧾 GST Billing<span>Invoices, purchases and stock for your own business</span></a>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../assets/vt-firebase-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script>
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = n => '₹' + (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const dmy = d => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d || ''); return m ? m[3] + '-' + m[2] + '-' + m[1] : (d || '—'); };
+const num = n => (Number(n) || 0).toLocaleString('en-IN', { maximumFractionDigits: 3 });
+
+async function logout(){ try{ await auth.signOut(); }catch(e){} window.location.replace('login.html'); }
+
+function setState(html){ const s = document.getElementById('state'); s.innerHTML = html; s.classList.remove('hidden'); document.getElementById('content').classList.add('hidden'); }
+
+// Give a first-time supplier a basic profile so the free tools open straight away
+// (the tools check for a completed profile).
+async function ensureProfile(user, first){
+  try{
+    const ref = db.collection('users').doc(user.uid);
+    const snap = await ref.get();
+    if(snap.exists) return;
+    const nm = (first && first.supplierName) || '';
+    const ph = (first && first.phone) || '';
+    await ref.set({
+      email: user.email, fullName: nm, businessName: nm, businessType: 'Supplier',
+      mobileNumber: ph, phone: ph, username: '', gstin: '', address: '', state: '', stateCode: '', signature: '',
+      profileComplete: true, isSupplierAccount: true,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }catch(e){ console.warn('profile setup skipped:', e); }
+}
+
+function ledgerRows(b){
+  const rows = [];
+  (b.purchases || []).forEach(p => rows.push({ date: p.date || '', kind: 'Purchase', desc: 'Purchase' + (p.invoiceNo ? ' — Invoice ' + p.invoiceNo : ''), dr: p.grandTotal, cr: 0 }));
+  (b.payments || []).forEach(y => rows.push({ date: y.date || '', kind: 'Payment', desc: 'Payment' + (y.mode ? ' (' + y.mode + ')' : '') + (y.note ? ' — ' + y.note : ''), dr: 0, cr: y.amount }));
+  rows.sort((a, c) => a.date < c.date ? -1 : a.date > c.date ? 1 : (a.kind === 'Purchase' ? -1 : 1));
+  let run = 0;
+  return rows.map(r => { run += (r.dr || 0) - (r.cr || 0); return { ...r, bal: run }; });
+}
+
+function renderBlock(b, i){
+  const bal = Number(b.balance) || 0;
+  const led = ledgerRows(b);
+  const ledgerHtml = led.length ? led.map(r => `<tr>
+      <td>${esc(dmy(r.date))}</td><td><span class="badge">${r.kind}</span></td><td>${esc(r.desc)}</td>
+      <td class="num">${r.dr ? money(r.dr) : ''}</td><td class="num">${r.cr ? money(r.cr) : ''}</td><td class="num">${money(r.bal)}</td></tr>`).join('')
+    : '<tr><td colspan="6" style="color:var(--muted)">Nothing recorded yet.</td></tr>';
+
+  const purHtml = (b.purchases || []).length ? b.purchases.map(p => {
+    const items = (p.items || []).length ? `<details class="sd-items"><summary>${p.items.length} item${p.items.length > 1 ? 's' : ''}</summary>
+      <table><thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">GST</th><th class="num">Amount</th></tr></thead><tbody>
+      ${p.items.map(it => `<tr><td>${esc(it.name)}</td><td class="num">${num(it.qty)} ${esc(it.unit)}</td><td class="num">${money(it.rate)} ${it.priceMode === 'excl' ? 'excl.' : 'incl.'}</td><td class="num">${num(it.gstRate)}%</td><td class="num">${money(it.total)}</td></tr>`).join('')}
+      </tbody></table></details>` : '';
+    return `<tr><td>${esc(dmy(p.date))}</td><td>${esc(p.invoiceNo || '—')}${items}</td><td class="num">${money(p.subtotal)}</td><td class="num">${money(p.gstTotal)}</td><td class="num"><b>${money(p.grandTotal)}</b></td></tr>`;
+  }).join('') : '<tr><td colspan="5" style="color:var(--muted)">No purchases yet.</td></tr>';
+
+  const payHtml = (b.payments || []).length ? b.payments.map(y => `<tr>
+      <td>${esc(dmy(y.date))}</td><td class="num"><b>${money(y.amount)}</b></td><td>${esc(y.mode || '—')}</td><td>${esc(y.note || '')}</td></tr>`).join('')
+    : '<tr><td colspan="4" style="color:var(--muted)">No payments yet.</td></tr>';
+
+  return `<div class="card" data-block="${i}">
+    <h2>${esc(b.sellerName)}</h2>
+    <p class="sub">Your account with this buyer${b.supplierName ? ', listed as <b>' + esc(b.supplierName) + '</b>' : ''}.</p>
+    <div class="sd-stats">
+      <div class="sd-stat"><small>Total purchased from you</small><b>${money(b.totalPurchase)}</b></div>
+      <div class="sd-stat"><small>Total paid to you</small><b>${money(b.totalPaid)}</b></div>
+      <div class="sd-stat ${bal > 0.005 ? 'due' : 'clear'}"><small>${bal < -0.005 ? 'Paid in advance' : 'Balance due to you'}</small><b>${money(Math.abs(bal))}</b></div>
+    </div>
+    <div class="sd-tabs">
+      <button class="active" onclick="tab(${i},'led',this)">Ledger</button>
+      <button onclick="tab(${i},'pur',this)">Purchases</button>
+      <button onclick="tab(${i},'pay',this)">Payments</button>
+    </div>
+    <div class="sd-pane sd-scroll" data-pane="led"><table><thead><tr><th>Date</th><th>Type</th><th>Details</th><th class="num">Purchase</th><th class="num">Payment</th><th class="num">Balance</th></tr></thead><tbody>${ledgerHtml}</tbody></table></div>
+    <div class="sd-pane sd-scroll hidden" data-pane="pur"><table><thead><tr><th>Date</th><th>Invoice / items</th><th class="num">Taxable</th><th class="num">GST</th><th class="num">Total</th></tr></thead><tbody>${purHtml}</tbody></table></div>
+    <div class="sd-pane sd-scroll hidden" data-pane="pay"><table><thead><tr><th>Date</th><th class="num">Amount</th><th>Mode</th><th>Note</th></tr></thead><tbody>${payHtml}</tbody></table></div>
+  </div>`;
+}
+
+function tab(i, which, btn){
+  const card = document.querySelector('[data-block="' + i + '"]');
+  card.querySelectorAll('.sd-tabs button').forEach(b => b.classList.toggle('active', b === btn));
+  card.querySelectorAll('.sd-pane').forEach(p => p.classList.toggle('hidden', p.dataset.pane !== which));
+}
+
+async function load(user){
+  document.getElementById('who').textContent = user.email || '';
+  const { data, error } = await firebase.supabase().rpc('vt_supplier_dashboard');
+  if(error){
+    const m = error.message || '';
+    if(/vt_supplier_dashboard/i.test(m) && /not exist|could not find|schema cache/i.test(m)){
+      setState('The supplier dashboard is not switched on in the database yet. Ask VISUTRA to run <b>supplier-access.sql</b>.');
+    } else if(/VT_DENIED/.test(m)){
+      setState('This account is not active. Contact <a href="mailto:support@visutra.in">support@visutra.in</a>.');
+    } else { setState('Could not load your account: ' + esc(m) + '<br><br><button class="btn" onclick="location.reload()">Try again</button>'); }
+    return;
+  }
+  const blocks = Array.isArray(data) ? data : [];
+  document.getElementById('toolsCard').classList.remove('hidden');
+  await ensureProfile(user, blocks[0]);
+  if(!blocks.length){
+    setState('No buyer has added <b>' + esc(user.email) + '</b> as a supplier yet.<br>If you expect to see records here, ask your buyer to check the email address on your supplier card.');
+    return;
+  }
+  document.getElementById('state').classList.add('hidden');
+  const c = document.getElementById('content');
+  c.innerHTML = '<h1 class="sd-hello">Your account</h1><p class="sub" style="color:var(--muted);margin:0 0 12px">Read-only view of what you supplied, what you have been paid and what is still due. Updated live from your buyer\'s records.</p>' + blocks.map(renderBlock).join('');
+  c.classList.remove('hidden');
+}
+
+let started = false;
+auth.onAuthStateChanged(user => {
+  if(!user){ window.location.replace('login.html'); return; }
+  if(started) return; started = true;
+  load(user).catch(e => setState('Something went wrong: ' + esc(e.message || e)));
+});
+</script>
+</body>
+</html>

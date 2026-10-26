@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Supplier Login | VISUTRA</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../../favicon.svg">
+<link href="https://fonts.bunny.net/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/billing.css">
+<style>
+  .wrap{max-width:460px;margin:60px auto;padding:0 20px}
+  .logo-row{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:26px}
+  .logo-row img{height:36px;width:auto}
+  .logo-row span{font-family:var(--display);font-size:20px}
+  .sent{text-align:center;padding:10px 0}
+  .sent h2{margin:0 0 8px}
+  .fine{color:var(--muted);font-size:12.5px;line-height:1.6;margin-top:14px}
+</style>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+</head>
+<body>
+<div class="wrap">
+  <div class="logo-row"><img src="../../assets/logo.png" alt="VISUTRA"><span>Supplier Login</span></div>
+
+  <div class="card" id="formCard">
+    <h2>View your account</h2>
+    <p class="sub">See your purchases, payments and balance with your buyer — and use VISUTRA's free tools. No password needed: we email a one-time login link to the email address your buyer registered for you.</p>
+    <div class="field"><label for="email">Your email address</label>
+      <input type="email" id="email" autocomplete="email" placeholder="you@yourbusiness.com" onkeydown="if(event.key==='Enter')sendLink()"></div>
+    <button class="btn primary" style="width:100%" id="sendBtn" onclick="sendLink()">Email me a login link</button>
+    <p class="msg" id="msg"></p>
+    <p class="fine">Use the same email address your buyer gave VISUTRA. Only that address can open this account. Not a supplier? <a href="../login.html">Business sign-in</a></p>
+  </div>
+
+  <div class="card hidden" id="sentCard">
+    <div class="sent">
+      <h2>Check your email</h2>
+      <p class="sub">If <b id="sentTo"></b> is registered as a supplier, a login link is on its way. Open it on this device (or any device) and your dashboard opens automatically. Check spam/junk if you don't see it within a few minutes.</p>
+      <button class="btn" id="resendBtn" onclick="sendLink()" disabled>Send again</button>
+      <p class="msg" id="msg2"></p>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../assets/vt-firebase-compat.js"></script>
+<script src="../assets/firebase-config.js"></script>
+<script>
+const DASHBOARD_URL = window.location.origin + '/billing/supplier/dashboard.html';
+let cooldownTimer = null;
+
+// Pre-fill from the email link ( ?email=... )
+(function(){
+  const e = new URLSearchParams(location.search).get('email');
+  if(e) document.getElementById('email').value = e;
+  const st = new URLSearchParams(location.search).get('account');
+  if(st === 'pending') say('This email is not registered as a supplier yet. Ask your buyer to add it to their supplier list.', false);
+  if(st === 'rejected') say('This account was not approved. Contact support@visutra.in if you think this is a mistake.', false);
+})();
+
+function say(text, ok){
+  ['msg','msg2'].forEach(id => { const el = document.getElementById(id); el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'error'); });
+}
+
+function startCooldown(){
+  const btn = document.getElementById('resendBtn');
+  let left = 60;
+  btn.disabled = true; btn.textContent = 'Send again (' + left + 's)';
+  clearInterval(cooldownTimer);
+  cooldownTimer = setInterval(() => {
+    left--;
+    if(left <= 0){ clearInterval(cooldownTimer); btn.disabled = false; btn.textContent = 'Send again'; }
+    else btn.textContent = 'Send again (' + left + 's)';
+  }, 1000);
+}
+
+async function sendLink(){
+  const email = document.getElementById('email').value.trim() || document.getElementById('sentTo').textContent;
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ say('Enter a valid email address.', false); return; }
+  const btn = document.getElementById('sendBtn'); btn.disabled = true; say('Sending…', true);
+  try{
+    const { error } = await firebase.supabase().auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: DASHBOARD_URL, shouldCreateUser: true }
+    });
+    if(error){
+      const m = error.message || '';
+      if(error.status === 429 || /rate limit|security purposes|too many/i.test(m)){
+        say('Please wait a minute before asking for another link.', false);
+      } else { say('Could not send the link: ' + m, false); }
+      btn.disabled = false; return;
+    }
+    // Same message whether or not the email is a supplier (never reveals who is registered).
+    document.getElementById('sentTo').textContent = email;
+    document.getElementById('formCard').classList.add('hidden');
+    document.getElementById('sentCard').classList.remove('hidden');
+    say('', true); startCooldown();
+  }catch(err){ say('Could not reach the server — check your internet connection.', false); }
+  btn.disabled = false;
+}
+
+// Already signed in → straight to the dashboard
+auth.onAuthStateChanged(user => { if(user) window.location.replace('dashboard.html'); });
+</script>
+</body>
+</html>
