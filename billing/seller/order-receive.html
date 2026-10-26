@@ -29,9 +29,9 @@
     <h2>Orders From Buyers</h2>
     <p class="sub">Accepting an order fetches the current price, GST rate and HSN from your own Product Master (never anything the buyer sent), checks stock, then generates a GST invoice, deducts inventory, and logs a stock movement — all in one atomic step, so a double-click or two staff members clicking Accept at the same moment can never double-process the same order.</p>
     <div class="field" style="max-width:240px"><label>Filter</label><select id="fStatus" onchange="renderOrders()">
-      <option value="PENDING">Pending</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option><option value="">All</option>
+      <option value="PENDING">Pending</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option><option value="MERGED">Merged into another order</option><option value="">All</option>
     </select></div>
-    <table><thead><tr><th>Order #</th><th>Buyer</th><th>Date</th><th>Items</th><th>Status</th><th></th></tr></thead>
+    <table><thead><tr><th>Order #</th><th>Buyer</th><th>Date</th><th>Items</th><th title="Taxable value + GST at your CURRENT Product Master prices (the invoice total once accepted)">Order value</th><th>Status</th><th></th></tr></thead>
     <tbody id="ordersTable"></tbody></table>
     <p class="msg" id="pageMsg"></p>
   </div>
@@ -42,6 +42,7 @@
 <script src="../assets/vt-firebase-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="../assets/order-merge.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 let currentUser = null;
@@ -107,7 +108,7 @@ async function loadOrders(){
 }
 function renderOrders(){
   const filter = document.getElementById('fStatus').value;
-  const rows = filter ? ordersCache.filter(o => o.status === filter) : ordersCache;
+  const rows = filter ? ordersCache.filter(o => o.status === filter) : ordersCache.filter(o => o.status !== 'MERGED');
   document.getElementById('ordersTable').innerHTML = rows.map(o => {
     let itemsSummary = (o.items||[]).map(i => {
       const bd = i.marketplaceBreakdown;
@@ -136,7 +137,7 @@ function renderOrders(){
         const stockTxt = !p ? 'not in Product Master' : p.active === false ? 'inactive' : `stock ${avail}${avail < i.qty ? ' — short by ' + (i.qty - avail) : ''}`;
         return `<label class="oi-row" style="display:flex;gap:8px;align-items:flex-start;margin:3px 0;cursor:${p ? 'pointer' : 'not-allowed'}">
           <input type="checkbox" class="oi-chk" data-order="${o.id}" data-idx="${idx}" ${ok ? 'checked' : ''} ${p ? '' : 'disabled'} onchange="onOrderItemTick('${o.id}')" style="width:auto;margin-top:3px">
-          <span>${esc(i.productName)} × ${i.qty}${bdText} <span style="font-size:11px;color:${ok ? '#0E7C6B' : 'var(--paprika-dark)'}">· ${esc(stockTxt)}</span></span></label>`;
+          <span>${esc(i.productName)} × ${i.qty}${bdText} <span style="font-size:11px;color:${ok ? '#0E7C6B' : 'var(--paprika-dark)'}">· ${esc(stockTxt)}</span>${p ? ` <span style="font-size:11px;color:var(--muted)">· ${vtMoney(i.qty * (Number(p.price) || 0) * (1 + (Number(p.gstRate) || 0) / 100))}</span>` : ''}</span></label>`;
       });
       itemsSummary = `<label class="oi-all" style="display:flex;gap:8px;align-items:center;font-weight:700;font-size:12.5px;border-bottom:1px solid var(--line,#eee);padding-bottom:4px;margin-bottom:4px;cursor:pointer">
           <input type="checkbox" class="oi-all-chk" data-order="${o.id}" onchange="toggleAllOrderItems('${o.id}', this.checked)" style="width:auto"> Select all</label>` + itemRows.join('');
@@ -164,11 +165,27 @@ function renderOrders(){
     }
     const splitNote = o.splitFromOrderId ? `<div style="font-size:11px;color:var(--muted)">remaining items of a partly accepted order</div>`
       : (o.splitInto ? `<div style="font-size:11px;color:var(--muted)">partly accepted — the rest moved to a new pending order</div>` : '');
-    return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}${splitNote}</td><td>${esc(o.buyerBusiness?.businessName || o.buyerEmail)}</td><td>${date}</td>
-      <td>${itemsSummary}</td><td><span class="badge">${esc(o.status)}</span></td>
+    const mergedNote = o.mergedCount ? `<div style="font-size:11px;color:#7A4A00">📦 one combined order — ${o.mergedCount} later send${o.mergedCount > 1 ? 's' : ''} added${(o.mergedNumbers || []).length ? ' (' + esc(o.mergedNumbers.join(', ')) + ')' : ''}</div>` : '';
+    const into = o.status === 'MERGED' ? ordersCache.find(x => x.id === o.mergedInto) : null;
+    const statusTxt = o.status === 'MERGED' ? `Merged into ${into ? into.orderNumber : 'another order'}` : o.status;
+    return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}${splitNote}${mergedNote}</td><td>${esc(o.buyerBusiness?.businessName || o.buyerEmail)}</td><td>${date}</td>
+      <td>${itemsSummary}</td><td>${o.status === 'MERGED' ? '—' : sellerOrderCostHtml(o)}</td><td><span class="badge">${esc(statusTxt)}</span></td>
       <td class="row-actions">${actions}${missingWarning}</td></tr>`;
-  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No orders here.</td></tr>';
+  }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No orders here.</td></tr>';
   rows.filter(o => o.status === 'PENDING').forEach(o => onOrderItemTick(o.id));
+}
+// Order value: the invoice total once accepted; otherwise taxable + GST at YOUR current Product Master prices.
+function sellerOrderCostHtml(o){
+  if(o.status === 'ACCEPTED' && o.invoiceSummary){
+    const x = o.invoiceSummary;
+    return vtCostHtml({ taxable: x.subtotal || 0, gst: (x.cgst || 0) + (x.sgst || 0) + (x.igst || 0), total: x.grandTotal || 0, unpriced: 0 });
+  }
+  const prices = {}, items = (o.items || []).map(i => {
+    const pid = resolveOrderItemProductId(i), p = pid ? productsCache.find(x => x.id === pid) : null;
+    if(p) prices[pid] = { price: p.price, gstRate: p.gstRate };
+    return { productId: pid, qty: i.qty };
+  });
+  return vtCostHtml(vtOrderCost(items, prices), { estimate: o.status === 'PENDING' });
 }
 function orderTickBoxes(orderId){ return [...document.querySelectorAll(`.oi-chk[data-order="${orderId}"]`)]; }
 function onOrderItemTick(orderId){
