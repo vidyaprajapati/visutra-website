@@ -154,6 +154,7 @@ function mountUserMenu(mountId, user, opts) {
   });
 
   mountSiteDrawer(mount, base, siteRoot);
+  vtMountToolsBar(mount, siteRoot);
 }
 
 // The Buyer domain's own pages (its equivalent of the Seller side's big
@@ -496,6 +497,26 @@ function mountSiteDrawer(mount, base, siteRoot) {
   });
   document.getElementById('vtSiteDrawerClose').addEventListener('click', function () { drawer.style.display = 'none'; });
   document.getElementById('vtSiteDrawerBackdrop').addEventListener('click', function () { drawer.style.display = 'none'; });
+}
+
+/* ---------------- Free tools: one strip at the top of every Buyer + Seller page ---------------- */
+const VT_FREE_TOOLS = [
+  { href: 'tools/label-studio.html', icon: '🏷️', label: 'Label Studio' },
+  { href: 'tools/label-cropper.html', icon: '✂️', label: 'Label Cropper' },
+  { href: 'tools/gst-seller.html', icon: '🧾', label: 'GST Return Tool' }
+];
+function vtMountToolsBar(mount, siteRoot) {
+  if (document.getElementById('vtToolsBar')) return;
+  const topbar = mount.closest('.topbar');
+  if (!topbar) return;            // free-tool pages have their own header
+  const bar = document.createElement('div');
+  bar.id = 'vtToolsBar';
+  bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 24px;background:#FFF4DF;border-bottom:1px solid #E9D9B4;font-family:system-ui,sans-serif;font-size:12.5px;color:#4A3F2E';
+  const pill = 'display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border:1px solid #E0C98F;border-radius:999px;background:#fff;color:#1F1B16;text-decoration:none;font-weight:600;white-space:nowrap';
+  bar.innerHTML = '<b style="margin-right:2px">🧰 Free tools</b>' +
+    VT_FREE_TOOLS.map(function (t) { return '<a href="' + siteRoot + t.href + '" style="' + pill + '">' + t.icon + ' ' + t.label + '</a>'; }).join('') +
+    '<a href="' + siteRoot + 'tools/tools-home.html" style="color:#9E3608;text-decoration:none;font-weight:600;margin-left:4px">All free tools →</a>';
+  topbar.insertAdjacentElement('afterend', bar);
 }
 
 function escapeHtmlUM(s) {
