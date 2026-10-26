@@ -76,14 +76,33 @@ begin
   return true;
 end $$;
 
--- a new account (Supabase Auth) → a PENDING approval row, with the sign-up details
+-- a new account (Supabase Auth) → an approval row with the sign-up details.
+-- PENDING for everyone, EXCEPT an email a seller listed on a supplier card (see
+-- supplier-access.sql): that supplier account is approved at once.
+-- (This block is kept identical in supplier-access.sql — a test checks they match.)
+-- Is this email on a supplier card of ANY seller?  (internal helper only)
+create or replace function public.vt_is_supplier_email(p_email text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(btrim(p_email), '') <> '' and exists (
+    select 1 from public.docs
+    where col ~ '^users/[^/]+/suppliers$'
+      and lower(btrim(coalesce(data->>'email', ''))) = lower(btrim(p_email))
+  )
+$$;
+revoke execute on function public.vt_is_supplier_email(text) from public, anon, authenticated;
+
 create or replace function public.vt_new_signup() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare m jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); s jsonb;
+declare m jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); s jsonb; auto boolean;
 begin
   s := coalesce(m->'vt_signup', '{}'::jsonb);
-  insert into public.account_approvals(uid, email, name, business_type, mobile, username)
-  values (new.id, new.email, coalesce(s->>'fullName', m->>'full_name'), s->>'businessType', s->>'mobileNumber', s->>'username')
+  auto := public.vt_is_supplier_email(new.email);
+  insert into public.account_approvals(uid, email, name, business_type, mobile, username, status, decided_at, decided_by)
+  values (new.id, new.email, coalesce(s->>'fullName', m->>'full_name'),
+          coalesce(s->>'businessType', case when auto then 'Supplier' end), s->>'mobileNumber', s->>'username',
+          case when auto then 'APPROVED' else 'PENDING' end,
+          case when auto then now() end,
+          case when auto then 'auto:supplier-invite' end)
   on conflict (uid) do nothing;
   return new;
 end $$;
