@@ -42,6 +42,7 @@
 <script src="../assets/vt-firebase-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="../assets/table-sort.js"></script>
 <script src="../assets/order-merge.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
@@ -169,24 +170,25 @@ function renderOrders(){
     const into = o.status === 'MERGED' ? ordersCache.find(x => x.id === o.mergedInto) : null;
     const statusTxt = o.status === 'MERGED' ? `Merged into ${into ? into.orderNumber : 'another order'}` : o.status;
     return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}${splitNote}${mergedNote}</td><td>${esc(o.buyerBusiness?.businessName || o.buyerEmail)}</td><td>${date}</td>
-      <td>${itemsSummary}</td><td>${o.status === 'MERGED' ? '—' : sellerOrderCostHtml(o)}</td><td><span class="badge">${esc(statusTxt)}</span></td>
+      <td>${itemsSummary}</td><td data-sort="${o.status === 'MERGED' ? '' : sellerOrderCost(o).total.toFixed(2)}">${o.status === 'MERGED' ? '—' : sellerOrderCostHtml(o)}</td><td><span class="badge">${esc(statusTxt)}</span></td>
       <td class="row-actions">${actions}${missingWarning}</td></tr>`;
   }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No orders here.</td></tr>';
   rows.filter(o => o.status === 'PENDING').forEach(o => onOrderItemTick(o.id));
 }
 // Order value: the invoice total once accepted; otherwise taxable + GST at YOUR current Product Master prices.
-function sellerOrderCostHtml(o){
+function sellerOrderCost(o){
   if(o.status === 'ACCEPTED' && o.invoiceSummary){
     const x = o.invoiceSummary;
-    return vtCostHtml({ taxable: x.subtotal || 0, gst: (x.cgst || 0) + (x.sgst || 0) + (x.igst || 0), total: x.grandTotal || 0, unpriced: 0 });
+    return { taxable: x.subtotal || 0, gst: (x.cgst || 0) + (x.sgst || 0) + (x.igst || 0), total: x.grandTotal || 0, unpriced: 0 };
   }
   const prices = {}, items = (o.items || []).map(i => {
     const pid = resolveOrderItemProductId(i), p = pid ? productsCache.find(x => x.id === pid) : null;
     if(p) prices[pid] = { price: p.price, gstRate: p.gstRate };
     return { productId: pid, qty: i.qty };
   });
-  return vtCostHtml(vtOrderCost(items, prices), { estimate: o.status === 'PENDING' });
+  return vtOrderCost(items, prices);
 }
+function sellerOrderCostHtml(o){ return vtCostHtml(sellerOrderCost(o), { estimate: o.status !== 'ACCEPTED' || !o.invoiceSummary }); }
 function orderTickBoxes(orderId){ return [...document.querySelectorAll(`.oi-chk[data-order="${orderId}"]`)]; }
 function onOrderItemTick(orderId){
   const boxes = orderTickBoxes(orderId), usable = boxes.filter(b => !b.disabled), n = boxes.filter(b => b.checked).length;
