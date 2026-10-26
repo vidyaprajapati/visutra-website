@@ -46,6 +46,7 @@
 <script src="../assets/vt-firebase-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
+<script src="../assets/table-sort.js"></script>
 <script src="../assets/order-merge.js"></script>
 <script>
 let currentUser = null;
@@ -153,7 +154,7 @@ function renderOrders(){
       : o.status === 'MERGED' ? 'Combined into ' + (into ? into.orderNumber : 'another order') : o.status;
     const mergedNote = o.mergedCount ? `<div style="font-size:11px;color:#7A4A00">📦 one combined order — ${o.mergedCount} later send${o.mergedCount > 1 ? 's' : ''} added</div>` : '';
     return `<tr id="order-row-${o.id}"><td>${typeLabel}${esc(o.orderNumber)}${mergedNote}</td><td>${esc(o.sellerName)}</td><td>${invCell}</td><td style="color:var(--muted)">${date}</td>
-      <td>${itemsSummary}</td><td>${o.status === 'MERGED' ? '—' : orderValueHtml(o)}</td><td><span class="badge">${esc(statusLabel)}</span></td>
+      <td>${itemsSummary}</td><td data-sort="${o.status === 'MERGED' || !orderValue(o) ? '' : orderValue(o).total.toFixed(2)}">${o.status === 'MERGED' ? '—' : orderValueHtml(o)}</td><td><span class="badge">${esc(statusLabel)}</span></td>
       <td class="row-actions">${actions}</td></tr>`;
   }).join('') || '<tr><td colspan="8" style="color:var(--muted)">No orders yet — place one from My Sellers.</td></tr>';
 }
@@ -168,14 +169,18 @@ function loadPricesForOrders(){
       renderOrders();
     });
 }
-function orderValueHtml(o){
+function orderValue(o){
   if(o.status === 'ACCEPTED' && o.invoiceSummary){
     const x = o.invoiceSummary;
-    return vtCostHtml({ taxable: x.subtotal || 0, gst: (x.cgst || 0) + (x.sgst || 0) + (x.igst || 0), total: x.grandTotal || 0, unpriced: 0 });
+    return { taxable: x.subtotal || 0, gst: (x.cgst || 0) + (x.sgst || 0) + (x.igst || 0), total: x.grandTotal || 0, unpriced: 0 };
   }
   const prices = sellerPriceMaps[o.sellerUid];
-  if(!prices) return '<span style="color:var(--muted)">…</span>';
-  return vtCostHtml(vtOrderCost(o.items || [], prices), { estimate: true });
+  return prices ? vtOrderCost(o.items || [], prices) : null;
+}
+function orderValueHtml(o){
+  const v = orderValue(o);
+  if(!v) return '<span style="color:var(--muted)">…</span>';
+  return vtCostHtml(v, { estimate: !(o.status === 'ACCEPTED' && o.invoiceSummary) });
 }
 function renderMergeBanner(){
   const by = {};
