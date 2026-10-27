@@ -102,16 +102,6 @@
       this.exists = !!row;
       this._data = row ? row.data : undefined;
       this._version = row ? row.version : null;
-      // When the record was first saved (set once, never changes on edits). Like Firestore's
-      // createTime. Also remembered by id so lists can show "latest entry first" (table-sort.js).
-      this.createTime = null;
-      if (row && row.created_at) {
-        const ms = new Date(row.created_at).getTime();
-        if (!isNaN(ms)) {
-          this.createTime = ms;
-          (global.vtCreated = global.vtCreated || {})[this.id] = ms;
-        }
-      }
     }
     data() { return this.exists ? deser(this._data) : undefined; }
     get(field) {
@@ -134,7 +124,7 @@
       if (error) throw fsError(error);
       return data || null;
     }
-    const { data, error } = await sb().from('docs').select('path,data,version,created_at').eq('path', path).maybeSingle();
+    const { data, error } = await sb().from('docs').select('path,data,version').eq('path', path).maybeSingle();
     if (error) throw fsError(error);
     return data || null;
   }
@@ -163,7 +153,7 @@
   async function runQuery(q) {
     const rows = [];
     for (let from = 0; ; from += PAGE) {
-      let qb = sb().from('docs').select('path,data,version,created_at').eq('col', q._path);
+      let qb = sb().from('docs').select('path,data,version').eq('col', q._path);
       q._filters.forEach(f => { qb = applyFilter(qb, f); });
       q._orders.forEach(o => {
         // Firestore leaves out documents that don't have the orderBy field.
