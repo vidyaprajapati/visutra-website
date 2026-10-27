@@ -56,7 +56,7 @@ function makeClient(getIdentity, stats) {
       range(a, z) { st.range = [a, z]; return b; },
       maybeSingle() { st.single = true; return b; },
       then(res, rej) {
-        const sql = `select path, data, version from ${table}` + (st.where.length ? ' where ' + st.where.join(' and ') : '') +
+        const sql = `select path, data, version, created_at from ${table}` + (st.where.length ? ' where ' + st.where.join(' and ') : '') +
           (st.order.length ? ' order by ' + st.order.join(', ') : '') +
           (st.range ? ` limit ${st.range[1] - st.range[0] + 1} offset ${st.range[0]}` : '');
         if (stats) stats.reads++;
