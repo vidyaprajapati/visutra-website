@@ -44,7 +44,7 @@ test('a later send is merged into the ONE pending order (same day or next day)',
   assert.equal(os.length, 1); assert.equal(os[0].status, 'PENDING');
   const firstNo = os[0].orderNumber;
   // same buyer sends again (next day's labels, plus a second product) while the seller hasn't confirmed
-  await mappings(-4, -2);
+  await mappings(-7, -2);   // 4 more labels on top of the 3 already on order → stock −7 (the 3 are not accepted yet)
   await draft({ p1: 4, p2: 2 }, 'h2', '2026-10-26');
   const pg = await sendDraft();
   os = await orders();
@@ -62,7 +62,7 @@ test('a later send is merged into the ONE pending order (same day or next day)',
 test('seller sees ONE order with its cost (taxable + GST at their prices) and per-item amounts', async () => {
   await world();
   await draft({ p1: 3 }, 'h1', '2026-10-25'); await sendDraft();
-  await mappings(-4, -2); await draft({ p1: 4, p2: 2 }, 'h2', '2026-10-26'); await sendDraft();
+  await mappings(-7, -2); await draft({ p1: 4, p2: 2 }, 'h2', '2026-10-26'); await sendDraft();
   const pg = loadPage('billing/seller/order-receive.html', A, pageOpts); await sleep(1800);
   const rows = [...pg.$('ordersTable').querySelectorAll('tr')];
   assert.equal(rows.length, 1, 'one row');
