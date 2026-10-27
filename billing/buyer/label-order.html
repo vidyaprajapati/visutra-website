@@ -51,6 +51,11 @@
   <div class="card" id="summaryCard" style="display:none">
     <h2>Today's Order Summary</h2>
     <p class="sub">Accumulates across every batch of labels you process today — upload a few now, a few more later, it all adds up into one summary per seller. "Balance to Order" is what's actually sent — your own stock (after today's dispatches are deducted) covers the rest. If stock covers everything, sending just marks the labels processed with no order created. Clears after sending, ready for tomorrow.</p>
+    <div id="orderRuleNote" style="margin:0 0 12px;padding:9px 12px;background:#FFF4DF;border:1px solid #F2D9A6;border-radius:10px;font-size:13px;line-height:1.55">
+      <b>How the order is worked out:</b> every printed label is already taken off <b>Stock Now</b>, so
+      <b>Balance to Order = −Stock Now − already on order</b> (never below 0).
+      Stock 10 + 100 labels → Stock Now −90 → order <b>90</b> · Stock −10 → −110 → order <b>110</b> · Stock 0 → −100 → order <b>100</b>.
+      Once the seller accepts, your stock is back to exactly <b>0</b>.</div>
     <div id="summaryBySeller"></div>
   </div>
 
@@ -183,7 +188,7 @@ async function processFiles(){
    queue if it isn't mapped yet). */
 async function processHits(hits, fileCount){
   unmappedFound = {};
-  let mergedCount = 0, skippedCount = 0, selfCount = 0;
+  let mergedCount = 0, skippedCount = 0, selfCount = 0, repairedCount = 0;
   for(const hit of hits){
     if(await isAlreadyProcessed(hit.pageHash)){ skippedCount++; continue; } // already part of a SENT order
     const mapping = findMapping(hit.marketplace, hit.sku);
@@ -197,13 +202,17 @@ async function processHits(hits, fileCount){
         selfCount++;
         continue;
       }
+      // STOCK FIRST, then the draft — and BOTH are safe to repeat (each label is deducted once ever,
+      // and added to the draft once). The order is worked out from Stock Now, so a label must never
+      // be in the draft without its stock having come off. (Before: the draft was written first; if the
+      // page closed or failed part-way through a big upload, the label sat in the draft with its stock
+      // never deducted, and re-uploading skipped it as "already in the draft" — so the order came out
+      // too small. Now re-uploading the same file repairs it.)
+      const r = await deductStockForLabel(mapping, hit);   // 'deducted' the first time only
       const wasNew = await mergeItemIntoDraft(mapping, hit);
-      if(wasNew){
-        mergedCount++;
-        await deductStockForLabel(mapping, hit); // dispatching this unit — comes straight off your own stock, zero-inventory target
-      } else {
-        skippedCount++; // already sitting in today's unsent draft
-      }
+      if(wasNew) mergedCount++;
+      else if(r === 'deducted') repairedCount++;           // was already in the draft, but its stock had not come off
+      else skippedCount++;                                 // already counted, nothing to do
     } else {
       const key = `${hit.marketplace}_${hit.sku}`;
       if(!unmappedFound[key]) unmappedFound[key] = { marketplace: hit.marketplace, sku: hit.sku, qty: 0 };
@@ -213,6 +222,7 @@ async function processHits(hits, fileCount){
   }
 
   const msg = `Found ${hits.length} item(s)` + (fileCount ? ` across ${fileCount} file(s)` : '') + `. ${mergedCount} added to today's summary.` +
+    (repairedCount ? ` ${repairedCount} were already in the summary but their stock had not been deducted — fixed now.` : '') +
     (selfCount ? ` ${selfCount} matched your own products — no order needed for those; use the Label Cropper to print them.` : '') +
     (skippedCount ? ` ${skippedCount} already counted (sent earlier, or already in today's summary).` : '');
   showMsg('uploadMsg', msg, true);
@@ -273,6 +283,7 @@ async function deductStockForLabel(mapping, hit){
   // uses, so a label handled on both pages is only deducted once.
   const r = await VLS.buyerProductOnce(currentUser.uid, { ...hit, key: hit.key || hit.pageHash }, mapping, 'upload-labels');
   if(r === 'deducted') mapping.stock = (mapping.stock || 0) - hit.qty; // mapping is the object in mappingsCache — mutate in place
+  return r;
 }
 
 // A demand entry may predate this feature (drafts saved before mappingId
@@ -289,13 +300,61 @@ function resolveMappingForItem(sellerId, productIdKey, item){
 // as it can first, and only the shortfall — stock gone negative — is worth
 // asking the seller for. Positive/zero stock after dispatching means
 // nothing to order for this product right now.
-function balanceToOrder(mapping){
+/* HOW THE ORDER IS WORKED OUT (Stock Now already has every printed label taken off it):
+       Balance to Order = −(Stock Now) − (already on order), never below 0.
+     stock  10, 100 labels → Stock Now  −90 → order  90
+     stock −10, 100 labels → Stock Now −110 → order 110
+     stock   0, 100 labels → Stock Now −100 → order 100
+     stock 150, 100 labels → Stock Now   50 → nothing to order (covered by stock)
+   When the seller accepts, the ordered quantity is added back, so the stock is exactly 0 again.
+
+   The shortfall, MINUS what you have already ordered and the seller has not accepted yet.
+   Stock only goes back up when the seller accepts, so while an order is waiting the stock
+   figure still shows its whole shortfall — ordering "−stock" again would order the same units
+   twice, the seller would accept both, stock would end up too high, and the next order would
+   come out far too small. (inflightQty() reads the buyer's PENDING orders to that seller.) */
+function balanceToOrder(mapping, sellerId){
   if(!mapping) return null; // unresolvable — caller falls back to full demand
-  return Math.max(0, -(mapping.stock || 0));
+  return Math.max(0, -(mapping.stock || 0) - inflightQty(sellerId || mapping.sellerId, mapping.productId));
+}
+let inflightBySeller = {};   // sellerId -> { sellerProductId -> units on order, not accepted yet }
+function inflightQty(sellerId, productId){ return ((inflightBySeller[sellerId] || {})[productId]) || 0; }
+async function loadInflight(){
+  const by = await vtPendingOrdersBySeller(currentUser.uid), map = {};
+  Object.keys(by).forEach(sid => {
+    map[sid] = {};
+    by[sid].forEach(o => (o.items || []).forEach(i => { map[sid][i.productId] = (map[sid][i.productId] || 0) + (Number(i.qty) || 0); }));
+    pendingOrderBySeller[sid] = by[sid][0] || null;
+  });
+  Object.keys(pendingOrderBySeller).forEach(sid => { if(!by[sid]) pendingOrderBySeller[sid] = null; });
+  inflightBySeller = map;
+}
+/* Stock figure looks wrong (e.g. an earlier double-order pushed it too high)? Correct it here.
+   Same logged "manual-adjust" as the Buyer Stock page. */
+async function fixStock(mappingId){
+  const m = mappingsCache.find(x => x.id === mappingId); if(!m) return;
+  const typed = window.prompt(`Correct stock for "${m.productName}".\nStock now shows ${m.stock || 0}. Enter the right figure:`, String(m.stock || 0));
+  if(typed === null) return;
+  const v = parseFloat(typed);
+  if(!isFinite(v)){ showMsg('uploadMsg', 'That is not a number.', false); return; }
+  const ref = db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(mappingId);
+  await db.runTransaction(async tx => {
+    const cur = (await tx.get(ref)).data() || {}, delta = v - (cur.stock || 0);
+    if(!delta) return;
+    tx.update(ref, { stock: v, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    tx.set(db.collection('users').doc(currentUser.uid).collection('buyerStockMovements').doc(), {
+      type: 'manual-adjust', mappingId, productName: m.productName, qty: delta,
+      date: new Date().toISOString().slice(0, 10), note: 'Corrected on Label-Based Auto Order',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  });
+  await loadDrafts();
+  showMsg('uploadMsg', `Stock for ${m.productName} set to ${v}.`, true);
 }
 
 async function loadDrafts(){
   todayKey = localDayKey();
+  try { await loadMappings(); await loadInflight(); } catch (e) { console.error('refreshing stock / orders on the way', e); }
   try { await consolidateDrafts(currentUser.uid); } catch (e) { console.error('merging pending label orders', e); }
   const snap = await db.collection('users').doc(currentUser.uid).collection('labelOrderDrafts').get();
   draftsCache = {};
@@ -401,28 +460,30 @@ function renderSummary(){
       ...p, mapping: resolveMappingForItem(sid, productIdKey, p)
     }));
     const prices = sellerPricesLocal[sid] || {};
-    const costItems = products.map(p => ({ productId: p.mapping ? p.mapping.productId : null, qty: (balanceToOrder(p.mapping) ?? p.qty) })).filter(i => i.qty > 0);
+    const costItems = products.map(p => ({ productId: p.mapping ? p.mapping.productId : null, qty: (balanceToOrder(p.mapping, sid) ?? p.qty) })).filter(i => i.qty > 0);
     const orderCost = vtOrderCost(costItems.map(i => ({ ...i, productId: i.productId })), prices);
     const pend = pendingOrderBySeller[sid];
     const rows = products.map(p => {
-      const bal = balanceToOrder(p.mapping);
+      const bal = balanceToOrder(p.mapping, sid);
       const stockNow = p.mapping ? (p.mapping.stock || 0) : null;
+      const onOrder = p.mapping ? inflightQty(sid, p.mapping.productId) : 0;
       const q = bal === null ? p.qty : bal, pr = p.mapping ? prices[p.mapping.productId] : null;
       const lineCost = pr ? vtMoney(q * pr.price * (1 + (pr.gstRate || 0) / 100)) : '—';
       return `<tr><td>${esc(p.productName)}</td><td>${esc(p.sellerSku||'—')}</td>
       <td>${p.breakdown.amazon ? 'Amazon: '+p.breakdown.amazon+'<br>' : ''}${p.breakdown.meesho ? 'Meesho: '+p.breakdown.meesho+'<br>' : ''}${p.breakdown.flipkart ? 'Flipkart: '+p.breakdown.flipkart : ''}</td>
       <td>${p.qty}</td>
-      <td>${stockNow===null ? '—' : stockNow}</td>
-      <td><b>${q}</b>${bal===0 ? ' <span class="badge">Covered by stock</span>' : ''}</td>
+      <td>${stockNow===null ? '—' : stockNow}${p.mapping ? ` <a href="#" title="Stock figure wrong? Correct it" onclick="fixStock('${p.mapping.id}');return false" style="text-decoration:none">✎</a>` : ''}</td>
+      <td title="Ordered earlier and not accepted by the seller yet — counted, so it is not ordered twice">${onOrder || '—'}</td>
+      <td><b>${q}</b>${bal===0 ? ` <span class="badge">${onOrder && -(stockNow || 0) > 0 ? 'Covered by stock + on order' : 'Covered by stock'}</span>` : ''}</td>
       <td style="white-space:nowrap">${q > 0 ? lineCost : '—'}</td></tr>`;
     }).join('');
-    const anyToOrder = products.some(p => (balanceToOrder(p.mapping) ?? p.qty) > 0);
+    const anyToOrder = products.some(p => (balanceToOrder(p.mapping, sid) ?? p.qty) > 0);
     return `<div style="margin-bottom:22px;padding:${old ? '12px 14px' : '0 0 18px'};border-bottom:1px solid var(--line);${old ? 'background:#FFF7ED;border:1.5px solid #F2B266;border-radius:12px' : ''}">
       <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">${esc(g.sellerName)} <span style="font-weight:400;font-size:13px;color:var(--muted)">· all pending labels · printed ${esc(dayRange(g))}${nDays > 1 ? ' (' + nDays + ' days)' : ''}</span>
         ${old ? '<span class="badge warn">📅 not sent yet — from an earlier day</span>' : ''}</h3>
-      <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Labels printed</th><th>Stock Now</th><th>Balance to Order</th><th>Cost (incl. GST)</th></tr></thead>
+      <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Labels printed</th><th>Stock Now</th><th>On order</th><th>Balance to Order</th><th>Cost (incl. GST)</th></tr></thead>
       <tbody>${rows}</tbody></table>
-      <div style="margin-top:8px;font-size:14px">🧾 <b>Order cost: ${anyToOrder0(products) ? vtMoney(orderCost.total) : '₹0.00'}</b>
+      <div style="margin-top:8px;font-size:14px">🧾 <b>Order cost: ${anyToOrder0(products, sid) ? vtMoney(orderCost.total) : '₹0.00'}</b>
         <span style="color:var(--muted);font-size:12px">${vtMoney(orderCost.taxable)} + ${vtMoney(orderCost.gst)} GST at ${esc(g.sellerName)}'s current prices${orderCost.unpriced ? ' · ' + orderCost.unpriced + ' item(s) priced on acceptance' : ''}</span></div>
       ${pend ? `<div style="margin-top:6px;font-size:12.5px;color:#7A4A00;background:#FFF4DF;border:1px solid #F2D9A6;border-radius:8px;padding:6px 10px">📦 You already have a pending order <b>${esc(pend.orderNumber)}</b> with ${esc(g.sellerName)} that they haven't accepted yet — this will be <b>added into it</b>, so they handle everything as one order.</div>` : ''}
       <button class="btn primary" style="margin-top:10px" onclick="placeAutoOrder('${did}')">${anyToOrder ? `Send Order to ${esc(g.sellerName)}` : 'Mark Labels Processed (no order needed)'}</button>
@@ -432,7 +493,7 @@ function renderSummary(){
   }).join('') || '<p class="sub">No fully-mapped items to order yet.</p>';
   ensureSummaryExtras(draftIds.map(d => draftsCache[d].sellerId));
 }
-function anyToOrder0(products){ return products.some(p => (balanceToOrder(p.mapping) ?? p.qty) > 0); }
+function anyToOrder0(products, sid){ return products.some(p => (balanceToOrder(p.mapping, sid) ?? p.qty) > 0); }
 
 async function placeAutoOrder(draftId){
   const g = draftsCache[draftId];
@@ -444,6 +505,9 @@ async function placeAutoOrder(draftId){
   }
   showMsg(msgId, 'Checking stock…', true);
   try{
+    // Work from the LATEST stock and the LATEST orders waiting for the seller — not what this
+    // page loaded earlier (another tab / the Label Cropper / the seller may have changed them).
+    await loadMappings(); await loadInflight();
     // Re-resolve against the freshest stock we have (updated in place by
     // every deductStockForLabel() call this session) right before building
     // the order — a zero-inventory order is only as good as the balance
@@ -453,7 +517,7 @@ async function placeAutoOrder(draftId){
     const items = [];
     for(const [productId, p] of Object.entries(g.itemsByProduct)){
       const mapping = resolveMappingForItem(sellerId, productId, p);
-      const bal = balanceToOrder(mapping);
+      const bal = balanceToOrder(mapping, sellerId);
       const qty = bal === null ? p.qty : bal; // unresolvable mapping (shouldn't normally happen) — fall back to full demand rather than silently order nothing
       if(qty <= 0) continue;
       items.push({ productId, productName: p.productName, sellerSku: p.sellerSku, qty, marketplaceBreakdown: { ...p.breakdown } });
