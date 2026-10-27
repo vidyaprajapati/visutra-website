@@ -200,7 +200,26 @@ function renderBuyerSidebar(activeView, basePath) {
   // acceptance — Dashboard, Stock, wherever — not just My Orders.
   if (typeof auth !== 'undefined' && auth && auth.currentUser) {
     runBuyerStockSweepOnce(auth.currentUser.uid);
+    vtAutoCombineOrdersOnce(auth.currentUser.uid, base);
   }
+}
+
+/* ONE pending order per seller, without anyone having to remember: whenever a buyer page opens, any
+   extra still-pending orders to the same seller are folded into the oldest one (so the seller makes ONE
+   invoice for them). Runs once per page load; harmless when there is nothing to combine. */
+let _vtCombineRan = false;
+function vtAutoCombineOrdersOnce(uid, base) {
+  if (_vtCombineRan) return;
+  _vtCombineRan = true;
+  const run = function () {
+    if (typeof vtMergeExistingPendingOrders !== 'function') return;
+    vtMergeExistingPendingOrders(uid).catch(function (e) { console.warn('Combining pending orders failed:', e); });
+  };
+  if (typeof vtMergeExistingPendingOrders === 'function') { run(); return; }
+  const sc = document.createElement('script');
+  sc.src = (base || '') + 'assets/order-merge.js';
+  sc.onload = run;
+  document.head.appendChild(sc);
 }
 
 /* ---------------- Site-wide buyer stock sweep ----------------
