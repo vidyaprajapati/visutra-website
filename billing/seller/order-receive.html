@@ -31,6 +31,7 @@
     <div class="field" style="max-width:240px"><label>Filter</label><select id="fStatus" onchange="renderOrders()">
       <option value="PENDING">Pending</option><option value="ACCEPTED">Accepted</option><option value="REJECTED">Rejected</option><option value="MERGED">Merged into another order</option><option value="">All</option>
     </select></div>
+    <div id="dupNotice"></div>
     <table><thead><tr><th>Order #</th><th>Buyer</th><th>Date</th><th>Items</th><th title="Taxable value + GST at your CURRENT Product Master prices (the invoice total once accepted)">Order value</th><th>Status</th><th></th></tr></thead>
     <tbody id="ordersTable"></tbody></table>
     <p class="msg" id="pageMsg"></p>
@@ -110,6 +111,7 @@ async function loadOrders(){
 function renderOrders(){
   const filter = document.getElementById('fStatus').value;
   const rows = filter ? ordersCache.filter(o => o.status === filter) : ordersCache.filter(o => o.status !== 'MERGED');
+  renderDupNotice();
   document.getElementById('ordersTable').innerHTML = rows.map(o => {
     let itemsSummary = (o.items||[]).map(i => {
       const bd = i.marketplaceBreakdown;
@@ -175,6 +177,17 @@ function renderOrders(){
   }).join('') || '<tr><td colspan="7" style="color:var(--muted)">No orders here.</td></tr>';
   rows.filter(o => o.status === 'PENDING').forEach(o => onOrderItemTick(o.id));
 }
+// One pending order per buyer is the rule (later sends are merged into it, and the buyer's own pages combine older
+// duplicates automatically). If a buyer still has several pending orders here, say so — accepting them now gives one
+// invoice EACH; waiting for the buyer's next visit gives one invoice in total.
+function renderDupNotice(){
+  const by = {};
+  ordersCache.filter(o => o.status === 'PENDING' && (o.orderType === 'LABEL_AUTO' || o.orderType === 'PRODUCT_SELECT')).forEach(o => { (by[o.buyerUid] = by[o.buyerUid] || []).push(o); });
+  const dup = Object.values(by).filter(l => l.length > 1);
+  document.getElementById('dupNotice').innerHTML = dup.length ? `<div style="margin:0 0 12px;padding:9px 12px;background:#FFF4DF;border:1px solid #F2D9A6;border-radius:10px;font-size:13px">
+    📦 ${dup.map(l => `<b>${esc(l[0].buyerBusiness?.businessName || l[0].buyerEmail)}</b> has ${l.length} pending orders`).join(' · ')}.
+    They are combined into ONE order (and so one invoice) automatically the next time the buyer opens VISUTRA. Accepting them now would create a separate invoice for each.</div>` : '';
+}
 // Order value: the invoice total once accepted; otherwise taxable + GST at YOUR current Product Master prices.
 function sellerOrderCost(o){
   if(o.status === 'ACCEPTED' && o.invoiceSummary){
@@ -222,6 +235,10 @@ async function acceptOrder(orderId){
     return;
   }
 
+  // What this page showed when you clicked Accept. If the buyer adds more items to this pending order
+  // in the meantime (later sends are merged into it), refuse — never invoice quantities you did not see.
+  const itemsSig = its => JSON.stringify((its || []).map(i => [i.productId, Number(i.qty) || 0]));
+  const seenOrder = ordersCache.find(o => o.id === orderId), seenSig = seenOrder ? itemsSig(seenOrder.items) : null;
   const orderRef = db.collection('marketplaceOrders').doc(orderId);
   const invoiceRef = db.collection('users').doc(currentUser.uid).collection('invoices').doc();
   const publicInvoiceRef = db.collection('public_invoices').doc(invoiceRef.id);
@@ -239,6 +256,10 @@ async function acceptOrder(orderId){
       const order = orderSnap.data();
       if(order.sellerUid !== currentUser.uid) throw new Error('This order is not addressed to you.');
       if(order.status !== 'PENDING') throw new Error(`This order is already ${(order.status||'').toLowerCase()} — refresh the page.`);
+      if(seenSig !== null && itemsSig(order.items) !== seenSig){
+        const stale = new Error('The buyer just added more items to this order, so nothing was accepted. The list has been refreshed — check the new quantities and press Accept again (one order, one invoice).');
+        stale.staleOrder = true; throw stale;
+      }
 
       // Read every product FRESH inside the transaction. Price, GST rate,
       // HSN, and stock all come from here — never from anything the buyer's
@@ -385,6 +406,7 @@ async function acceptOrder(orderId){
     loadOrders();
   }catch(err){
     showMsg('pageMsg', err.message, false);
+    if(err.staleOrder){ loadOrders(); return; }
     // This specific failure can never resolve itself by retrying Accept —
     // the product genuinely isn't in your catalog anymore (deleted, most
     // likely), so the buyer's SKU mapping or Label Cropper mapping is
