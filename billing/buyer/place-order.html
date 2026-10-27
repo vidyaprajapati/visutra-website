@@ -48,10 +48,8 @@
 
   <div class="card" id="cartCard" style="display:none">
     <h2>Order Summary</h2>
-    <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Qty</th><th>Cost (incl. GST)</th><th></th></tr></thead>
+    <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Qty</th><th></th></tr></thead>
     <tbody id="cartTable"></tbody></table>
-    <div id="cartTotal" style="margin-top:8px;font-size:14px"></div>
-    <div id="cartPendingNote" style="margin-top:6px"></div>
     <div class="field" style="margin-top:14px;max-width:400px"><label>Note (optional)</label><input id="oNote" placeholder="e.g. Need this by Friday"></div>
     <button class="btn primary" style="margin-top:10px" onclick="placeOrder()">Place Order to Seller</button>
     <p class="msg" id="orderMsg"></p>
@@ -64,7 +62,6 @@
 <script src="../assets/vt-firebase-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
 <script src="../assets/user-menu.js"></script>
-<script src="../assets/order-merge.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <script>
 let currentUser = null;
@@ -155,27 +152,9 @@ function renderCart(){
   document.getElementById('cartTable').innerHTML = ids.map(id => {
     const p = catalogCache.find(x => x.id === id);
     if(!p) return '';
-    const line = cart[id] * p.price * (1 + (p.gstRate||0)/100);
-    return `<tr><td>${esc(p.name)}</td><td>${esc(p.sku||'—')}</td><td>${cart[id]}</td><td style="white-space:nowrap">₹${fmtMoney(line)}</td>
+    return `<tr><td>${esc(p.name)}</td><td>${esc(p.sku||'—')}</td><td>${cart[id]}</td>
       <td><button class="btn small danger" onclick="removeFromCart('${id}')">✕</button></td></tr>`;
   }).join('');
-  // order cost at the seller's current prices (taxable + GST)
-  const prices = {}; catalogCache.forEach(p => { prices[p.id] = { price: p.price, gstRate: p.gstRate }; });
-  const c = vtOrderCost(ids.map(id => ({ productId: id, qty: cart[id] })), prices);
-  document.getElementById('cartTotal').innerHTML = ids.length
-    ? `🧾 <b>Order cost: ${vtMoney(c.total)}</b> <span style="color:var(--muted);font-size:12px">${vtMoney(c.taxable)} + ${vtMoney(c.gst)} GST at the seller's current prices</span>` : '';
-  showPendingNote();
-}
-// an order this buyer already has pending with the same seller (the new one is added into it)
-let _pendingNoteFor = '';
-async function showPendingNote(){
-  const sellerUid = document.getElementById('oSeller').value, el = document.getElementById('cartPendingNote');
-  if(!el) return;
-  if(!sellerUid || !Object.keys(cart).length){ el.innerHTML = ''; return; }
-  try{
-    const pend = ((await vtPendingOrdersBySeller(currentUser.uid))[sellerUid] || [])[0];
-    el.innerHTML = pend ? `<div style="font-size:12.5px;color:#7A4A00;background:#FFF4DF;border:1px solid #F2D9A6;border-radius:8px;padding:6px 10px">📦 You already have a pending order <b>${esc(pend.orderNumber)}</b> with this seller that they haven't accepted yet — this will be <b>added into it</b>, so they handle everything as one order.</div>` : '';
-  }catch(e){ el.innerHTML = ''; }
 }
 
 async function placeOrder(){
@@ -199,7 +178,7 @@ async function placeOrder(){
     });
     const orderRef = db.collection('marketplaceOrders').doc();
     const orderNumber = `VIS-ORD-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${orderRef.id.slice(-6).toUpperCase()}`;
-    const placed = await vtPlaceOrMergeOrder(currentUser.uid, orderRef, {
+    await orderRef.set({
       orderNumber,
       orderType: 'PRODUCT_SELECT',
       buyerUid: currentUser.uid,
@@ -216,22 +195,20 @@ async function placeOrder(){
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    const merged = placed.merged, finalNumber = placed.orderNumber, allItems = placed.items;
-    showMsg('orderMsg', merged ? `Added to your pending order ${finalNumber} with ${seller.sellerName}. Notifying seller…` : `Order ${finalNumber} sent to ${seller.sellerName}. Notifying seller…`, true);
+    showMsg('orderMsg', `Order ${orderNumber} sent to ${seller.sellerName}. Notifying seller…`, true);
     const emailResult = await sendOrderNotification(
       seller.sellerEmail, seller.sellerName,
-      merged ? `Order Updated – more items added – VISUTRA – Order #${finalNumber}` : `New Order Received – VISUTRA – Order #${finalNumber}`,
-      merged ? `${buyerData.businessName || currentUser.email} added more items to their pending order — it is still ONE order for you to accept.`
-             : `You've received a new order from ${buyerData.businessName || currentUser.email}.`,
-      allItems.map(i => `${i.productName} × ${i.qty}`).join(', '),
-      `${window.location.origin}/billing/seller/order-receive.html?id=${placed.orderId}`
+      `New Order Received – VISUTRA – Order #${orderNumber}`,
+      `You've received a new order from ${buyerData.businessName || currentUser.email}.`,
+      items.map(i => `${i.productName} × ${i.qty}`).join(', '),
+      `${window.location.origin}/billing/seller/order-receive.html?id=${orderRef.id}`
     );
     if(emailResult.sent){
-      showMsg('orderMsg', merged ? `Added to pending order ${finalNumber} and ${seller.sellerName} has been emailed. Track it from My Orders.` : `Order ${finalNumber} sent to ${seller.sellerName} and they've been emailed. Track it from My Orders.`, true);
+      showMsg('orderMsg', `Order ${orderNumber} sent to ${seller.sellerName} and they've been emailed. Track it from My Orders.`, true);
     } else if(emailResult.reason === 'not_configured'){
-      showMsg('orderMsg', `Order ${finalNumber} placed — but the seller wasn't emailed (order email isn't set up on this site yet). They'll still see it in their Order Receive portal. Track your order from My Orders.`, true);
+      showMsg('orderMsg', `Order ${orderNumber} placed — but the seller wasn't emailed (order email isn't set up on this site yet). They'll still see it in their Order Receive portal. Track your order from My Orders.`, true);
     } else {
-      showMsg('orderMsg', `Order ${finalNumber} placed — but notifying the seller by email failed (${emailResult.error || emailResult.reason}). They'll still see it in their Order Receive portal.`, true);
+      showMsg('orderMsg', `Order ${orderNumber} placed — but notifying the seller by email failed (${emailResult.error || emailResult.reason}). They'll still see it in their Order Receive portal.`, true);
     }
     cart = {};
     renderCart();
