@@ -30,6 +30,10 @@ const DB = process.env.PGDATABASE_TEST || 'visutra_test';
   await c.query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'schema.sql'), 'utf8'));
   // running it twice must be safe (the setup guide says so)
   await c.query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'schema.sql'), 'utf8'));
+  // Supplier access (separate file, run after schema.sql) — also safe to run twice
+  const supplierSql = fs.readFileSync(path.join(__dirname, '..', 'supabase', 'supplier-access.sql'), 'utf8');
+  await c.query(supplierSql);
+  await c.query(supplierSql);
   await c.end();
-  console.log(`Test database "${DB}" ready (schema.sql loaded twice without errors).`);
+  console.log(`Test database "${DB}" ready (schema.sql + supplier-access.sql loaded twice without errors).`);
 })().catch(e => { console.error('setup-db failed:', e.message); process.exit(1); });
