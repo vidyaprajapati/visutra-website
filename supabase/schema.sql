@@ -76,14 +76,33 @@ begin
   return true;
 end $$;
 
--- a new account (Supabase Auth) → a PENDING approval row, with the sign-up details
+-- a new account (Supabase Auth) → an approval row with the sign-up details.
+-- PENDING for everyone, EXCEPT an email a seller listed on a supplier card (see
+-- supplier-access.sql): that supplier account is approved at once.
+-- (This block is kept identical in supplier-access.sql — a test checks they match.)
+-- Is this email on a supplier card of ANY seller?  (internal helper only)
+create or replace function public.vt_is_supplier_email(p_email text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce(btrim(p_email), '') <> '' and exists (
+    select 1 from public.docs
+    where col ~ '^users/[^/]+/suppliers$'
+      and lower(btrim(coalesce(data->>'email', ''))) = lower(btrim(p_email))
+  )
+$$;
+revoke execute on function public.vt_is_supplier_email(text) from public, anon, authenticated;
+
 create or replace function public.vt_new_signup() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare m jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); s jsonb;
+declare m jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); s jsonb; auto boolean;
 begin
   s := coalesce(m->'vt_signup', '{}'::jsonb);
-  insert into public.account_approvals(uid, email, name, business_type, mobile, username)
-  values (new.id, new.email, coalesce(s->>'fullName', m->>'full_name'), s->>'businessType', s->>'mobileNumber', s->>'username')
+  auto := public.vt_is_supplier_email(new.email);
+  insert into public.account_approvals(uid, email, name, business_type, mobile, username, status, decided_at, decided_by)
+  values (new.id, new.email, coalesce(s->>'fullName', m->>'full_name'),
+          coalesce(s->>'businessType', case when auto then 'Supplier' end), s->>'mobileNumber', s->>'username',
+          case when auto then 'APPROVED' else 'PENDING' end,
+          case when auto then now() end,
+          case when auto then 'auto:supplier-invite' end)
   on conflict (uid) do nothing;
   return new;
 end $$;
@@ -266,6 +285,22 @@ begin
             and ch <@ array['status','acceptedAt','respondedAt','rejectionReason'])
         or (o->>'sellerUid' = me and o->>'status' = 'REJECTED' and ch <@ array['stockReversed']
             and n->>'stockReversed' = 'true')
+        -- ONE pending order per buyer+seller: while the seller has not accepted or
+        -- rejected it, the buyer may add more items to it (a later send is merged
+        -- into the same order instead of becoming another one) ...
+        or (o->>'buyerUid' = me and o->>'status' = 'PENDING' and n->>'status' = 'PENDING'
+            and coalesce(o->>'orderType', '') in ('LABEL_AUTO', 'PRODUCT_SELECT')
+            and ch <@ array['items','note','labelsDate','labelsFrom','mergedCount','mergedNumbers','updatedAt'])
+        -- ... and may fold an extra pending order into that one (status MERGED), but only
+        -- into a still-pending order of the same buyer and seller
+        or (o->>'buyerUid' = me and o->>'status' = 'PENDING' and n->>'status' = 'MERGED'
+            and coalesce(o->>'orderType', '') in ('LABEL_AUTO', 'PRODUCT_SELECT')
+            and ch <@ array['status','mergedInto','updatedAt']
+            and exists (select 1 from public.docs d
+                        where d.path = 'marketplaceOrders/' || coalesce(n->>'mergedInto', '-')
+                          and d.path <> new.path
+                          and d.data->>'buyerUid' = me and d.data->>'sellerUid' = o->>'sellerUid'
+                          and d.data->>'status' = 'PENDING'))
       ), false) then raise exception 'VT_DENIED: marketplaceOrders update'; end if;
     else raise exception 'VT_DENIED: marketplaceOrders delete'; end if;
 
