@@ -1405,6 +1405,7 @@ function renderSuppliers(){
     <tr><td>${esc(s.legalName || '—')}</td><td>${esc(s.name)}</td><td>${esc(s.gstin||'—')}</td><td>${esc(s.state||'')}</td><td>${esc(s.phone||'')}</td>
     <td class="row-actions">
       <button class="btn small" onclick="openSupplierLedger('${s.id}')">Ledger</button>
+      ${s.email ? `<button class="btn small" title="Email ${esc(s.email)} a link to view their own purchases, payments and balance" onclick="inviteSupplierById('${s.id}')">Invite</button>` : ''}
       <button class="btn small" onclick="editSupplier('${s.id}')">Edit</button>
       <button class="btn small danger" onclick="deleteSupplier('${s.id}')">Delete</button>
     </td></tr>`).join('') || '<tr><td colspan="6" style="color:var(--muted)">No suppliers yet.</td></tr>';
@@ -1423,12 +1424,54 @@ async function saveSupplier(){
     phone: document.getElementById('sPhone').value.trim()
   };
   if(!data.name){ showMsg('supplierMsg', 'Supplier name is required.', false); return; }
+  if(data.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)){ showMsg('supplierMsg', 'That email address doesn\'t look right.', false); return; }
   const col = db.collection('users').doc(currentUser.uid).collection('suppliers');
+  const previousEmail = id ? ((suppliersCache.find(x => x.id === id) || {}).email || '') : '';
   if(id){ await col.doc(id).set(data, { merge: true }); } else { await col.add(data); }
   ['sLegalName','sName','sGstin','sAddress','sEmail','sPhone','sEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('sState').value = '';
   showMsg('supplierMsg', 'Saved.', true);
   loadSuppliers();
+  // New supplier with an email, or the email was changed → email them their dashboard link.
+  if(data.email && data.email.toLowerCase() !== previousEmail.trim().toLowerCase()){
+    const sent = await inviteSupplier(data.email, data.name);
+    showMsg('supplierMsg', sent.ok ? `Saved. Login link emailed to ${data.email} — they can view their purchases, payments and balance.`
+                                   : `Saved. But the invite email could not be sent (${sent.error}). Use the Invite button to try again.`, sent.ok);
+  }
+}
+
+/* ---- Supplier access: the supplier gets an email with a link to THEIR OWN dashboard ----
+   (billing/supplier/dashboard.html). They sign in with a one-time link sent to the
+   email on this supplier card — no password and no VISUTRA approval step. They see
+   only the purchases, payments and balance recorded against that email. */
+async function inviteSupplier(email, supplierName){
+  try{
+    // lets an already-registered-but-pending account in right away (database checks the email is on YOUR supplier list)
+    const { error } = await firebase.supabase().rpc('vt_supplier_invite', { p_email: email });
+    if(error && !/does not exist|could not find|schema cache/i.test(error.message || '')) throw new Error(error.message);
+    if(typeof emailjs === 'undefined' || !EMAILJS_ORDER_TEMPLATE_ID) throw new Error('email service not loaded');
+    emailjs.init(EMAILJS_PUBLIC_KEY);
+    const me = (businessData && businessData.businessName) || (currentUser && currentUser.email) || 'Your buyer';
+    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_ORDER_TEMPLATE_ID, {
+      to_email: email, to_name: supplierName || 'Supplier',
+      email_subject: `${me} has given you access to your VISUTRA supplier account`,
+      headline: `${me} added you as a supplier on VISUTRA`,
+      detail_line: 'See your purchases, payments and balance with ' + me + ' any time, and use VISUTRA\'s free tools. No password needed — click the button, enter this email address and we send you a one-time login link.',
+      view_link: `${window.location.origin}/billing/supplier/login.html?email=${encodeURIComponent(email)}`
+    });
+    return { ok: true };
+  }catch(err){
+    console.error('Supplier invite failed:', err);
+    return { ok: false, error: (err && (err.text || err.message)) || 'unknown error' };
+  }
+}
+async function inviteSupplierById(id){
+  const s = suppliersCache.find(x => x.id === id);
+  if(!s || !s.email){ showMsg('supplierMsg', 'Add an email address to this supplier first.', false); return; }
+  if(!confirm(`Email ${s.email} a link to view their own purchases, payments and balance?`)) return;
+  showMsg('supplierMsg', 'Sending…', true);
+  const sent = await inviteSupplier(s.email, s.name);
+  showMsg('supplierMsg', sent.ok ? `Login link emailed to ${s.email}.` : `Could not send the email (${sent.error}).`, sent.ok);
 }
 function editSupplier(id){
   const s = suppliersCache.find(x => x.id === id);
