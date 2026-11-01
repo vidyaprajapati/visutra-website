@@ -147,3 +147,71 @@ test('schema.sql and supplier-access.sql carry the SAME signup rule (re-running 
   ];
   assert.deepEqual(grab(rd('schema.sql')), grab(rd('supplier-access.sql')));
 });
+
+
+// ---- password sign-in: the emailed link is only needed once ----
+const stubAuth = (calls, extra) => w => {
+  const orig = w.supabase.createClient;
+  w.supabase.createClient = (...a) => { const c = orig(...a); Object.assign(c.auth, extra(calls)); return c; };
+};
+
+test('supplier login: email + password signs in directly (no email), the link stays as the first-time / forgot option', async () => {
+  const calls = [];
+  const pg = loadPage('billing/supplier/login.html', null, { before: stubAuth(calls, calls => ({
+    signInWithPassword: async x => { calls.push(['pw', x]); return { data: { user: { id: RAJ.uid, email: x.email } }, error: null }; },
+    signInWithOtp: async x => { calls.push(['otp', x]); return { error: null }; } })) });
+  await sleep(500);
+  pg.$('email').value = 'raj@fabrics.com'; pg.$('password').value = 'MyPass1234';
+  await pg.w.signInPassword(); await sleep(300);
+  assert.deepEqual(calls.map(c => c[0]), ['pw'], 'password sign-in only — no email was requested');
+  assert.equal(JSON.stringify(calls[0][1]), JSON.stringify({ email: 'raj@fabrics.com', password: 'MyPass1234' }));
+  assert.match(pg.$('formCard').textContent, /First time, or forgot your password\?/);
+  assert.ok(pg.$('sendBtn'), 'email-link button still there');
+});
+
+test('supplier login: a wrong password / no password yet explains the one-time link instead of a dead end', async () => {
+  const pg = loadPage('billing/supplier/login.html', null, { before: stubAuth([], () => ({
+    signInWithPassword: async () => ({ data: null, error: { message: 'Invalid login credentials', status: 400 } }) })) });
+  await sleep(500);
+  pg.$('email').value = 'raj@fabrics.com'; pg.$('password').value = 'nope';
+  await pg.w.signInPassword(); await sleep(300);
+  assert.match(pg.$('msg').textContent, /Wrong email or password.*Email me a login link.*only need it once/);
+  assert.equal(pg.$('signBtn').disabled, false, 'can try again');
+  pg.$('password').value = ''; await pg.w.signInPassword();
+  assert.match(pg.$('msg').textContent, /Enter your password/);
+});
+
+test('dashboard asks for a password ONCE after the first emailed-link sign-in, saves it, and never asks again', async () => {
+  await world();
+  await seed('users/' + A.uid + '/suppliers/supplier0009', { name: 'Raj Fabrics', email: 'raj@fabrics.com' });
+  const RAJ2 = { uid: '11111111-0000-0000-0000-000000000001', email: 'raj@fabrics.com' };
+  const meta = { v: {} }, calls = [];
+  const before = w => { stubAuth(calls, () => ({
+    getUser: async () => ({ data: { user: { id: RAJ2.uid, email: RAJ2.email, user_metadata: meta.v } }, error: null }),
+    updateUser: async x => { calls.push(x); if (x.data) meta.v = { ...meta.v, ...x.data }; return { data: {}, error: null }; } }))(w); };
+  let pg = loadPage('billing/supplier/dashboard.html', RAJ2, { before }); await sleep(2200);
+  assert.ok(!pg.$('pwCard').classList.contains('hidden'), 'offered the first time');
+  pg.$('pw1').value = 'short'; pg.$('pw2').value = 'short'; await pg.w.savePassword();
+  assert.match(pg.$('pwMsg').textContent, /at least 8/);
+  pg.$('pw1').value = 'LongEnough1'; pg.$('pw2').value = 'Different99'; await pg.w.savePassword();
+  assert.match(pg.$('pwMsg').textContent, /do not match/);
+  assert.equal(calls.length, 0, 'nothing sent until it is valid');
+  pg.$('pw1').value = 'LongEnough1'; pg.$('pw2').value = 'LongEnough1'; await pg.w.savePassword(); await sleep(200);
+  assert.equal(JSON.stringify(calls[0]), JSON.stringify({ password: 'LongEnough1', data: { vt_pw_set: true } }));
+  assert.match(pg.$('pwMsg').textContent, /no email needed/);
+  // next visit: not asked again, but the top-bar Password button still opens it for a change
+  pg = loadPage('billing/supplier/dashboard.html', RAJ2, { before }); await sleep(2200);
+  assert.ok(pg.$('pwCard').classList.contains('hidden'), 'not asked again');
+  pg.w.showPwCard(true);
+  assert.equal(pg.$('pwTitle').textContent, 'Change your password');
+});
+
+test('someone who already registered with a password on the normal sign-up page is never nagged to set one', async () => {
+  await world();
+  await seed('users/' + A.uid + '/suppliers/supplier0009', { name: 'Raj Fabrics', email: 'raj@fabrics.com' });
+  const RAJ2 = { uid: '11111111-0000-0000-0000-000000000001', email: 'raj@fabrics.com' };
+  const pg = loadPage('billing/supplier/dashboard.html', RAJ2, { before: w => { stubAuth([], () => ({
+    getUser: async () => ({ data: { user: { id: RAJ2.uid, email: RAJ2.email, user_metadata: { vt_signup: { fullName: 'Raj' } } } }, error: null }) }))(w); } });
+  await sleep(2200);
+  assert.ok(pg.$('pwCard').classList.contains('hidden'));
+});
