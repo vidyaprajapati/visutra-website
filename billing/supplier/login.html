@@ -25,19 +25,24 @@
   <div class="logo-row"><img src="../../assets/logo.png" alt="VISUTRA"><span>Supplier Login</span></div>
 
   <div class="card" id="formCard">
-    <h2>View your account</h2>
-    <p class="sub">See your purchases, payments and balance with your buyer — and use VISUTRA's free tools. No password needed: we email a one-time login link to the email address your buyer registered for you.</p>
+    <h2>Sign in</h2>
+    <p class="sub">See your purchases, payments and balance with your buyer — and use VISUTRA's free tools. Use the email address your buyer registered for you.</p>
     <div class="field"><label for="email">Your email address</label>
-      <input type="email" id="email" autocomplete="email" placeholder="you@yourbusiness.com" onkeydown="if(event.key==='Enter')sendLink()"></div>
-    <button class="btn primary" style="width:100%" id="sendBtn" onclick="sendLink()">Email me a login link</button>
+      <input type="email" id="email" autocomplete="username" placeholder="you@yourbusiness.com" onkeydown="if(event.key==='Enter')document.getElementById('password').focus()"></div>
+    <div class="field"><label for="password">Password</label>
+      <input type="password" id="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')signInPassword()"></div>
+    <button class="btn primary" style="width:100%" id="signBtn" onclick="signInPassword()">Sign in</button>
     <p class="msg" id="msg"></p>
-    <p class="fine">Use the same email address your buyer gave VISUTRA. Only that address can open this account. Not a supplier? <a href="../login.html">Business sign-in</a></p>
+    <hr style="border:0;border-top:1px solid var(--thread);margin:18px 0">
+    <p class="fine" style="margin-top:0"><b>First time, or forgot your password?</b> We email you a one-time login link. After you open it you choose a password, so this is needed <b>only once</b>.</p>
+    <button class="btn" style="width:100%" id="sendBtn" onclick="sendLink()">Email me a login link</button>
+    <p class="fine">Only the email address your buyer registered can open this account. Not a supplier? <a href="../login.html">Business sign-in</a></p>
   </div>
 
   <div class="card hidden" id="sentCard">
     <div class="sent">
       <h2>Check your email</h2>
-      <p class="sub">If <b id="sentTo"></b> is registered as a supplier, a login link is on its way. Open it on this device (or any device) and your dashboard opens automatically. Check spam/junk if you don't see it within a few minutes.</p>
+      <p class="sub">If <b id="sentTo"></b> is registered as a supplier, a login link is on its way. Open it and your dashboard opens — then choose a password so you never need another link. Check spam/junk if you don't see it within a few minutes.</p>
       <button class="btn" id="resendBtn" onclick="sendLink()" disabled>Send again</button>
       <p class="msg" id="msg2"></p>
     </div>
@@ -74,6 +79,21 @@ function startCooldown(){
     if(left <= 0){ clearInterval(cooldownTimer); btn.disabled = false; btn.textContent = 'Send again'; }
     else btn.textContent = 'Send again (' + left + 's)';
   }, 1000);
+}
+
+async function signInPassword(){
+  const email = document.getElementById('email').value.trim(), pw = document.getElementById('password').value;
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ say('Enter your email address.', false); return; }
+  if(!pw){ say('Enter your password — or use "Email me a login link" below if this is your first time.', false); return; }
+  const btn = document.getElementById('signBtn'); btn.disabled = true; say('Signing in…', true);
+  try{
+    await auth.signInWithEmailAndPassword(email, pw);          // the page below then opens the dashboard
+    say('Signed in — opening your dashboard…', true);
+  }catch(err){
+    if(err && err.code === 'auth/invalid-credential') say('Wrong email or password. First time, or no password yet? Use "Email me a login link" below — you only need it once.', false);
+    else say((err && err.message) || 'Could not sign in.', false);
+    btn.disabled = false;
+  }
 }
 
 async function sendLink(){

@@ -41,12 +41,23 @@
   <a class="brand" href="../../index.html"><img src="../../assets/logo.png" alt="VISUTRA"><b>Supplier Dashboard</b></a>
   <div class="topbar-right">
     <span class="user" id="who"></span>
+    <button class="btn small sd-noprint" onclick="showPwCard(true)">Password</button>
     <button class="btn small sd-noprint" onclick="window.print()">Print</button>
     <button class="btn small" onclick="logout()">Sign out</button>
   </div>
 </div>
 
 <div class="sd-wrap">
+  <div class="card sd-noprint hidden" id="pwCard" style="margin-bottom:18px">
+    <h2 id="pwTitle">Choose a password — no more emails</h2>
+    <p class="sub">You came in with an emailed link. Choose a password and from now on just sign in with your email and password. This device also stays signed in until you press Sign out.</p>
+    <div class="field" style="max-width:340px"><label for="pw1">New password (8 or more characters)</label><input type="password" id="pw1" autocomplete="new-password"></div>
+    <div class="field" style="max-width:340px"><label for="pw2">Repeat password</label><input type="password" id="pw2" autocomplete="new-password" onkeydown="if(event.key==='Enter')savePassword()"></div>
+    <button class="btn primary" id="pwSave" onclick="savePassword()">Save password</button>
+    <button class="btn" onclick="showPwCard(false,true)">Not now</button>
+    <p class="msg" id="pwMsg"></p>
+  </div>
+
   <div id="state" class="sd-state">Loading your account…</div>
   <div id="content" class="hidden"></div>
 
@@ -76,6 +87,36 @@ function setState(html){ const s = document.getElementById('state'); s.innerHTML
 
 // Give a first-time supplier a basic profile so the free tools open straight away
 // (the tools check for a completed profile).
+/* ---- password: asked ONCE after the first emailed-link sign-in (and changeable from the top bar) ---- */
+function showPwCard(show, remember){
+  document.getElementById('pwCard').classList.toggle('hidden', !show);
+  if(show){ document.getElementById('pwTitle').textContent = window._pwIsSet ? 'Change your password' : 'Choose a password — no more emails'; document.getElementById('pw1').focus(); }
+  if(!show && remember){ try{ sessionStorage.setItem('vtPwSkip', '1'); }catch(e){} }
+}
+async function maybeOfferPassword(){
+  try{
+    const { data } = await firebase.supabase().auth.getUser();
+    const md = (data && data.user && data.user.user_metadata) || {};
+    window._pwIsSet = !!(md.vt_pw_set || md.vt_signup);          // vt_signup = registered with a password on the normal sign-up page
+    let skipped = false; try{ skipped = sessionStorage.getItem('vtPwSkip') === '1'; }catch(e){}
+    if(!window._pwIsSet && !skipped) showPwCard(true);
+  }catch(e){ console.warn('password prompt skipped:', e); }
+}
+async function savePassword(){
+  const p1 = document.getElementById('pw1').value, p2 = document.getElementById('pw2').value, msg = document.getElementById('pwMsg');
+  const say = (t, ok) => { msg.textContent = t; msg.className = 'msg ' + (ok ? 'ok' : 'error'); };
+  if(p1.length < 8){ say('Use at least 8 characters.', false); return; }
+  if(p1 !== p2){ say('The two passwords do not match.', false); return; }
+  const btn = document.getElementById('pwSave'); btn.disabled = true; say('Saving…', true);
+  const { error } = await firebase.supabase().auth.updateUser({ password: p1, data: { vt_pw_set: true } });
+  btn.disabled = false;
+  if(error){ say(/password should|weak|too short|too common|pwned/i.test(error.message || '') ? error.message : 'Could not save the password: ' + (error.message || 'try again'), false); return; }
+  window._pwIsSet = true;
+  say('Saved. Next time sign in with your email and this password — no email needed.', true);
+  document.getElementById('pw1').value = ''; document.getElementById('pw2').value = '';
+  setTimeout(() => showPwCard(false), 2500);
+}
+
 async function ensureProfile(user, first){
   try{
     const ref = db.collection('users').doc(user.uid);
@@ -161,6 +202,7 @@ async function load(user){
   const blocks = Array.isArray(data) ? data : [];
   document.getElementById('toolsCard').classList.remove('hidden');
   await ensureProfile(user, blocks[0]);
+  maybeOfferPassword();
   if(!blocks.length){
     setState('No buyer has added <b>' + esc(user.email) + '</b> as a supplier yet.<br>If you expect to see records here, ask your buyer to check the email address on your supplier card.');
     return;
