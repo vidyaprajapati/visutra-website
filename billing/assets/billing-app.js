@@ -1456,7 +1456,7 @@ async function inviteSupplier(email, supplierName){
       to_email: email, to_name: supplierName || 'Supplier',
       email_subject: `${me} has given you access to your VISUTRA supplier account`,
       headline: `${me} added you as a supplier on VISUTRA`,
-      detail_line: 'See your purchases, payments and balance with ' + me + ' any time, and use VISUTRA\'s free tools. No password needed — click the button, enter this email address and we send you a one-time login link.',
+      detail_line: 'See your purchases, payments and balance with ' + me + ' any time, and use VISUTRA\'s free tools. First time: click the button and press "Email me a login link" — we send one link to this address, and after opening it you choose a password. From then on you sign in with your email and password, no more emails.',
       view_link: `${window.location.origin}/billing/supplier/login.html?email=${encodeURIComponent(email)}`
     });
     return { ok: true };
