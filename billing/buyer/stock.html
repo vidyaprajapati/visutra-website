@@ -140,16 +140,68 @@
     </div>
   </div>
 
+  <div class="card" id="oldPayCard">
+    <h2>Upload Old Payment Data → Monthly Profit</h2>
+    <p class="sub">For past months: upload your old Meesho / Flipkart <b>payment</b> files (and, if you like, the <b>Orders</b> report — it carries each customer's state for the state-wise graphs). This goes <b>only into Monthly Profit and its graphs</b>: it does <b>not</b> change your stock and is <b>not</b> part of Monthly Inventory Reconciliation. Every order lands in <b>its own month</b>, and an order that was already counted is skipped — so uploading the same file twice is safe.</p>
+    <div class="field"><label>Old payment / orders files (.csv, .xlsx, .xls) — select as many as you like</label><input id="oldFiles" type="file" multiple accept=".csv,.xlsx,.xls"></div>
+    <button class="btn" onclick="parseOldFiles()">Read Files</button>
+    <p class="msg" id="oldMsg"></p>
+
+    <div id="oldMapWrap" class="hidden" style="margin-top:16px">
+      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 1 — Check the columns</h3>
+      <div id="oldMapList"></div>
+      <div class="box" style="margin:12px 0">
+        <div class="grid2">
+          <div class="field"><label>Count each order in the month of its…</label>
+            <select id="oldBasis"><option value="order">Order date (when the customer ordered)</option><option value="pay">Payment date (when the marketplace paid / refunded)</option></select></div>
+          <div class="field"><label>Month for rows that have no date</label><input id="oldFallback" type="month"></div>
+        </div>
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13.5px;cursor:pointer"><input type="checkbox" id="oldRemoveGst" checked style="width:auto;margin-top:3px">
+          <span><b>The marketplace amounts include GST — take it out.</b> GST % when the file has no GST column: <input type="number" id="oldDefaultGst" value="5" min="0" max="40" step="0.5" style="width:70px;display:inline-block;padding:3px 6px"> %</span></label>
+      </div>
+      <button class="btn primary" onclick="prepareOld()">Next: Match Products &amp; Preview</button>
+    </div>
+
+    <div id="oldPreviewWrap" class="hidden" style="margin-top:18px">
+      <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 2 — Product costs</h3>
+      <p class="sub">Profit needs what each product cost you. Matched products use your purchase history; type a cost per unit (ex-GST) where it says so. A match is also remembered as that product's SKU.</p>
+      <table data-excel-name="Old data products"><thead><tr><th>SKU</th><th>Platform</th><th>Sold</th><th>Returned / RTO</th><th>Product</th><th>Cost / unit (ex-GST)</th></tr></thead>
+      <tbody id="oldSkuTable"></tbody></table>
+      <h3 style="font-family:var(--display);font-size:16px;margin:20px 0 6px">Step 3 — Preview by month, then add to Monthly Profit</h3>
+      <div id="oldPreviewBox"></div>
+      <button class="btn primary" id="oldApplyBtn" style="margin-top:12px" onclick="applyOld()">Add to Monthly Profit</button>
+      <span class="sub" style="margin-left:8px">Your stock is not changed.</span>
+    </div>
+  </div>
+
   <div class="card" id="profitCard">
     <h2>Monthly Profit</h2>
-    <p class="sub">Built automatically from your Monthly Inventory Reconciliation uploads: <b>what the marketplaces paid you</b> (their settlement amount, GST taken out) <b>− the cost of the goods you sold</b> (what you paid the seller, ex-GST). A return or RTO lowers the month's profit by its settlement deduction and gives the cost of that item back, because it is on your shelf again. Every order is counted once, however many times you upload the file.</p>
+    <p class="sub">Built from your Monthly Inventory Reconciliation uploads <b>and</b> the old payment data above: <b>what the marketplaces paid you</b> (settlement, GST taken out) <b>− the cost of the goods you sold</b> (what you paid the seller, ex-GST). <b>Return charges</b> = what a returned / RTO order cost you (the revenue lost on it, GST out); they are already inside the profit. Every order is counted once, however many times you upload a file.</p>
     <p class="msg" id="profitMsg"></p>
-    <table data-excel-name="Monthly profit"><thead><tr><th>Month</th><th title="Units in orders counted in that month">Units sold</th><th title="Returned / RTO units counted in that month">Returns / RTO</th><th>Revenue (ex-GST)</th><th>Cost of goods</th><th>Profit</th><th>Margin</th></tr></thead>
+    <table data-excel-name="Monthly profit"><thead><tr><th>Month</th><th title="Units in orders counted in that month">Units sold</th><th title="Returned / RTO units counted in that month">Returns / RTO</th><th title="Money lost on returned / RTO orders (GST out)">Return charges</th><th>Revenue (ex-GST)</th><th>Cost of goods</th><th>Profit</th><th>Margin</th></tr></thead>
     <tbody id="profitMonthsTable"></tbody></table>
     <div id="profitTotals" class="sub" style="margin-top:6px"></div>
+
+    <h3 style="font-family:var(--display);font-size:16px;margin:22px 0 4px">Graphs</h3>
+    <div class="grid2" style="max-width:520px">
+      <div class="field"><label>From month</label><select id="profitFrom" onchange="renderProfitCharts()"></select></div>
+      <div class="field"><label>To month</label><select id="profitTo" onchange="renderProfitCharts()"></select></div>
+    </div>
+    <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Monthly selling</b> <span class="sub">— units sold and units returned / RTO</span><div id="chMonthlySales"></div></div>
+    <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Monthly revenue and profit</b> <span class="sub">— a month in the red shows below the line</span><div id="chMonthlyMoney"></div></div>
+    <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Monthly returns</b> <span class="sub">— units returned / RTO</span><div id="chMonthlyReturns"></div></div>
+    <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Monthly return charges</b> <span class="sub">— money lost on returned orders</span><div id="chMonthlyCharges"></div></div>
+    <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>State-wise selling</b> <span class="sub">— units sold (revenue beside each bar)</span><div id="chStateSales"></div></div>
+    <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>State-wise profit</b><div id="chStateProfit"></div></div>
+    <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>State-wise returns</b> <span class="sub">— units returned / RTO, and the share of that state's orders</span><div id="chStateReturns"></div></div>
+    <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Profit by product</b><div id="chProductProfit"></div></div>
+    <div id="stateHint" class="sub"></div>
+    <table data-excel-name="State-wise sales" style="margin-top:8px"><thead><tr><th>State</th><th>Units sold</th><th>Returns / RTO</th><th title="Returned units as a share of all orders from that state">Return rate</th><th>Return charges</th><th>Revenue (ex-GST)</th><th>Profit</th><th>Margin</th></tr></thead>
+    <tbody id="profitStatesTable"></tbody></table>
+
     <h3 style="font-family:var(--display);font-size:16px;margin:20px 0 6px">Month detail
       <select id="profitMonthSel" onchange="renderProfitDetail()" style="width:auto;margin-left:8px"></select></h3>
-    <table data-excel-name="Profit by product"><thead><tr><th>Product</th><th>Units sold</th><th>Returns / RTO</th><th>Revenue (ex-GST)</th><th>Cost of goods</th><th>Profit</th><th>Margin</th></tr></thead>
+    <table data-excel-name="Profit by product"><thead><tr><th>Product</th><th>Units sold</th><th>Returns / RTO</th><th>Return charges</th><th>Revenue (ex-GST)</th><th>Cost of goods</th><th>Profit</th><th>Margin</th></tr></thead>
     <tbody id="profitProductsTable"></tbody></table>
     <div id="profitPlatforms" class="sub" style="margin-top:6px"></div>
   </div>
@@ -164,6 +216,7 @@
 <script src="../assets/table-sort.js"></script>
 <script src="../assets/label-sku-extract.js"></script>
 <script src="../assets/label-stock-core.js"></script>
+<script src="../assets/profit-tools.js"></script>
 <script src="../assets/stock-charts.js"></script>
 <script>
 let currentUser = null;
@@ -1079,29 +1132,236 @@ function reconProfitLines(){
   return lines;
 }
 let profitMonths = [];
+const monthShort = m => new Date(m + '-01T00:00:00').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
 async function renderMonthlyProfit(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('buyerMonthlyProfit').get();
   profitMonths = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.month).localeCompare(String(a.month)));
   document.getElementById('profitMonthsTable').innerHTML = profitMonths.map(m => `<tr>
-      <td data-sort="${esc(m.month)}-01"><b>${esc(monthLabel(m.month))}</b></td><td>${m.soldUnits}</td><td>${m.returnUnits}</td>
+      <td data-sort="${esc(m.month)}-01"><b>${esc(monthLabel(m.month))}</b></td><td>${m.soldUnits}</td><td>${m.returnUnits}</td><td>${inr(m.returnCharges || 0)}</td>
       <td>${inr(m.revenue)}</td><td>${inr(m.cogs)}</td><td style="${pcol(m.profit)}"><b>${inr(m.profit)}</b></td><td>${m.margin}%</td></tr>`).join('')
-    || '<tr><td colspan="7" style="color:var(--muted)">No profit recorded yet — upload a Meesho / Flipkart report above (with its money column picked) and press Apply.</td></tr>';
-  const tot = profitMonths.reduce((a, m) => ({ revenue: a.revenue + m.revenue, cogs: a.cogs + m.cogs, profit: a.profit + m.profit }), { revenue: 0, cogs: 0, profit: 0 });
+    || '<tr><td colspan="8" style="color:var(--muted)">No profit recorded yet — upload a Meesho / Flipkart report (or your old payment files) above and apply it.</td></tr>';
+  const tot = profitMonths.reduce((a, m) => ({ revenue: a.revenue + m.revenue, cogs: a.cogs + m.cogs, profit: a.profit + m.profit, ch: a.ch + (m.returnCharges || 0) }), { revenue: 0, cogs: 0, profit: 0, ch: 0 });
   document.getElementById('profitTotals').innerHTML = profitMonths.length
-    ? `All ${profitMonths.length} month(s): revenue ${inr(tot.revenue)} − cost ${inr(tot.cogs)} = <b style="${pcol(tot.profit)}">profit ${inr(tot.profit)}</b>` : '';
+    ? `All ${profitMonths.length} month(s): revenue ${inr(tot.revenue)} − cost ${inr(tot.cogs)} = <b style="${pcol(tot.profit)}">profit ${inr(tot.profit)}</b> · return charges ${inr(tot.ch)} (already inside the profit)` : '';
   const sel = document.getElementById('profitMonthSel'), keep = sel.value;
   sel.innerHTML = profitMonths.map(m => `<option value="${esc(m.month)}">${esc(monthLabel(m.month))}</option>`).join('');
   if(keep && profitMonths.some(m => m.month === keep)) sel.value = keep;
+  // graph range: oldest → newest, default the last 12 months
+  const asc = profitMonths.map(m => m.month).slice().reverse(), opts = asc.map(m => `<option value="${esc(m)}">${esc(monthShort(m))}</option>`).join('');
+  const fromEl = document.getElementById('profitFrom'), toEl = document.getElementById('profitTo'), kf = fromEl.value, kt = toEl.value;
+  fromEl.innerHTML = opts; toEl.innerHTML = opts;
+  fromEl.value = kf && asc.includes(kf) ? kf : (asc[Math.max(0, asc.length - 12)] || '');
+  toEl.value = kt && asc.includes(kt) ? kt : (asc[asc.length - 1] || '');
   renderProfitDetail();
+  renderProfitCharts();
 }
 function renderProfitDetail(){
   const m = profitMonths.find(x => x.month === document.getElementById('profitMonthSel').value);
   const body = document.getElementById('profitProductsTable'), plat = document.getElementById('profitPlatforms');
-  if(!m){ body.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">—</td></tr>'; plat.innerHTML = ''; return; }
+  if(!m){ body.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">—</td></tr>'; plat.innerHTML = ''; return; }
   body.innerHTML = Object.values(m.byProduct || {}).sort((a, b) => b.profit - a.profit).map(p => `<tr>
-      <td><b>${esc(p.name)}</b></td><td>${p.soldUnits}</td><td>${p.returnUnits}</td><td>${inr(p.revenue)}</td><td>${inr(p.cogs)}</td>
+      <td><b>${esc(p.name)}</b></td><td>${p.soldUnits}</td><td>${p.returnUnits}</td><td>${inr(p.returnCharges || 0)}</td><td>${inr(p.revenue)}</td><td>${inr(p.cogs)}</td>
       <td style="${pcol(p.profit)}"><b>${inr(p.profit)}</b></td><td>${p.margin}%</td></tr>`).join('');
   plat.innerHTML = 'By platform: ' + Object.entries(m.byPlatform || {}).map(([k, v]) => `<b>${esc(reconPlatformLabel(k))}</b> ${inr(v.profit)} (${v.soldUnits} sold, ${v.returnUnits} returned)`).join(' · ');
+}
+/* ---------------- Graphs (inline SVG — profit-tools.js) ---------------- */
+function renderProfitCharts(){
+  const ms = VPT.monthsInRange(profitMonths, document.getElementById('profitFrom').value, document.getElementById('profitTo').value);
+  const $ = id => document.getElementById(id), labels = ms.map(m => monthShort(m.month));
+  $('chMonthlySales').innerHTML = VPT.barChartSvg({ title: 'Monthly units sold and returned', labels, fmt: VPT.unitsFmt, series: [
+    { name: 'Units sold', values: ms.map(m => m.soldUnits), color: '#2E4374' }, { name: 'Returned / RTO units', values: ms.map(m => m.returnUnits), color: '#D97706' }] });
+  $('chMonthlyMoney').innerHTML = VPT.barChartSvg({ title: 'Monthly revenue and profit', labels, fmt: VPT.inrShort, series: [
+    { name: 'Revenue (ex-GST)', values: ms.map(m => m.revenue), color: '#E0531A' }, { name: 'Profit', values: ms.map(m => m.profit), color: '#16A34A', negColor: '#DC2626' }] });
+  $('chMonthlyReturns').innerHTML = VPT.barChartSvg({ title: 'Monthly returned units', labels, fmt: VPT.unitsFmt, series: [{ name: 'Returned / RTO units', values: ms.map(m => m.returnUnits), color: '#D97706' }] });
+  $('chMonthlyCharges').innerHTML = VPT.barChartSvg({ title: 'Monthly return charges', labels, fmt: VPT.inrShort, series: [{ name: 'Return charges', values: ms.map(m => m.returnCharges || 0), color: '#DC2626' }] });
+  const states = VPT.sumStates(ms);
+  const rows = (list, valueKey, note) => list.map(r => ({ label: r.state || r.name, value: r[valueKey], note: note(r) }));
+  const top = (key, n) => VPT.topWithOther(states, n || 12, key);
+  $('chStateSales').innerHTML = VPT.hBarChartSvg({ title: 'State-wise units sold', color: '#2E4374', rows: rows(top('soldUnits'), 'soldUnits', r => VPT.inrShort(r.revenue)) });
+  $('chStateProfit').innerHTML = VPT.hBarChartSvg({ title: 'State-wise profit', color: '#16A34A', negColor: '#DC2626', fmt: VPT.inrShort, rows: rows(top('profit'), 'profit', r => r.margin + '% margin') });
+  $('chStateReturns').innerHTML = VPT.hBarChartSvg({ title: 'State-wise returned units', color: '#D97706', rows: rows(top('returnUnits'), 'returnUnits', r => r.returnRate + '% of orders · ' + VPT.inrShort(r.returnCharges)) });
+  const byProd = {};
+  ms.forEach(m => Object.values(m.byProduct || {}).forEach(p => { const a = byProd[p.name] = byProd[p.name] || { name: p.name, profit: 0, soldUnits: 0 }; a.profit += p.profit; a.soldUnits += p.soldUnits; }));
+  $('chProductProfit').innerHTML = VPT.hBarChartSvg({ title: 'Profit by product', color: '#16A34A', negColor: '#DC2626', fmt: VPT.inrShort,
+    rows: Object.values(byProd).sort((a, b) => b.profit - a.profit).slice(0, 12).map(p => ({ label: p.name, value: Math.round(p.profit * 100) / 100, note: p.soldUnits + ' sold' })) });
+  $('profitStatesTable').innerHTML = states.slice().sort((a, b) => b.soldUnits - a.soldUnits).map(r => `<tr>
+      <td><b>${esc(r.state)}</b></td><td>${r.soldUnits}</td><td>${r.returnUnits}</td><td>${r.returnRate}%</td><td>${inr(r.returnCharges)}</td>
+      <td>${inr(r.revenue)}</td><td style="${pcol(r.profit)}"><b>${inr(r.profit)}</b></td><td>${r.margin}%</td></tr>`).join('')
+    || '<tr><td colspan="8" style="color:var(--muted)">No data in this period yet.</td></tr>';
+  const unk = states.find(r => r.state === 'Unknown');
+  $('stateHint').innerHTML = unk && unk.soldUnits + unk.returnUnits
+    ? `${unk.soldUnits + unk.returnUnits} unit(s) have no customer state yet (shown as “Unknown”). Upload your Orders report in <b>Old Payment Data</b> — it carries “Customer State” — and they are filled in.` : '';
+}
+
+/* ---------------- Old Payment Data → Monthly Profit only (never touches stock) ---------------- */
+let oldSheets = [], oldBuilt = null, oldSkuRows = [], oldMap = {}, oldCostEdits = {};
+const OLD_ORDER_DATE_GUESS = ['order date', 'order_date', 'ordered on', 'order placed date', 'date'];
+const OLD_PAY_DATE_GUESS = ['payment date', 'settlement date', 'settled date', 'payout date', 'payment_date'];
+const OLD_STATE_GUESS = ['customer state', "customer's delivery state", 'delivery state', 'ship to state', 'shipping state', 'customer_state', 'state'];
+async function parseOldFiles(){
+  const files = document.getElementById('oldFiles').files;
+  if(!files || !files.length){ showMsg('oldMsg', 'Choose at least one file first.', false); return; }
+  oldSheets = []; let skipped = 0;
+  for(const file of files){
+    const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    wb.SheetNames.forEach(sheetName => {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, raw: true, defval: '' });
+      let hdrRow = -1, detected = null;
+      for(let r = 0; r < Math.min(rows.length, 8); r++){
+        const d = detectSheetFormat(rows[r].map(h => String(h || '').trim()));
+        if(d){ hdrRow = r; detected = d; break; }
+      }
+      if(!detected){ if(rows.length) skipped++; return; }
+      const headers = rows[hdrRow].map(h => String(h || '').trim());
+      const dataRows = rows.slice(hdrRow + 1).filter(r => r.some(c => c !== '' && c !== undefined && c !== null));
+      if(dataRows.length) oldSheets.push({ fileName: file.name, sheetName, headers, rows: dataRows, detected });
+    });
+  }
+  if(!oldSheets.length){ showMsg('oldMsg', 'No Meesho or Flipkart payment / orders data found in the selected files.', false); return; }
+  renderOldMapUI();
+  showMsg('oldMsg', `Read ${oldSheets.length} sheet(s) from ${files.length} file(s).` + (skipped ? ` ${skipped} other sheet(s) were not in a known Meesho / Flipkart format and were left out.` : ''), true);
+}
+function renderOldMapUI(){
+  document.getElementById('oldMapWrap').classList.remove('hidden');
+  document.getElementById('oldPreviewWrap').classList.add('hidden');
+  document.getElementById('oldMapList').innerHTML = oldSheets.map((sh, i) => {
+    const preset = sh.detected.format === 'meesho' ? 'MEESHO' : 'FLIPKART';
+    const g = (list) => guessMoneyCol(sh.headers, list);
+    return `<div class="box" style="margin-bottom:10px">
+      <p style="margin:0;font-size:13px"><span class="badge">${preset === 'MEESHO' ? 'Meesho' : 'Flipkart'} — detected</span> ${esc(sh.fileName)} — ${esc(sh.sheetName)} (${sh.rows.length} rows)</p>
+      ${platformSelectHtml(i, preset).replace('stockPlatform' + i, 'oldPlatform' + i)}
+      <div class="grid2" style="margin-top:6px">
+        <div class="field"><label>Money column — what the marketplace paid you</label><select id="oldSettle${i}">${moneyOptions(sh.headers, g(SETTLE_COL_GUESSES), 'none — this file has no amounts (e.g. Orders report)')}</select></div>
+        <div class="field"><label>GST % column (optional)</label><select id="oldGst${i}">${moneyOptions(sh.headers, g(GST_COL_GUESSES), 'none — use the default GST %')}</select></div>
+        <div class="field"><label>Order date column</label><select id="oldOrderDate${i}">${moneyOptions(sh.headers, g(OLD_ORDER_DATE_GUESS), 'none')}</select></div>
+        <div class="field"><label>Payment date column</label><select id="oldPayDate${i}">${moneyOptions(sh.headers, g(OLD_PAY_DATE_GUESS), 'none')}</select></div>
+        <div class="field"><label>Customer state column</label><select id="oldState${i}">${moneyOptions(sh.headers, g(OLD_STATE_GUESS), 'none — states stay “Unknown”')}</select></div>
+      </div></div>`;
+  }).join('');
+}
+const oldVal = id => { const el = document.getElementById(id); return el ? parseInt(el.value, 10) : -1; };
+function oldOpts(){
+  return { basis: document.getElementById('oldBasis').value, fallbackMonth: document.getElementById('oldFallback').value || '',
+    removeGst: document.getElementById('oldRemoveGst').checked, defaultGst: parseFloat(document.getElementById('oldDefaultGst').value) };
+}
+async function prepareOld(){
+  const sheets = oldSheets.map((sh, i) => ({ ...sh, platform: (document.getElementById('oldPlatform' + i) || {}).value || '', cols: {
+    settle: oldVal('oldSettle' + i), gst: oldVal('oldGst' + i), orderDate: oldVal('oldOrderDate' + i), payDate: oldVal('oldPayDate' + i), state: oldVal('oldState' + i) } }));
+  if(sheets.some(sh => !sh.platform)){ showMsg('oldMsg', 'Choose the platform of every file.', false); return; }
+  oldBuilt = VPT.buildOldOrders(sheets, oldOpts());
+  oldCostEdits = {}; oldMap = {};
+  const bySku = new Map();
+  oldBuilt.orders.filter(o => o.kind === 'sold' || o.kind === 'return').forEach(o => {
+    const k = o.platform + '|' + o.sku.toLowerCase();
+    if(!bySku.has(k)) bySku.set(k, { key: k, platform: o.platform, sku: o.sku, sold: 0, returned: 0 });
+    const r = bySku.get(k); if(o.kind === 'sold') r.sold += o.qty; else r.returned += o.qty;
+  });
+  oldSkuRows = [...bySku.values()].sort((a, b) => (b.sold + b.returned) - (a.sold + a.returned));
+  reconCosts = await VLS.unitCosts(currentUser.uid, mySkuMappingsCache);
+  oldSkuRows.forEach(r => { const m = reconSkuMasterMatch({ marketplace: r.platform, displayKey: r.sku }); oldMap[r.key] = m ? m.id : ''; });
+  if(!oldBuilt.orders.some(o => o.kind === 'sold' || o.kind === 'return') && !oldBuilt.orders.some(o => o.state)){
+    showMsg('oldMsg', 'No sold or returned orders were found in these files.', false); return;
+  }
+  document.getElementById('oldPreviewWrap').classList.remove('hidden');
+  await renderOldPreview();
+}
+function oldCostFor(skuKey){
+  if(oldCostEdits[skuKey] != null) return oldCostEdits[skuKey];
+  const id = oldMap[skuKey];
+  return id ? ((reconCosts[id] && reconCosts[id].cost) || 0) : 0;
+}
+function onOldMapChange(i){
+  const r = oldSkuRows[i]; oldMap[r.key] = document.getElementById('oldSkuMap' + i).value; delete oldCostEdits[r.key];
+  renderOldPreview();
+}
+function onOldCostEdit(el){
+  const v = parseFloat(el.value); oldCostEdits[el.dataset.skukey] = isFinite(v) && v >= 0 ? v : 0;
+  renderOldPreview();
+}
+// every sold / returned order line that has an order key, grouped by month, ready for the profit engine
+function oldProfitLines(){
+  const byMonth = new Map(); let noKey = 0, undated = 0;
+  (oldBuilt ? oldBuilt.orders : []).forEach(o => {
+    if(o.kind !== 'sold' && o.kind !== 'return') return;
+    if(!o.month){ undated++; return; }
+    const id = shipmentIdFromText(String(o.orderId), o.platform);
+    if(!id){ noKey++; return; }
+    const skuKey = o.platform + '|' + o.sku.toLowerCase(), mid = oldMap[skuKey] || '', m = mid ? mySkuMappingsCache.find(x => x.id === mid) : null;
+    if(!byMonth.has(o.month)) byMonth.set(o.month, []);
+    byMonth.get(o.month).push({ key: labelKey(o.platform, o.sku, String(o.orderId)), qty: o.qty, isReturn: o.kind === 'return', settle: o.settle, gstRate: o.gst,
+      mappingId: mid, productName: m ? m.productName : o.sku, marketplace: o.platform, sku: o.sku, orderId: o.orderId, state: o.state, costUnit: oldCostFor(skuKey) });
+  });
+  return { byMonth, noKey, undated };
+}
+async function renderOldPreview(){
+  const opts = { removeGst: document.getElementById('oldRemoveGst').checked, defaultGst: parseFloat(document.getElementById('oldDefaultGst').value) };
+  document.getElementById('oldSkuTable').innerHTML = oldSkuRows.map((r, i) => {
+    const options = ['<option value="">— not in Buyer SKU Master (type a cost) —</option>'].concat(mySkuMappingsCache.map(m => `<option value="${m.id}" ${oldMap[r.key] === m.id ? 'selected' : ''}>${esc(m.productName)}</option>`));
+    const missing = !oldCostFor(r.key);
+    return `<tr><td>${esc(r.sku)}</td><td><span class="badge">${esc(reconPlatformLabel(r.platform))}</span></td><td>${r.sold}</td><td>${r.returned}</td>
+      <td><select id="oldSkuMap${i}" onchange="onOldMapChange(${i})">${options.join('')}</select></td>
+      <td style="white-space:nowrap"><input type="number" min="0" step="0.01" value="${oldCostFor(r.key)}" data-skukey="${esc(r.key)}" onchange="onOldCostEdit(this)" style="width:88px;padding:3px 6px">${missing ? ' <span class="badge bad" style="font-size:10.5px">type it — cost unknown</span>' : ''}</td></tr>`;
+  }).join('');
+  const { byMonth, noKey, undated } = oldProfitLines();
+  const months = [...byMonth.keys()].sort(), results = []; let already = 0, noMoney = 0;
+  for(const mo of months){
+    const pr = await VLS.computeProfit(currentUser.uid, 'buyer', mo, byMonth.get(mo), opts);
+    already += pr.already; noMoney += pr.noMoney;
+    const rc = pr.rows.reduce((a, x) => a + (x.returnCharge || 0), 0);
+    results.push({ mo, sold: pr.totals.soldUnits, ret: pr.totals.returnUnits, rc, rev: pr.totals.revenue, cogs: pr.totals.cogs, profit: pr.totals.profit, n: pr.rows.length });
+  }
+  const T = k => results.reduce((a, r) => a + r[k], 0), st = oldBuilt.stats;
+  document.getElementById('oldPreviewBox').innerHTML = `
+    <table data-excel-name="Old data preview"><thead><tr><th>Month</th><th>New orders</th><th>Units sold</th><th>Returns / RTO</th><th>Return charges</th><th>Revenue (ex-GST)</th><th>Cost of goods</th><th>Profit</th></tr></thead><tbody>
+    ${results.map(r => `<tr><td data-sort="${esc(r.mo)}-01"><b>${esc(monthLabel(r.mo))}</b></td><td>${r.n}</td><td>${r.sold}</td><td>${r.ret}</td><td>${inr(r.rc)}</td><td>${inr(r.rev)}</td><td>${inr(r.cogs)}</td><td style="${pcol(r.profit)}"><b>${inr(r.profit)}</b></td></tr>`).join('')
+      || '<tr><td colspan="8" style="color:var(--muted)">Nothing new to add from these files.</td></tr>'}
+    <tr style="font-weight:700;background:var(--head-bg,#FAF6EF)"><td>Total</td><td>${T('n')}</td><td>${T('sold')}</td><td>${T('ret')}</td><td>${inr(T('rc'))}</td><td>${inr(T('rev'))}</td><td>${inr(T('cogs'))}</td><td style="${pcol(T('profit'))}">${inr(T('profit'))}</td></tr></tbody></table>
+    <p class="sub" style="margin-top:6px">${st.orders} order(s) in the files: ${st.sold} sold, ${st.returned} returned / RTO, ${st.cancelled} cancelled (ignored).
+      Customer state found for ${st.states} state(s)${st.noState ? `; ${st.noState} order(s) have none (shown as “Unknown”)` : ''}.
+      ${already ? `${already} order line(s) were already counted earlier — they are skipped. ` : ''}${noMoney ? `${noMoney} have no money amount (skipped). ` : ''}${undated ? `<b style="color:var(--paprika-dark)">${undated} order(s) have no date — pick a month in “Month for rows that have no date” above and press Next again.</b> ` : ''}${noKey ? `${noKey} order(s) have an unreadable order number (skipped). ` : ''}${st.noStatus ? `${st.noStatus} row(s) had no status (skipped). ` : ''}
+      ${oldSkuRows.some(r => !oldCostFor(r.key)) ? '<b style="color:var(--paprika-dark)">Some products have no cost yet — type it above, otherwise their profit is overstated.</b>' : ''}</p>`;
+}
+async function applyOld(){
+  const btn = document.getElementById('oldApplyBtn'); btn.disabled = true;
+  try{
+    const opts = { removeGst: document.getElementById('oldRemoveGst').checked, defaultGst: parseFloat(document.getElementById('oldDefaultGst').value) };
+    const uid = currentUser.uid, col = db.collection('users').doc(uid).collection('buyerSkuMappings');
+    // 1. SKUs you matched are remembered on the product; costs you typed are saved (stock is NOT touched)
+    let skuAdded = 0;
+    for(const r of oldSkuRows){
+      const id = oldMap[r.key]; if(!id) continue;
+      const m = mySkuMappingsCache.find(x => x.id === id); if(!m) continue;
+      if(!reconSkuMasterMatch({ marketplace: r.platform, displayKey: r.sku })){
+        const field = reconField(r.platform);
+        if(!skuClashes(mySkuMappingsCache.filter(x => x.status !== 'INACTIVE'), field, r.sku, id).length){
+          const value = joinSkuList([m[field] || '', r.sku].join(','));
+          await col.doc(id).set({ [field]: value, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          m[field] = value; skuAdded++;
+        }
+      }
+      if(oldCostEdits[r.key] > 0) await col.doc(id).set({ costPrice: oldCostEdits[r.key], updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+    // 2. profit, month by month — one record per order, never twice
+    const { byMonth, undated } = oldProfitLines();
+    const sum = { orders: 0, sold: 0, ret: 0, rc: 0, profit: 0, already: 0 }, months = [...byMonth.keys()].sort();
+    for(const mo of months){
+      const res = await VLS.recordProfit(uid, 'buyer', mo, byMonth.get(mo), opts);
+      sum.orders += res.rows.length; sum.sold += res.totals.soldUnits; sum.ret += res.totals.returnUnits; sum.profit += res.totals.profit; sum.already += res.already;
+      sum.rc += res.rows.reduce((a, x) => a + (x.returnCharge || 0), 0);
+    }
+    // 3. customer states from any file (e.g. the Orders report) fill in records saved without one
+    const pairs = oldBuilt.orders.filter(o => (o.kind === 'sold' || o.kind === 'return') && o.state && shipmentIdFromText(String(o.orderId), o.platform))
+      .map(o => ({ key: labelKey(o.platform, o.sku, String(o.orderId)), state: o.state }));
+    const enr = await VLS.enrichStates(uid, 'buyer', pairs);
+    await loadStock();
+    await renderMonthlyProfit();
+    document.getElementById('oldPreviewWrap').classList.add('hidden'); document.getElementById('oldMapWrap').classList.add('hidden');
+    document.getElementById('oldFiles').value = ''; oldSheets = []; oldBuilt = null;
+    showMsg('oldMsg', `Added to Monthly Profit: ${sum.orders} order(s) in ${months.length} month(s) — profit ${inr(sum.profit)}, return charges ${inr(sum.rc)}.` +
+      (sum.already ? ` ${sum.already} were already counted before (skipped).` : '') + (enr.updated ? ` Customer state filled in for ${enr.updated} earlier order(s).` : '') +
+      (skuAdded ? ` ${skuAdded} SKU(s) added to Buyer SKU Master.` : '') + (undated ? ` ${undated} undated order(s) were left out.` : '') + ' Your stock was not changed.', true);
+  }catch(err){ console.error(err); showMsg('oldMsg', 'Could not add the data: ' + err.message, false); }
+  btn.disabled = false;
 }
 
 function showMsg(id, text, ok){

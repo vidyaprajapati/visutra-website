@@ -44,14 +44,15 @@ test('profit and stock from one Meesho payment file: sales, RTO added back, LOST
   assert.equal(m.revenue, 525.24, '160 + 320 − 50 + 95.24');
   assert.equal(m.cogs, 400, '100 + 200 + 0 + 100');
   assert.equal(m.profit, 125.24);
+  assert.equal(m.returnCharges, 50, 'the RTO cost you 52.50 incl. GST = 50.00 ex-GST');
   assert.equal(m.margin, 23.8);
   assert.equal(m.byProduct.bm1.profit, 125.24);
   assert.equal(m.byPlatform.MEESHO.soldUnits, 4);
   assert.match(pg.$('stockUploadMsg').textContent, /1 returned \/ RTO unit\(s\) added back to stock even though this system had not deducted/);
   assert.match(pg.$('stockUploadMsg').textContent, /profit recorded for 4 order line\(s\): ₹125\.24/);
   // the Monthly Profit table shows it
-  assert.deepEqual([...pg.$('profitMonthsTable').rows[0].cells].map(c => c.textContent.trim()), ['September 2026', '4', '1', '₹525.24', '₹400.00', '₹125.24', '23.8%']);
-  assert.deepEqual([...pg.$('profitProductsTable').rows[0].cells].map(c => c.textContent.trim()), ['Washing Machine Cover', '4', '1', '₹525.24', '₹400.00', '₹125.24', '23.8%']);
+  assert.deepEqual([...pg.$('profitMonthsTable').rows[0].cells].map(c => c.textContent.trim()), ['September 2026', '4', '1', '₹50.00', '₹525.24', '₹400.00', '₹125.24', '23.8%']);
+  assert.deepEqual([...pg.$('profitProductsTable').rows[0].cells].map(c => c.textContent.trim()), ['Washing Machine Cover', '4', '1', '₹50.00', '₹525.24', '₹400.00', '₹125.24', '23.8%']);
 });
 
 test('uploading the same report again changes nothing — no stock, no profit counted twice', async () => {
@@ -106,6 +107,7 @@ test('a sold order that is returned in a LATER month gives its cost back — and
   assert.equal(nov.revenue, -179.05, '−188 ÷ 1.05');
   assert.equal(nov.cogs, -100, 'the cost charged in October is given back');
   assert.equal(nov.profit, -79.05);
+  assert.equal(nov.returnCharges, 19.05, 'only the fees: the 160 of sale being reversed is not a "charge"');
   // October + November together = the loss of the return fees only (−19.05)
   assert.equal(Math.round(((await monthDoc('2026-10')).profit + nov.profit) * 100) / 100, -19.05);
   // the same November file again, or the order listed again in a December file, is not counted twice

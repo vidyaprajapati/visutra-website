@@ -487,6 +487,9 @@
        cost     units sold × cost per unit (ex-GST: the GST you paid the seller comes back as input credit).
        return / RTO  the settlement is usually a deduction (negative) → it lowers profit; the goods are
                 back on your shelf, so the cost already charged when it was sold is given back (credited).
+       RETURN CHARGES  what a returned order cost you: the revenue lost on it after any earlier sale of the same
+                order is set against it (so the return of an order sold last month shows only the fees, not
+                the sale being reversed). Positive number = money lost. Kept per order, month, product, state.
      One record per order line per month (users/{uid}/buyerProfitOrders/{month}_{orderKey}) plus a marker per
      order (…ProfitCosted/{orderKey}: sold / returned once, ever) — so uploading the same report again, or an
      order that shows up in two months' files, is never counted twice. The month totals
@@ -526,45 +529,76 @@
       if(docSnaps[i].exists) { already++; return; }
       const g = Number.isFinite(l.gstRate) && l.gstRate >= 0 ? l.gstRate : defG;
       const revenue = r2(gstOn ? l.settle / (1 + g / 100) : l.settle);
-      let cogs = 0;
+      let cogs = 0, returnCharge = 0;
       if(!l.isReturn){
         if(m.sold){ already++; return; }                       // this order was already counted (this or another month)
         cogs = r2((l.costUnit || 0) * l.qty);
-        m.sold = { month, cogs, qty: l.qty, mappingId: l.mappingId || null };
+        m.sold = { month, cogs, qty: l.qty, mappingId: l.mappingId || null, revenue };
       } else {
         if(m.ret){ already++; return; }
         if(m.sold && m.sold.qty){ cogs = -r2(m.sold.cogs * Math.min(1, l.qty / m.sold.qty)); }   // goods are back → cost given back
+        returnCharge = r2(Math.max(0, -(revenue + ((m.sold && m.sold.revenue) || 0))));          // the revenue actually lost on this order
         m.ret = { month, qty: l.qty };
       }
       touched[l.key] = true;
       rows.push({ id, month, key: l.key, marketplace: l.marketplace || '', sku: l.sku || '', orderId: l.orderId || '', mappingId: l.mappingId || '',
         productName: l.productName || '', qty: l.qty, kind: l.isReturn ? 'return' : 'sold', settle: r2(l.settle), gstRate: g, gstRemoved: gstOn,
-        revenue, costUnit: r2(l.costUnit || 0), cogs, profit: r2(revenue - cogs) });
+        state: l.state || '', revenue, costUnit: r2(l.costUnit || 0), cogs, returnCharge, profit: r2(revenue - cogs) });
     });
-    const T = { soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0 };
-    rows.forEach(r => { if(r.kind === 'sold') T.soldUnits += r.qty; else T.returnUnits += r.qty; T.revenue += r.revenue; T.cogs += r.cogs; T.profit += r.profit; });
+    const T = { soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0, returnCharges: 0 };
+    rows.forEach(r => { if(r.kind === 'sold') T.soldUnits += r.qty; else T.returnUnits += r.qty; T.revenue += r.revenue; T.cogs += r.cogs; T.profit += r.profit; T.returnCharges += r.returnCharge || 0; });
     Object.keys(T).forEach(k => { T[k] = r2(T[k]); });
     return { rows, already, noMoney, totals: T, markers: Object.keys(touched).map(k => ({ key: k, data: mark[k] })) };
   }
   async function rebuildMonth(uid, side, month){
     const c = PCOL(side);
     const snap = await u(uid).collection(c.rows).where('month', '==', month).get();
-    const M = { month, soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0, orderLines: 0, byProduct: {}, byPlatform: {} };
+    const blank = () => ({ soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0, returnCharges: 0 });
+    const M = Object.assign({ month, orderLines: 0, byProduct: {}, byPlatform: {}, byState: {} }, blank());
     snap.docs.forEach(d => {
       const r = d.data(), sold = r.kind === 'sold';
       M.orderLines++;
-      if(sold) M.soldUnits += r.qty; else M.returnUnits += r.qty;
-      M.revenue += r.revenue; M.cogs += r.cogs; M.profit += r.profit;
       const pk = r.mappingId || ('n_' + String(r.productName || r.sku).toLowerCase().replace(/[^a-z0-9]+/g, '_'));
-      const P = M.byProduct[pk] = M.byProduct[pk] || { name: r.productName || r.sku, soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0 };
-      const K = M.byPlatform[r.marketplace || 'OTHER'] = M.byPlatform[r.marketplace || 'OTHER'] || { soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0 };
-      [P, K].forEach(x => { if(sold) x.soldUnits += r.qty; else x.returnUnits += r.qty; x.revenue += r.revenue; x.cogs += r.cogs; x.profit += r.profit; });
+      const P = M.byProduct[pk] = M.byProduct[pk] || Object.assign({ name: r.productName || r.sku }, blank());
+      const K = M.byPlatform[r.marketplace || 'OTHER'] = M.byPlatform[r.marketplace || 'OTHER'] || blank();
+      const sk = r.state || 'Unknown';
+      const S = M.byState[sk] = M.byState[sk] || blank();
+      [M, P, K, S].forEach(x => {
+        if(sold) x.soldUnits += r.qty; else x.returnUnits += r.qty;
+        x.revenue += r.revenue; x.cogs += r.cogs; x.profit += r.profit; x.returnCharges += r.returnCharge || 0;
+      });
     });
-    const fin = x => { ['revenue', 'cogs', 'profit'].forEach(k => { x[k] = r2(x[k]); }); x.margin = x.revenue > 0 ? Math.round(x.profit / x.revenue * 1000) / 10 : 0; };
-    fin(M); Object.values(M.byProduct).forEach(fin); Object.values(M.byPlatform).forEach(fin);
+    const fin = x => { ['revenue', 'cogs', 'profit', 'returnCharges'].forEach(k => { x[k] = r2(x[k]); }); x.margin = x.revenue > 0 ? Math.round(x.profit / x.revenue * 1000) / 10 : 0; };
+    fin(M); Object.values(M.byProduct).forEach(fin); Object.values(M.byPlatform).forEach(fin); Object.values(M.byState).forEach(fin);
     M.updatedAt = FV().serverTimestamp();
     await u(uid).collection(c.months).doc(month).set(M);
     return M;
+  }
+  /* Fills in the customer STATE on profit records that were saved without one (e.g. a payment file was
+     uploaded first, the Orders report that carries "Customer State" later). Matched by order key through the
+     order markers; only records with NO state yet are touched. pairs: [{ key, state }] */
+  async function enrichStates(uid, side, pairs){
+    const c = PCOL(side), want = {};
+    (pairs || []).forEach(p => { if(p.key && p.state) want[p.key] = p.state; });
+    const keys = Object.keys(want);
+    if(!keys.length) return { updated: 0, months: [] };
+    const markSnaps = await bulkGet(keys.map(k => u(uid).collection(c.mark).doc(k)));
+    const refs = [];
+    keys.forEach((k, i) => {
+      if(!markSnaps[i].exists) return;
+      const m = markSnaps[i].data(), months = new Set([m.sold && m.sold.month, m.ret && m.ret.month].filter(Boolean));
+      months.forEach(mo => refs.push({ key: k, month: mo, ref: u(uid).collection(c.rows).doc(mo + '_' + k) }));
+    });
+    const snaps = await bulkGet(refs.map(r => r.ref));
+    const todo = refs.filter((r, i) => snaps[i].exists && !snaps[i].data().state);
+    for(let i = 0; i < todo.length; i += 400){
+      const batch = db.batch();
+      todo.slice(i, i + 400).forEach(r => batch.update(r.ref, { state: want[r.key] }));
+      await batch.commit();
+    }
+    const months = [...new Set(todo.map(r => r.month))];
+    for(const mo of months) await rebuildMonth(uid, side, mo);
+    return { updated: todo.length, months };
   }
   // Computes, writes the order records + markers, rebuilds the month totals.
   async function recordProfit(uid, side, month, lines, opts){
@@ -676,5 +710,5 @@
     });
   }
 
-  global.VLS = { pkgForPlatform, reconAggregator, reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce, computeProfit, recordProfit, rebuildMonth, unitCosts };
+  global.VLS = { pkgForPlatform, reconAggregator, reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce, computeProfit, recordProfit, rebuildMonth, enrichStates, unitCosts };
 })(window);
