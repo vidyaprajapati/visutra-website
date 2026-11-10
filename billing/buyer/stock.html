@@ -119,12 +119,18 @@
     <div id="stockColumnMapWrap" class="hidden" style="margin-top:18px">
       <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 1 — Which column is the product, and which is the quantity?</h3>
       <div id="stockColumnMapList"></div>
+      <div class="box" style="margin:12px 0">
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13.5px;cursor:pointer"><input type="checkbox" id="reconAddAllReturns" checked style="width:auto;margin-top:3px">
+          <span><b>Add every Return and RTO back to stock.</b> Each returned / RTO unit goes back on your shelf (once — uploading the same report again never adds it twice), even if this system never deducted that order. A <b>LOST</b> parcel is never added back.</span></label>
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13.5px;cursor:pointer;margin-top:8px"><input type="checkbox" id="reconRemoveGst" checked style="width:auto;margin-top:3px">
+          <span><b>The marketplace amounts include GST — take it out before working out profit.</b> Profit = what the marketplace paid you (ex-GST) − what you paid for the goods sold (ex-GST). GST % to use when the file has no GST column: <input type="number" id="reconDefaultGst" value="5" min="0" max="40" step="0.5" style="width:70px;display:inline-block;padding:3px 6px"> %</span></label>
+      </div>
       <button class="btn primary" style="margin-top:10px" onclick="aggregateStockUpload()">Next: Match Products</button>
     </div>
 
     <div id="stockAggWrap" class="hidden" style="margin-top:18px">
       <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 2 — Match each product/SKU, then apply</h3>
-      <p class="sub"><b>Total orders − Returns = Actual sales</b>, and stock goes down by actual sales. Status column: <b>DELIVERED / EXCHANGED</b> = order, <b>CANCELLED</b> = not counted, <b>anything else (RTO, RETURN, LOST…)</b> = return. A return only adds stock back if that order was already deducted when it left (label printed / earlier upload); otherwise it simply isn't counted as a sale. Orders already counted before are not counted again.</p>
+      <p class="sub"><b>Total orders − Returns = Actual sales</b>, and stock goes down by actual sales. Status column: <b>DELIVERED / EXCHANGED</b> = order, <b>CANCELLED</b> = not counted, <b>RTO / RETURN</b> = return (the unit comes back to stock), <b>LOST / damaged</b> = a sale that is gone (never added back). With <i>Add every Return and RTO back to stock</i> ticked every returned unit is added; unticked, only returns of orders this system had already deducted are added. Orders already counted before are not counted again.</p>
       <table><thead><tr><th>From report</th><th>Platform</th><th title="Every order in the file except cancelled ones">Total orders</th><th title="Returned / RTO orders in the file">Returns</th><th title="Total orders − Returns">Actual sales</th><th title="Already counted earlier (printed label or an earlier upload) — not counted again">Already counted</th><th title="CANCELLED — not counted">Cancelled</th><th title="What your stock actually changes by now">Stock change</th><th>Matches to</th><th title="Unmapped SKUs are saved into Buyer SKU Master when you apply">Buyer SKU Master</th></tr></thead>
       <tbody id="stockAggTable"></tbody></table>
       <h3 style="font-family:var(--display);font-size:16px;margin:20px 0 6px">Step 3 — Check the product-wise summary, then apply</h3>
@@ -132,6 +138,20 @@
       <div id="reconSummaryBox"></div>
       <button class="btn primary" style="margin-top:14px" onclick="applyStockUpload()">Apply &amp; Update Stock</button>
     </div>
+  </div>
+
+  <div class="card" id="profitCard">
+    <h2>Monthly Profit</h2>
+    <p class="sub">Built automatically from your Monthly Inventory Reconciliation uploads: <b>what the marketplaces paid you</b> (their settlement amount, GST taken out) <b>− the cost of the goods you sold</b> (what you paid the seller, ex-GST). A return or RTO lowers the month's profit by its settlement deduction and gives the cost of that item back, because it is on your shelf again. Every order is counted once, however many times you upload the file.</p>
+    <p class="msg" id="profitMsg"></p>
+    <table data-excel-name="Monthly profit"><thead><tr><th>Month</th><th title="Units in orders counted in that month">Units sold</th><th title="Returned / RTO units counted in that month">Returns / RTO</th><th>Revenue (ex-GST)</th><th>Cost of goods</th><th>Profit</th><th>Margin</th></tr></thead>
+    <tbody id="profitMonthsTable"></tbody></table>
+    <div id="profitTotals" class="sub" style="margin-top:6px"></div>
+    <h3 style="font-family:var(--display);font-size:16px;margin:20px 0 6px">Month detail
+      <select id="profitMonthSel" onchange="renderProfitDetail()" style="width:auto;margin-left:8px"></select></h3>
+    <table data-excel-name="Profit by product"><thead><tr><th>Product</th><th>Units sold</th><th>Returns / RTO</th><th>Revenue (ex-GST)</th><th>Cost of goods</th><th>Profit</th><th>Margin</th></tr></thead>
+    <tbody id="profitProductsTable"></tbody></table>
+    <div id="profitPlatforms" class="sub" style="margin-top:6px"></div>
   </div>
 
   </div>
@@ -183,6 +203,7 @@ auth.onAuthStateChanged(async user => {
 
   await loadStock();
   await loadReconciliationMap();
+  try{ await renderMonthlyProfit(); }catch(e){ console.warn('profit table', e); }
   buyerRenderSalesReorder();
   buyerRenderStockAnalysis();
 
@@ -594,6 +615,21 @@ function detectSheetFormat(headers){
   }
   return null;
 }
+/* Money columns for profit. Guessed from the header names (Meesho "Final Settlement Amount", Flipkart
+   "Bank Settlement Value" …); every detected sheet also gets a dropdown so a wrong guess can be fixed. */
+const SETTLE_COL_GUESSES = ['final settlement amount', 'bank settlement value (rs.)', 'bank settlement value', 'bank settlement', 'settlement amount', 'settlement value', 'net settlement', 'settled amount', 'net payout', 'net amount'];
+const GST_COL_GUESSES = ['product gst %', 'gst %', 'gst rate', 'gst percentage'];
+function guessMoneyCol(headers, list){
+  const lower = headers.map(h => String(h || '').trim().toLowerCase());
+  for(const c of list){ const i = lower.findIndex(h => h === c); if(i !== -1) return i; }
+  for(const c of list){ const i = lower.findIndex(h => h.includes(c)); if(i !== -1) return i; }
+  return -1;
+}
+function parseMoney(v){
+  if(typeof v === 'number') return isFinite(v) ? v : 0;
+  const n = parseFloat(String(v == null ? '' : v).replace(/[₹,\s]/g, '').replace(/^\((.*)\)$/, '-$1'));
+  return isFinite(n) ? n : 0;
+}
 async function parseStockFiles(){
   const input = document.getElementById('stockFiles');
   const files = input.files;
@@ -639,6 +675,9 @@ function reconPlatformOf(i){
   const el = document.getElementById('stockPlatform' + i);
   return el ? el.value : '';
 }
+function moneyOptions(headers, selected, noneLabel){
+  return `<option value="-1">— ${esc(noneLabel)} —</option>` + headers.map((h, ci) => `<option value="${ci}" ${ci === selected ? 'selected' : ''}>${esc(h || ('(column ' + (ci + 1) + ')'))}</option>`).join('');
+}
 function renderStockColumnMapUI(){
   document.getElementById('stockColumnMapWrap').classList.remove('hidden');
   document.getElementById('stockAggWrap').classList.add('hidden');
@@ -650,6 +689,10 @@ function renderStockColumnMapUI(){
         <p style="margin:0;font-size:13px"><span class="badge">${label} — detected automatically</span></p>
         <p style="margin:6px 0 0;font-size:13px;color:var(--muted)">${esc(s.fileName)} — ${esc(s.sheetName)} (${s.rows.length} rows). Status/reason column read automatically — no columns to pick.</p>
         ${platformSelectHtml(i, preset)}
+        <div class="grid2" style="margin-top:6px">
+          <div class="field"><label>Money column — what the marketplace paid you (for profit)</label><select id="stockSettle${i}">${moneyOptions(s.headers, guessMoneyCol(s.headers, SETTLE_COL_GUESSES), 'none — no profit for this file')}</select></div>
+          <div class="field"><label>GST % column (optional)</label><select id="stockGst${i}">${moneyOptions(s.headers, guessMoneyCol(s.headers, GST_COL_GUESSES), 'none — use the default GST %')}</select></div>
+        </div>
       </div>`;
     }
     const opts = s.headers.map((h, ci) => `<option value="${ci}">${esc(h || ('(column ' + (ci+1) + ')'))}</option>`).join('');
@@ -681,6 +724,16 @@ async function aggregateStockUpload(){
       const mk = platform;
       const { skuIdx, qtyIdx, orderIdx } = s.detected;
       const statusIdx = s.detected.format === 'meesho' ? s.detected.reasonIdx : s.detected.statusIdx;
+      // Money: the settlement of an order = the SUM over all its rows (a payment row + a later return
+      // adjustment row are one order), taken before the rows are collapsed to one per order.
+      const settleEl = document.getElementById('stockSettle' + i), gstEl = document.getElementById('stockGst' + i);
+      const settleIdx = settleEl ? parseInt(settleEl.value, 10) : -1, gstIdx = gstEl ? parseInt(gstEl.value, 10) : -1;
+      const orderKey = row => String(row[orderIdx] ?? '').trim() + '|' + String(row[skuIdx] ?? '').trim().toLowerCase();
+      const settleByOrder = new Map();
+      if(settleIdx >= 0 && orderIdx >= 0) s.rows.forEach(row => {
+        if(!String(row[orderIdx] ?? '').trim()) return;
+        settleByOrder.set(orderKey(row), (settleByOrder.get(orderKey(row)) || 0) + parseMoney(row[settleIdx]));
+      });
       // Meesho lists some orders twice (payment + later adjustment) — one row per order.
       const rows = mk === 'MEESHO' ? VLS.collapseReconRows(s.rows, orderIdx, statusIdx, skuIdx) : s.rows;
       rows.forEach(row => {
@@ -688,10 +741,14 @@ async function aggregateStockUpload(){
         if(!sku) return;
         const qty = parseFloat(row[qtyIdx]) || 0;
         const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
-        // DELIVERED / EXCHANGED = order sold, CANCELLED = not counted, anything else = returned
+        const money = settleIdx >= 0 && orderId
+          ? { settle: settleByOrder.has(orderKey(row)) ? settleByOrder.get(orderKey(row)) : parseMoney(row[settleIdx]),
+              gst: gstIdx >= 0 && String(row[gstIdx] ?? '').trim() !== '' ? parseMoney(row[gstIdx]) : null }
+          : null;
+        // DELIVERED / EXCHANGED / LOST = order sold, CANCELLED = not counted, RTO / RETURN = returned
         const kind = VLS.reconStatusKind(String(row[statusIdx] ?? '').trim());
-        if(kind === 'sold') A.sold(sku, qty, mk, orderId);
-        else if(kind === 'return') A.ret(sku, qty, mk, orderId);
+        if(kind === 'sold') A.sold(sku, qty, mk, orderId, money);
+        else if(kind === 'return') A.ret(sku, qty, mk, orderId, money);
         else if(kind === 'cancel') A.cancel(sku, qty, mk);
       });
     } else {
@@ -703,7 +760,8 @@ async function aggregateStockUpload(){
       });
     }
   });
-  stockAggregation = await A.finish(currentUser.uid, 'buyer');
+  stockAggregation = await A.finish(currentUser.uid, 'buyer', { addAllReturns: document.getElementById('reconAddAllReturns').checked });
+  reconCosts = await VLS.unitCosts(currentUser.uid, mySkuMappingsCache);
 
   renderStockAggregationTable();
 }
@@ -806,11 +864,20 @@ async function renderReconSummary(){
     if(!m) return null;
     const f = monthFigures(m, month, movements);
     const change = u.addBack - u.stockOut;
-    return { name: m.productName, skus: u.skus, f, u, change, closingAfter: f.closing + change, stockAfter: (Number(m.stock) || 0) + change };
+    return { id, name: m.productName, skus: u.skus, f, u, change, closingAfter: f.closing + change, stockAfter: (Number(m.stock) || 0) + change };
   }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
   if(!rows.length){ box.innerHTML = '<p class="sub">No report SKU is matched to a product yet — pick products in the table above.</p>'; return; }
+  // Profit this upload would add (orders already recorded in earlier uploads are left out)
+  const pr = await VLS.computeProfit(currentUser.uid, 'buyer', month, reconProfitLines(), reconProfitOpts());
+  const profitBy = {};
+  pr.rows.forEach(x => { const b = profitBy[x.mappingId] = profitBy[x.mappingId] || { revenue: 0, cogs: 0, profit: 0 }; b.revenue += x.revenue; b.cogs += x.cogs; b.profit += x.profit; });
+  const moneyOn = pr.rows.length > 0 || pr.already > 0;
   const T = k => rows.reduce((s, r) => s + k(r), 0);
   const sign = n => (n > 0 ? '+' : '') + n;
+  const PB = (r, k) => (profitBy[r.id] ? profitBy[r.id][k] : 0);
+  const SRC = { manual: ['saved', ''], purchases: ['from your purchases', ''], catalogue: ['seller price', ''], edited: ['edited', ''], missing: ['type it — cost unknown', 'bad'] };
+  const costCell = r => { const src = reconCostSource(r.id), [lbl, cls] = SRC[src] || SRC.missing;
+    return `<td style="white-space:nowrap"><input type="number" min="0" step="0.01" value="${reconCostFor(r.id)}" data-costkey="${esc(r.id)}" onchange="onReconCostEdit(this)" style="width:88px;padding:3px 6px"> <span class="badge ${cls}" style="font-size:10.5px">${lbl}</span></td>`; };
   box.innerHTML = `
     <table data-excel-name="Reconciliation summary ${month}"><thead><tr>
       <th>Product</th><th>Report SKUs</th><th>Opening (1st)</th>
@@ -819,18 +886,28 @@ async function renderReconSummary(){
       <th title="Actual sales deducted now">Deduct now</th>
       <th title="Returns of orders that were deducted when they left — the item is back in stock">Returns back in stock</th>
       <th>Stock change</th><th>Closing (month end)</th><th>Stock today after apply</th>
+      <th title="What you pay per unit, ex-GST. Taken from your purchases; type to change — it is remembered">Cost / unit</th>
+      <th title="What the marketplace paid for this upload's new orders, GST removed">Revenue</th><th title="Units sold × cost per unit (returns give their cost back)">Cost of goods</th><th>Profit</th>
     </tr></thead><tbody>
     ${rows.map(r => `<tr>
       <td><b>${esc(r.name)}</b></td><td style="font-size:12px">${r.skus.map(esc).join('<br>')}</td><td>${r.f.opening}</td>
       <td>${r.u.orders}</td><td>${r.u.returns}</td><td><b>${r.u.actual}</b></td>
       <td style="color:var(--muted)">${r.u.soldAlready}</td><td>${r.u.stockOut}</td><td>${r.u.addBack}</td>
       <td style="color:${r.change < 0 ? 'var(--paprika-dark)' : r.change > 0 ? '#0E7C6B' : 'inherit'}"><b>${sign(r.change)}</b></td>
-      <td><b>${r.closingAfter}</b></td><td>${r.stockAfter}</td></tr>`).join('')}
+      <td><b>${r.closingAfter}</b></td><td>${r.stockAfter}</td>
+      ${costCell(r)}
+      <td>${moneyOn ? inr(PB(r, 'revenue')) : '—'}</td><td>${moneyOn ? inr(PB(r, 'cogs')) : '—'}</td>
+      <td style="${pcol(PB(r, 'profit'))}">${moneyOn ? '<b>' + inr(PB(r, 'profit')) + '</b>' : '—'}</td></tr>`).join('')}
     <tr style="font-weight:700;background:var(--head-bg,#FAF6EF)"><td>Total</td><td></td><td>${T(r => r.f.opening)}</td>
       <td>${T(r => r.u.orders)}</td><td>${T(r => r.u.returns)}</td><td>${T(r => r.u.actual)}</td>
       <td>${T(r => r.u.soldAlready)}</td><td>${T(r => r.u.stockOut)}</td><td>${T(r => r.u.addBack)}</td>
-      <td>${sign(T(r => r.change))}</td><td>${T(r => r.closingAfter)}</td><td>${T(r => r.stockAfter)}</td></tr>
+      <td>${sign(T(r => r.change))}</td><td>${T(r => r.closingAfter)}</td><td>${T(r => r.stockAfter)}</td>
+      <td></td><td>${moneyOn ? inr(T(r => PB(r, 'revenue'))) : '—'}</td><td>${moneyOn ? inr(T(r => PB(r, 'cogs'))) : '—'}</td>
+      <td style="${pcol(T(r => PB(r, 'profit')))}">${moneyOn ? inr(T(r => PB(r, 'profit'))) : '—'}</td></tr>
     </tbody></table>
+    <p class="sub" style="margin-top:6px">${moneyOn
+      ? `Profit for ${esc(monthLabel(month))}: <b>${inr(pr.totals.profit)}</b> from ${pr.rows.length} new order line(s)${pr.already ? `, ${pr.already} already recorded earlier (not added again)` : ''}${pr.noMoney ? `, ${pr.noMoney} without a money amount (skipped)` : ''}. ${rows.some(r => reconCostSource(r.id) === 'missing' && reconCostFor(r.id) === 0) ? '<b style="color:var(--paprika-dark)">Some products have no cost yet — type their cost per unit above, otherwise their profit is overstated.</b>' : ''}`
+      : 'No money column was picked for these files, so profit is not calculated. Pick the settlement-amount column in Step 1 and press Next again.'}</p>
     <p class="sub" style="margin-top:6px">Check: <b>Actual sales = Already deducted + Deduct now</b>. Stock change = − Deduct now + Returns back in stock.${skippedRows ? ` ⚠ ${skippedRows} report SKU(s) set to "Skip" (${skippedOrders} orders) are not included.` : ''}</p>`;
 }
 /* Step A of Apply: new products + unmapped SKUs go into Buyer SKU Master,
@@ -891,7 +968,14 @@ async function applyStockUpload(){
   // month in the Monthly Stock Report (Opening/Closing).
   const dateVal = monthBounds(period).end;
   const periodLabel = new Date(period + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-  let applied = 0;
+  let applied = 0, forcedTotal = 0;
+  const profitLines = [], profitOpts = reconProfitOpts();
+  // the cost typed for each report SKU's product (a NEW product has no id yet — keyed by its name)
+  const preCostKey = new Map();
+  stockAggregation.forEach((r, i) => {
+    const sel = document.getElementById('stockAggMap' + i), id = sel ? sel.value : '';
+    if(id) preCostKey.set(r.marketplace + '|' + r.rawKey, id === '__new__' ? '__new__:' + (sel.dataset.newName || r.displayKey).toLowerCase() : id);
+  });
 
   // A. SKUs → Buyer SKU Master (+ catch-up), then B. recalculate with the new
   // mappings, re-applying your choices, then C. apply the stock changes.
@@ -919,8 +1003,26 @@ async function applyStockUpload(){
     if(row.returnedQty) await addStockMovement('return-in', mappingId, row.returnedQty, dateVal, `${periodLabel} — ${row.displayKey} (cancelled/RTO/returned)`);
     try{ await VLS.markReconRows(currentUser.uid, 'buyer', row.linkedRows || [], mappingId, 'reconciliation'); }
     catch(err){ console.error('Could not mark reconciled orders:', err); }
+    forcedTotal += row.forcedAdd || 0;
+    const costKey = preCostKey.get(row.marketplace + '|' + row.rawKey) || mappingId;
+    (row.rows || []).forEach(x => profitLines.push({ key: x.key, qty: x.qty, isReturn: x.isReturn, settle: x.money ? x.money.settle : null,
+      gstRate: x.money && x.money.gst != null ? x.money.gst : null, mappingId, productName: mapping.productName, marketplace: x.marketplace, sku: x.sku,
+      orderId: x.orderId, costUnit: reconCostFor(costKey) }));
     applied++;
   }
+
+  // PROFIT: one record per order line and month (never twice), then the month's totals are rebuilt
+  let profitRes = null;
+  try{ profitRes = await VLS.recordProfit(currentUser.uid, 'buyer', period, profitLines, profitOpts); }
+  catch(err){ console.error('Could not record profit:', err); }
+  // costs you typed are remembered on the product for next time
+  try{
+    for(const [k, costKey] of preCostKey){
+      const val = reconCostEdits[costKey], id = master.choices.get(k) || (costKey.startsWith('__new__:') ? null : costKey);
+      if(val > 0 && id) await db.collection('users').doc(currentUser.uid).collection('buyerSkuMappings').doc(id).set({ costPrice: val, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+  }catch(err){ console.warn('Could not save costs:', err); }
+  reconCostEdits = {};
 
   allMovementsCache = null; // stale after these writes — refetched next time the report renders
   await loadStock();
@@ -940,8 +1042,68 @@ async function applyStockUpload(){
   if(master.added.length) notes.push(`${master.added.length} SKU(s) added to Buyer SKU Master (${master.added.map(a => `${a.sku} → ${a.mapping.productName}, ${a.platform}`).join('; ')})`);
   if(master.caughtUp) notes.push(`${master.caughtUp} label(s) printed earlier for those SKUs deducted`);
   if(master.skipped.length) notes.push(`not added (already on another product): ${master.skipped.join(', ')}`);
+  if(forcedTotal) notes.push(`${forcedTotal} returned / RTO unit(s) added back to stock even though this system had not deducted those orders`);
+  if(profitRes && profitRes.rows.length) notes.push(`profit recorded for ${profitRes.rows.length} order line(s): ${inr(profitRes.totals.profit)} (${periodLabel})`);
+  else if(profitRes && profitRes.already) notes.push('profit for these orders was already recorded — not added again');
+  await renderMonthlyProfit();
   showStockMsg(`Stock updated for ${applied} product(s).` + (notes.length ? ' ' + notes.join('. ') + '.' : ''), true);
 }
+/* ---------------- Profit: cost per unit, preview lines, Monthly Profit tables ---------------- */
+let reconCosts = {}, reconCostEdits = {};
+const inr = n => (Number(n) < 0 ? '−' : '') + '₹' + Math.abs(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pcol = n => (Number(n) < 0 ? 'color:var(--paprika-dark)' : Number(n) > 0 ? 'color:#0E7C6B' : '');
+function monthLabel(m){ return new Date(m + '-01T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }); }
+function reconCostFor(key){ return reconCostEdits[key] != null ? reconCostEdits[key] : ((reconCosts[key] && reconCosts[key].cost) || 0); }
+function reconCostSource(key){ return reconCostEdits[key] != null ? 'edited' : ((reconCosts[key] && reconCosts[key].source) || 'missing'); }
+function onReconCostEdit(el){
+  const v = parseFloat(el.value);
+  reconCostEdits[el.dataset.costkey] = isFinite(v) && v >= 0 ? v : 0;
+  renderReconSummary();
+}
+function reconProfitOpts(){
+  return { removeGst: document.getElementById('reconRemoveGst').checked, defaultGst: parseFloat(document.getElementById('reconDefaultGst').value) };
+}
+// every order line of the upload that is matched to a product, with that product's cost per unit
+function reconProfitLines(){
+  const lines = [];
+  stockAggregation.forEach((r, i) => {
+    const sel = document.getElementById('stockAggMap' + i), id = sel ? sel.value : '';
+    if(!id) return;
+    const isNew = id === '__new__';
+    const costKey = isNew ? '__new__:' + (sel.dataset.newName || r.displayKey).toLowerCase() : id;
+    const m = isNew ? null : mySkuMappingsCache.find(x => x.id === id);
+    (r.rows || []).forEach(x => lines.push({ key: x.key, qty: x.qty, isReturn: x.isReturn, settle: x.money ? x.money.settle : null,
+      gstRate: x.money && x.money.gst != null ? x.money.gst : null, mappingId: costKey, productName: m ? m.productName : (sel.dataset.newName || r.displayKey),
+      marketplace: x.marketplace, sku: x.sku, orderId: x.orderId, costUnit: reconCostFor(costKey) }));
+  });
+  return lines;
+}
+let profitMonths = [];
+async function renderMonthlyProfit(){
+  const snap = await db.collection('users').doc(currentUser.uid).collection('buyerMonthlyProfit').get();
+  profitMonths = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.month).localeCompare(String(a.month)));
+  document.getElementById('profitMonthsTable').innerHTML = profitMonths.map(m => `<tr>
+      <td data-sort="${esc(m.month)}-01"><b>${esc(monthLabel(m.month))}</b></td><td>${m.soldUnits}</td><td>${m.returnUnits}</td>
+      <td>${inr(m.revenue)}</td><td>${inr(m.cogs)}</td><td style="${pcol(m.profit)}"><b>${inr(m.profit)}</b></td><td>${m.margin}%</td></tr>`).join('')
+    || '<tr><td colspan="7" style="color:var(--muted)">No profit recorded yet — upload a Meesho / Flipkart report above (with its money column picked) and press Apply.</td></tr>';
+  const tot = profitMonths.reduce((a, m) => ({ revenue: a.revenue + m.revenue, cogs: a.cogs + m.cogs, profit: a.profit + m.profit }), { revenue: 0, cogs: 0, profit: 0 });
+  document.getElementById('profitTotals').innerHTML = profitMonths.length
+    ? `All ${profitMonths.length} month(s): revenue ${inr(tot.revenue)} − cost ${inr(tot.cogs)} = <b style="${pcol(tot.profit)}">profit ${inr(tot.profit)}</b>` : '';
+  const sel = document.getElementById('profitMonthSel'), keep = sel.value;
+  sel.innerHTML = profitMonths.map(m => `<option value="${esc(m.month)}">${esc(monthLabel(m.month))}</option>`).join('');
+  if(keep && profitMonths.some(m => m.month === keep)) sel.value = keep;
+  renderProfitDetail();
+}
+function renderProfitDetail(){
+  const m = profitMonths.find(x => x.month === document.getElementById('profitMonthSel').value);
+  const body = document.getElementById('profitProductsTable'), plat = document.getElementById('profitPlatforms');
+  if(!m){ body.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">—</td></tr>'; plat.innerHTML = ''; return; }
+  body.innerHTML = Object.values(m.byProduct || {}).sort((a, b) => b.profit - a.profit).map(p => `<tr>
+      <td><b>${esc(p.name)}</b></td><td>${p.soldUnits}</td><td>${p.returnUnits}</td><td>${inr(p.revenue)}</td><td>${inr(p.cogs)}</td>
+      <td style="${pcol(p.profit)}"><b>${inr(p.profit)}</b></td><td>${p.margin}%</td></tr>`).join('');
+  plat.innerHTML = 'By platform: ' + Object.entries(m.byPlatform || {}).map(([k, v]) => `<b>${esc(reconPlatformLabel(k))}</b> ${inr(v.profit)} (${v.soldUnits} sold, ${v.returnUnits} returned)`).join(' · ');
+}
+
 function showMsg(id, text, ok){
   const el = document.getElementById(id);
   if(!el) return;

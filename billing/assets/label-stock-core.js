@@ -305,7 +305,8 @@
        anything with RTO / RETURN       → 'return' (e.g. RTO_DELIVERED is a return,
                                            even though it says "delivered")
        DELIVERED / EXCHANGED            → 'sold'   (e.g. DOOR_STEP_EXCHANGED)
-       any other non-empty status       → 'return' (LOST, RTO_LOCKED …)
+       LOST / MISSING / DAMAGED         → 'sold'   (the parcel is gone — never added back to stock)
+       any other non-empty status       → 'return' (RTO_LOCKED …)
        empty                            → null     (row ignored) */
   function reconStatusKind(status){
     const s = String(status == null ? '' : status).trim().toUpperCase();
@@ -313,6 +314,9 @@
     if(/CANCEL/.test(s)) return 'cancel';
     if(/RTO|RETURN/.test(s)) return 'return';
     if(/DELIVER|EXCHANGE/.test(s)) return 'sold';
+    // LOST / missing / damaged in transit: the parcel is NOT coming back to your shelf, so it must
+    // never be added back to stock — it stays a sale (stock out); any compensation shows in the money.
+    if(/LOST|MISSING|DAMAG|STOLEN|UNTRACE/.test(s)) return 'sold';
     return 'return';
   }
   /* One order can appear on several rows of a Meesho payment file (e.g. an
@@ -422,22 +426,27 @@
     // on another platform.
     const entry = (raw, mk) => {
       const k = (mk || '') + '|' + String(raw).toLowerCase();
-      if(!agg.has(k)) agg.set(k, { displayKey: raw, marketplace: mk || '', orders: 0, returns: 0, soldAlready: 0, retAlready: 0, stockOut: 0, addBack: 0, netted: 0, cancelled: 0, linkedRows: [] });
+      if(!agg.has(k)) agg.set(k, { displayKey: raw, marketplace: mk || '', orders: 0, returns: 0, soldAlready: 0, retAlready: 0, stockOut: 0, addBack: 0, netted: 0, nettedNoKey: 0, forcedAdd: 0, cancelled: 0, linkedRows: [], rows: [] });
       return agg.get(k);
     };
     return {
-      sold(raw, qty, mk, orderId){
+      // money (optional): { settle, gst } — what the marketplace paid for this order line, and its GST %
+      sold(raw, qty, mk, orderId, money){
         if(!raw) return;
-        if(orderId && mk) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn: false });
+        if(orderId && mk) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn: false, money: money || null });
         else { const e = entry(raw, mk); e.orders += qty; e.stockOut += qty; }
       },
-      ret(raw, qty, mk, orderId){
+      ret(raw, qty, mk, orderId, money){
         if(!raw) return;
-        if(orderId && mk) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn: true });
-        else { const e = entry(raw, mk); e.orders += qty; e.returns += qty; e.netted += qty; }
+        if(orderId && mk) held.push({ marketplace: mk, sku: raw, orderId, qty, isReturn: true, money: money || null });
+        else { const e = entry(raw, mk); e.orders += qty; e.returns += qty; e.nettedNoKey += qty; }
       },
       cancel(raw, qty, mk){ if(raw) entry(raw, mk).cancelled += qty; },
-      async finish(uid, side){
+      // opts.addAllReturns: every Return / RTO unit goes back into stock — even when this system never
+      // deducted that order (default off = the old rule: only orders that were deducted come back).
+      // Safe to repeat: a return already added (marker) is never added twice.
+      async finish(uid, side, opts){
+        const addAll = !!(opts && opts.addAllReturns);
         if(held.length){
           await linkReconRows(uid, side, held);
           held.forEach(r => {
@@ -450,18 +459,161 @@
               e.returns += r.qty;
               if(r.status === 'already') e.retAlready += r.qty;
               else if(r.status === 'addback'){ e.addBack += r.qty; e.linkedRows.push(r); }
+              else if(addAll){ r.status = 'addback'; r.forced = true; e.addBack += r.qty; e.forcedAdd += r.qty; if(r.key) e.linkedRows.push(r); }
               else { e.netted += r.qty; if(r.key) e.linkedRows.push(r); }
             }
+            // every order line with an order ID is kept for the profit calculation
+            if(r.key) e.rows.push({ key: r.key, marketplace: r.marketplace, sku: r.sku, orderId: r.orderId, qty: r.qty, isReturn: r.isReturn, status: r.status, money: r.money });
           });
         }
+        // returns / RTO rows with no order ID can't be matched to an earlier deduction
+        agg.forEach(e => { if(addAll){ e.addBack += e.nettedNoKey; e.forcedAdd += e.nettedNoKey; } else e.netted += e.nettedNoKey; });
         return [...agg.values()].map(e => ({
           rawKey: String(e.displayKey).toLowerCase(), marketplace: e.marketplace, displayKey: e.displayKey, orders: e.orders, returns: e.returns, actualSales: e.orders - e.returns,
           soldAlready: e.soldAlready, retAlready: e.retAlready, netted: e.netted, cancelledQty: e.cancelled,
           soldQty: e.stockOut, returnedQty: e.addBack, alreadyQty: e.soldAlready + e.retAlready,
-          netChange: e.addBack - e.stockOut, linkedRows: e.linkedRows
+          netChange: e.addBack - e.stockOut, linkedRows: e.linkedRows, forcedAdd: e.forcedAdd, rows: e.rows
         })).filter(r => r.orders || r.cancelledQty).sort((a, b) => b.orders - a.orders);
       }
     };
+  }
+
+
+  /* ---------- Monthly profit (from the reconciliation upload) ----------
+     Per order line:  profit = revenue − cost of goods
+       revenue  what the marketplace paid for the order (its "settlement" amount — already net of
+                commission, shipping, fees, returns), with the GST removed (÷ (1 + GST%)) because
+                that GST is collected for the government, not earned. Turn the removal off to see cash.
+       cost     units sold × cost per unit (ex-GST: the GST you paid the seller comes back as input credit).
+       return / RTO  the settlement is usually a deduction (negative) → it lowers profit; the goods are
+                back on your shelf, so the cost already charged when it was sold is given back (credited).
+     One record per order line per month (users/{uid}/buyerProfitOrders/{month}_{orderKey}) plus a marker per
+     order (…ProfitCosted/{orderKey}: sold / returned once, ever) — so uploading the same report again, or an
+     order that shows up in two months' files, is never counted twice. The month totals
+     (…MonthlyProfit/{month}) are always rebuilt from the order records. */
+  const PCOL = side => side === 'buyer'
+    ? { rows: 'buyerProfitOrders', mark: 'buyerProfitCosted', months: 'buyerMonthlyProfit' }
+    : { rows: 'sellerProfitOrders', mark: 'sellerProfitCosted', months: 'sellerMonthlyProfit' };
+  const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
+  async function bulkGet(refs){
+    if(!refs.length) return [];
+    if(typeof db.getAll === 'function') return db.getAll(refs);
+    const out = new Array(refs.length);
+    await mapLimit(refs.map((r, i) => i), 12, async i => { out[i] = await refs[i].get(); });
+    return out;
+  }
+  // lines: [{ key, qty, isReturn, settle, gstRate, mappingId, productName, marketplace, sku, orderId, costUnit }]
+  // opts : { removeGst (default true), defaultGst (default 5) }   — read-only: nothing is written here.
+  async function computeProfit(uid, side, month, lines, opts){
+    opts = opts || {};
+    const c = PCOL(side), gstOn = opts.removeGst !== false, defG = Number.isFinite(opts.defaultGst) ? opts.defaultGst : 5;
+    const keyed = (lines || []).filter(l => l.key);
+    const money = keyed.filter(l => l.settle != null && isFinite(l.settle));
+    const noMoney = keyed.length - money.length;
+    const ids = money.map(l => month + '_' + l.key);
+    const uniqKeys = [...new Set(money.map(l => l.key))];
+    const [docSnaps, markSnaps] = await Promise.all([
+      bulkGet(ids.map(id => u(uid).collection(c.rows).doc(id))),
+      bulkGet(uniqKeys.map(k => u(uid).collection(c.mark).doc(k)))
+    ]);
+    const mark = {};                                           // in-memory view of the markers, updated as lines are taken
+    uniqKeys.forEach((k, i) => { mark[k] = markSnaps[i].exists ? JSON.parse(JSON.stringify(markSnaps[i].data())) : {}; });
+    const rows = [], touched = {}; let already = 0;
+    // sold rows first so a return of the same order in the same file sees its cost
+    const order = money.map((l, i) => i).sort((a, b) => (money[a].isReturn ? 1 : 0) - (money[b].isReturn ? 1 : 0));
+    order.forEach(i => {
+      const l = money[i], id = ids[i], m = mark[l.key];
+      if(docSnaps[i].exists) { already++; return; }
+      const g = Number.isFinite(l.gstRate) && l.gstRate >= 0 ? l.gstRate : defG;
+      const revenue = r2(gstOn ? l.settle / (1 + g / 100) : l.settle);
+      let cogs = 0;
+      if(!l.isReturn){
+        if(m.sold){ already++; return; }                       // this order was already counted (this or another month)
+        cogs = r2((l.costUnit || 0) * l.qty);
+        m.sold = { month, cogs, qty: l.qty, mappingId: l.mappingId || null };
+      } else {
+        if(m.ret){ already++; return; }
+        if(m.sold && m.sold.qty){ cogs = -r2(m.sold.cogs * Math.min(1, l.qty / m.sold.qty)); }   // goods are back → cost given back
+        m.ret = { month, qty: l.qty };
+      }
+      touched[l.key] = true;
+      rows.push({ id, month, key: l.key, marketplace: l.marketplace || '', sku: l.sku || '', orderId: l.orderId || '', mappingId: l.mappingId || '',
+        productName: l.productName || '', qty: l.qty, kind: l.isReturn ? 'return' : 'sold', settle: r2(l.settle), gstRate: g, gstRemoved: gstOn,
+        revenue, costUnit: r2(l.costUnit || 0), cogs, profit: r2(revenue - cogs) });
+    });
+    const T = { soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0 };
+    rows.forEach(r => { if(r.kind === 'sold') T.soldUnits += r.qty; else T.returnUnits += r.qty; T.revenue += r.revenue; T.cogs += r.cogs; T.profit += r.profit; });
+    Object.keys(T).forEach(k => { T[k] = r2(T[k]); });
+    return { rows, already, noMoney, totals: T, markers: Object.keys(touched).map(k => ({ key: k, data: mark[k] })) };
+  }
+  async function rebuildMonth(uid, side, month){
+    const c = PCOL(side);
+    const snap = await u(uid).collection(c.rows).where('month', '==', month).get();
+    const M = { month, soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0, orderLines: 0, byProduct: {}, byPlatform: {} };
+    snap.docs.forEach(d => {
+      const r = d.data(), sold = r.kind === 'sold';
+      M.orderLines++;
+      if(sold) M.soldUnits += r.qty; else M.returnUnits += r.qty;
+      M.revenue += r.revenue; M.cogs += r.cogs; M.profit += r.profit;
+      const pk = r.mappingId || ('n_' + String(r.productName || r.sku).toLowerCase().replace(/[^a-z0-9]+/g, '_'));
+      const P = M.byProduct[pk] = M.byProduct[pk] || { name: r.productName || r.sku, soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0 };
+      const K = M.byPlatform[r.marketplace || 'OTHER'] = M.byPlatform[r.marketplace || 'OTHER'] || { soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0 };
+      [P, K].forEach(x => { if(sold) x.soldUnits += r.qty; else x.returnUnits += r.qty; x.revenue += r.revenue; x.cogs += r.cogs; x.profit += r.profit; });
+    });
+    const fin = x => { ['revenue', 'cogs', 'profit'].forEach(k => { x[k] = r2(x[k]); }); x.margin = x.revenue > 0 ? Math.round(x.profit / x.revenue * 1000) / 10 : 0; };
+    fin(M); Object.values(M.byProduct).forEach(fin); Object.values(M.byPlatform).forEach(fin);
+    M.updatedAt = FV().serverTimestamp();
+    await u(uid).collection(c.months).doc(month).set(M);
+    return M;
+  }
+  // Computes, writes the order records + markers, rebuilds the month totals.
+  async function recordProfit(uid, side, month, lines, opts){
+    const c = PCOL(side), res = await computeProfit(uid, side, month, lines, opts);
+    for(let i = 0; i < res.rows.length; i += 200){
+      const batch = db.batch();
+      res.rows.slice(i, i + 200).forEach(r => {
+        const { id, ...data } = r;
+        batch.set(u(uid).collection(c.rows).doc(id), { ...data, createdAt: FV().serverTimestamp() });
+      });
+      await batch.commit();
+    }
+    for(let i = 0; i < res.markers.length; i += 400){
+      const batch = db.batch();
+      res.markers.slice(i, i + 400).forEach(m => batch.set(u(uid).collection(c.mark).doc(m.key), m.data, { merge: true }));
+      await batch.commit();
+    }
+    const month$ = res.rows.length ? await rebuildMonth(uid, side, month) : null;
+    return { ...res, month: month$ };
+  }
+  /* Cost per unit (ex-GST) of each stock product, best source first:
+       manual   — costPrice typed on the product (Buyer SKU Master / the reconciliation table)
+       purchases— weighted average of what you were invoiced (your auto-created purchases)
+       catalogue— the seller's current price for the product you buy from them
+       missing  — none of the above → 0, flagged so you can type it
+     mappings: [{ id, costPrice, linkType, sellerId, productId }] */
+  async function unitCosts(uid, mappings){
+    const out = {}, sum = {};
+    try{
+      const snap = await u(uid).collection('buyerPurchases').get();
+      snap.docs.forEach(d => (d.data().items || []).forEach(it => {
+        const id = it.linkedSkuMappingId; if(!id) return;
+        const qty = Number(it.qty) || 0; if(qty <= 0) return;
+        const taxable = it.taxable != null && Number(it.taxable) > 0 ? Number(it.taxable) : qty * (Number(it.rate) || 0);
+        const a = sum[id] = sum[id] || { t: 0, q: 0 }; a.t += taxable; a.q += qty;
+      }));
+    }catch(e){ console.warn('purchase history unavailable for cost', e); }
+    for(const m of mappings){
+      if(Number(m.costPrice) > 0){ out[m.id] = { cost: r2(m.costPrice), source: 'manual' }; continue; }
+      if(sum[m.id] && sum[m.id].q > 0 && sum[m.id].t > 0){ out[m.id] = { cost: r2(sum[m.id].t / sum[m.id].q), source: 'purchases' }; continue; }
+      if(m.linkType !== 'OWN' && m.sellerId && m.productId){
+        try{
+          const ps = await db.collection('users').doc(m.sellerId).collection('products').doc(m.productId).get();
+          if(ps.exists && Number(ps.data().price) > 0){ out[m.id] = { cost: r2(ps.data().price), source: 'catalogue' }; continue; }
+        }catch(e){ /* not visible to this buyer */ }
+      }
+      out[m.id] = { cost: 0, source: 'missing' };
+    }
+    return out;
   }
 
   /* ---------- Reorder suggestions (#7) ----------
@@ -524,5 +676,5 @@
     });
   }
 
-  global.VLS = { pkgForPlatform, reconAggregator, reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce };
+  global.VLS = { pkgForPlatform, reconAggregator, reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce, computeProfit, recordProfit, rebuildMonth, unitCosts };
 })(window);

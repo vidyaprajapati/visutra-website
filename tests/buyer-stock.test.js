@@ -23,6 +23,7 @@ test('Reconciliation: Total orders − Returns = Actual sales; stock follows act
   const rows = [['111111111_1', 'VST-A', 1, 'DELIVERED'], ['222222222_1', 'VST-A', 1, 'RTO_COMPLETE'], ['333333333_1', 'VST-A', 5, 'DELIVERED'], ['444444444_1', 'VST-A', 2, 'RTO_COMPLETE'], ['555555555_1', 'VST-A', 1, 'CANCELLED']];
   for(const round of [1, 2]){
     w.__setSheets([{ fileName: 'm.xlsx', sheetName: 'S', headers: H, rows, detected: w.__det(H) }]); w.eval('renderStockColumnMapUI()'); $('stockPeriod').value = '2026-09';
+    $('reconAddAllReturns').checked = false;   // the OLD rule: only returns of orders this system deducted come back (the box is ticked by default now)
     await w.eval('aggregateStockUpload()'); await sleep(500);
     const r = w.__agg()[0];
     assert.equal(r.displayKey, 'VST-A');
