@@ -166,7 +166,8 @@ async function processFiles(){
           // Shipment (order-ID) key — two orders of the same SKU are never
           // mistaken for one another, and it matches Label Cropper's key.
           const key = labelKey(hit.marketplace, hit.sku, text);
-          hits.push({ ...hit, key, packKey: packingKey(hit.marketplace, text), pageHash: key });
+          hits.push({ ...hit, key, packKey: packingKey(hit.marketplace, text), pageHash: key,
+            orderId: shipmentIdFromText(text, hit.marketplace), cap: extractCustomerState(text) });   // the customer's state is kept for state-wise profit
         }
       }
     }catch(err){
@@ -187,6 +188,7 @@ async function processFiles(){
    merges each into today's running per-seller draft (or the Unmapped SKUs
    queue if it isn't mapped yet). */
 async function processHits(hits, fileCount){
+  try{ await VLS.captureOrders(currentUser.uid, 'buyer', hits); }catch(e){ console.warn('Customer state not captured:', e); }   // never blocks the labels
   unmappedFound = {};
   let mergedCount = 0, skippedCount = 0, selfCount = 0, repairedCount = 0;
   for(const hit of hits){

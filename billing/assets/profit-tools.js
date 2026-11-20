@@ -204,7 +204,102 @@
     return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(cfg.title || 'Bar chart') + '" style="width:100%;height:auto;font-family:inherit">' + g + '</svg>';
   }
 
-  const api = { normalizeState, parseDateCell, buildOldOrders, monthsInRange, sumStates, topWithOther, barChartSvg, hBarChartSvg, inrShort, unitsFmt, STATES };
+  /* ---------------- SELLER: cost from supplier purchases, profit on invoices, two streams merged ---------------- */
+  const FIELDS = ['soldUnits', 'returnUnits', 'revenue', 'cogs', 'profit', 'returnCharges'];
+  const mkTotals = () => ({ soldUnits: 0, returnUnits: 0, revenue: 0, cogs: 0, profit: 0, returnCharges: 0 });
+  const finTotals = x => { ['revenue', 'cogs', 'profit', 'returnCharges'].forEach(k => { x[k] = r2(x[k]); }); x.margin = x.revenue > 0 ? Math.round(x.profit / x.revenue * 1000) / 10 : 0; return x; };
+  const addInto = (a, b) => { FIELDS.forEach(k => { a[k] += Number(b[k]) || 0; }); return a; };
+  /* purchases: [{ date, deleted, items:[{ linkedProductId, qty, taxable | rate }] }] (Purchase Products are linked to your
+     sale Products) → { productId: [{ date, q, t }] } oldest first */
+  function costTimeline(purchases) {
+    const tl = {};
+    (purchases || []).forEach(p => {
+      if (p.deleted) return;
+      (p.items || []).forEach(it => {
+        const id = it.linkedProductId, q = Number(it.qty) || 0;
+        if (!id || q <= 0) return;
+        const t = it.taxable != null && Number(it.taxable) > 0 ? Number(it.taxable) : q * (Number(it.rate) || 0);
+        (tl[id] = tl[id] || []).push({ date: String(p.date || ''), q, t });
+      });
+    });
+    Object.values(tl).forEach(a => a.sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0)));
+    return tl;
+  }
+  /* Cost per unit (ex-GST) of a product ON a date: a cost you typed wins; otherwise the weighted average of every
+     purchase made up to that date (a sale dated before the first purchase uses the overall average). */
+  function costAt(tl, productId, date, manual) {
+    if (Number(manual) > 0) return { cost: r2(manual), source: 'manual' };
+    const a = (tl || {})[productId];
+    if (!a || !a.length) return { cost: 0, source: 'missing' };
+    let q = 0, t = 0;
+    for (const e of a) { if (e.date <= String(date || '9999')) { q += e.q; t += e.t; } else break; }
+    if (q <= 0) a.forEach(e => { q += e.q; t += e.t; });
+    return q > 0 ? { cost: r2(t / q), source: 'purchases' } : { cost: 0, source: 'missing' };
+  }
+  /* Profit on SALES TO BUYERS, straight from the invoices (nothing to upload): revenue = the invoice line's taxable value
+     (ex-GST), cost = units × the product's cost on the invoice date. Cancelled (deleted) invoices are left out.
+     Same shape as the e-commerce month documents, plus byBuyer. costOf(productId, date) → { cost, source } */
+  function invoiceMonths(invoices, costOf) {
+    const by = {};
+    (invoices || []).forEach(inv => {
+      const month = String(inv.date || '').slice(0, 7);
+      if (inv.deleted || !/^\d{4}-\d{2}$/.test(month)) return;
+      const M = by[month] = by[month] || Object.assign({ month, orderLines: 0, missingCostUnits: 0, missingProducts: {}, byProduct: {}, byPlatform: {}, byState: {}, byBuyer: {} }, mkTotals());
+      const cust = inv.customer || {}, state = normalizeState(cust.state) || normalizeState(cust.stateCode) || 'Unknown', buyer = cust.name || cust.legalName || 'Customer';
+      M.orderLines++;
+      (inv.items || []).forEach(it => {
+        const qty = Number(it.qty) || 0, revenue = r2(it.taxable != null ? it.taxable : qty * (Number(it.rate) || 0));
+        if (qty <= 0 && !revenue) return;
+        const c = it.productId ? costOf(it.productId, inv.date) : { cost: 0, source: 'missing' };
+        const cogs = r2(c.cost * qty), line = { soldUnits: qty, returnUnits: 0, revenue, cogs, profit: r2(revenue - cogs), returnCharges: 0 };
+        if (c.source === 'missing') { M.missingCostUnits += qty; M.missingProducts[it.name || 'Item'] = true; }
+        const pk = it.productId || ('n_' + String(it.name || 'item').toLowerCase().replace(/[^a-z0-9]+/g, '_'));
+        addInto(M, line);
+        addInto(M.byProduct[pk] = M.byProduct[pk] || Object.assign({ name: it.name || 'Item' }, mkTotals()), line);
+        addInto(M.byPlatform.BUYERS = M.byPlatform.BUYERS || mkTotals(), line);
+        addInto(M.byState[state] = M.byState[state] || mkTotals(), line);
+        addInto(M.byBuyer[buyer] = M.byBuyer[buyer] || mkTotals(), line);
+      });
+    });
+    return Object.values(by).map(M => {
+      finTotals(M);
+      ['byProduct', 'byPlatform', 'byState', 'byBuyer'].forEach(k => Object.values(M[k]).forEach(finTotals));
+      return M;
+    }).sort((a, b) => a.month.localeCompare(b.month));
+  }
+  /* Both streams into one list of months. include: { buyers, ecommerce }.
+     Each month also carries `streams: { buyers, ecommerce }` (totals of each) for the stream-by-stream graph. */
+  function mergeStreams(buyersMonths, ecomMonths, include) {
+    include = include || { buyers: true, ecommerce: true };
+    const by = {}, mergeMap = (dst, src) => Object.keys(src || {}).forEach(k => { addInto(dst[k] = dst[k] || Object.assign(src[k].name ? { name: src[k].name } : {}, mkTotals()), src[k]); });
+    const take = (docs, stream) => (docs || []).forEach(d => {
+      const M = by[d.month] = by[d.month] || Object.assign({ month: d.month, byProduct: {}, byPlatform: {}, byState: {}, byBuyer: {}, streams: { buyers: mkTotals(), ecommerce: mkTotals() }, missingCostUnits: 0 }, mkTotals());
+      addInto(M.streams[stream], d);                                           // always recorded: the stream graph shows both
+      if (!include[stream]) return;
+      addInto(M, d); M.missingCostUnits += d.missingCostUnits || 0;
+      ['byProduct', 'byPlatform', 'byState', 'byBuyer'].forEach(k => mergeMap(M[k], d[k]));
+    });
+    take(buyersMonths, 'buyers'); take(ecomMonths, 'ecommerce');
+    return Object.values(by).map(M => {
+      finTotals(M); finTotals(M.streams.buyers); finTotals(M.streams.ecommerce);
+      ['byProduct', 'byPlatform', 'byState', 'byBuyer'].forEach(k => Object.values(M[k]).forEach(finTotals));
+      return M;
+    }).sort((a, b) => a.month.localeCompare(b.month));
+  }
+  // header guessing shared by the file pickers
+  const SETTLE_COL_GUESSES = ['final settlement amount', 'bank settlement value (rs.)', 'bank settlement value', 'bank settlement', 'settlement amount', 'settlement value', 'net settlement', 'settled amount', 'net payout', 'net amount'];
+  const GST_COL_GUESSES = ['product gst %', 'gst %', 'gst rate', 'gst percentage'];
+  const ORDER_DATE_GUESSES = ['order date', 'order_date', 'ordered on', 'order placed date', 'date'];
+  const PAY_DATE_GUESSES = ['payment date', 'settlement date', 'settled date', 'payout date', 'payment_date'];
+  const STATE_COL_GUESSES = ['customer state', "customer's delivery state", 'delivery state', 'ship to state', 'shipping state', 'customer_state', 'state'];
+  function guessMoneyCol(headers, list) {
+    const lower = headers.map(h => String(h || '').trim().toLowerCase());
+    for (const c of list) { const i = lower.findIndex(h => h === c); if (i !== -1) return i; }
+    for (const c of list) { const i = lower.findIndex(h => h.includes(c)); if (i !== -1) return i; }
+    return -1;
+  }
+
+  const api = { parseMoney: money, costTimeline, costAt, invoiceMonths, mergeStreams, guessMoneyCol, SETTLE_COL_GUESSES, GST_COL_GUESSES, ORDER_DATE_GUESSES, PAY_DATE_GUESSES, STATE_COL_GUESSES, normalizeState, parseDateCell, buildOldOrders, monthsInRange, sumStates, topWithOther, barChartSvg, hBarChartSvg, inrShort, unitsFmt, STATES };
   global.VPT = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

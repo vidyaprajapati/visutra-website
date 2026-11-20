@@ -22,7 +22,7 @@
     'trashPurchasesTable', 'trashPaymentsTable', 'trashInvoicesTable',
     'stockTable', 'stockMovementsTable', 'dailyStockMovementTable', 'movementsTable', 'suRecent',
     'pgRegisterTable', 'pgItemsTable', 'registerTable', 'itemsTable',
-    'profitMonthsTable', 'profitProductsTable', 'profitStatesTable', 'oldSkuTable', 'ordersTable', 'recentOrdersTable', 'sellersTable', 'offPlatformTable',
+    'spCostTable', 'spMonthsTable', 'spStatesTable', 'spBuyersTable', 'spSkuTable', 'profitMonthsTable', 'profitProductsTable', 'profitStatesTable', 'oldSkuTable', 'ordersTable', 'recentOrdersTable', 'sellersTable', 'offPlatformTable',
     'productCatalogTable', 'mappingsTable', 'unmappedTable', 'packagingTable',
     'dashTable', 'custDashTable', 'ledgerTable'
   ];

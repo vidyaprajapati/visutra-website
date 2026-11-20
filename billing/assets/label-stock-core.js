@@ -650,6 +650,77 @@
     return out;
   }
 
+  /* ---------- Captured order → customer state ----------
+     While labels are read / printed, the customer's STATE is read off each label (extractCustomerState) and kept as one
+     small record per ORDER: users/{uid}/{buyer|seller}OrderCaptures/{packKey} = { marketplace, orderId, state, stateCode, pin, month }.
+     Payment reports carry no customer state, so when one is uploaded the profit engine looks the state up here
+     (state-wise selling / returns / profit). These records are only a staging area: "Clear captured orders" deletes them
+     to free database space, and everything already worked out — month totals, state-wise figures — stays, because it is
+     stored separately in …MonthlyProfit. items: [{ marketplace, packKey, orderId?, text?, cap? }] */
+  const CAPCOL = side => (side === 'buyer' ? 'buyerOrderCaptures' : 'sellerOrderCaptures');
+  async function captureOrders(uid, side, items){
+    const by = new Map();
+    (items || []).forEach(it => {
+      if(!it || !it.packKey || by.has(it.packKey)) return;
+      const cap = it.cap || (it.text && typeof extractCustomerState === 'function' ? extractCustomerState(it.text) : null);
+      if(!cap || !cap.state) return;                                            // no state read → nothing worth storing
+      const orderId = it.orderId || (it.text && typeof shipmentIdFromText === 'function' ? shipmentIdFromText(it.text, it.marketplace) : '') || '';
+      by.set(it.packKey, { marketplace: it.marketplace || '', orderId, state: cap.state, stateCode: cap.stateCode || '', pin: cap.pin || '' });
+    });
+    const keys = [...by.keys()];
+    if(!keys.length) return { written: 0, known: 0 };
+    const col = u(uid).collection(CAPCOL(side)), snaps = await bulkGet(keys.map(k => col.doc(k)));
+    const fresh = keys.filter((k, i) => !(snaps[i].exists && snaps[i].data().state === by.get(k).state));
+    const month = new Date().toISOString().slice(0, 7);
+    for(let i = 0; i < fresh.length; i += 400){
+      const batch = db.batch();
+      fresh.slice(i, i + 400).forEach(k => batch.set(col.doc(k), Object.assign({ month, createdAt: FV().serverTimestamp() }, by.get(k))));
+      await batch.commit();
+    }
+    return { written: fresh.length, known: keys.length - fresh.length };
+  }
+  // orders: [{ marketplace, orderId }] → { packKey: { state, stateCode } } for the ones that were captured
+  async function capturedStates(uid, side, orders){
+    const keys = [...new Set((orders || []).filter(o => o && o.orderId).map(o => packingKey(o.marketplace, String(o.orderId))))];
+    if(!keys.length) return {};
+    const col = u(uid).collection(CAPCOL(side)), snaps = await bulkGet(keys.map(k => col.doc(k))), out = {};
+    keys.forEach((k, i) => { if(snaps[i].exists){ const d = snaps[i].data(); out[k] = { state: d.state, stateCode: d.stateCode || '' }; } });
+    return out;
+  }
+  // Fills `state` on every item that has none, from the captured labels. items: [{ marketplace | platform, orderId, state }] (mutated).
+  async function applyCapturedStates(uid, side, items){
+    const caps = await capturedStates(uid, side, (items || []).filter(x => !x.state).map(x => ({ marketplace: x.marketplace || x.platform, orderId: x.orderId })));
+    let filled = 0;
+    (items || []).forEach(x => {
+      if(x.state || !x.orderId) return;
+      const c = caps[packingKey(x.marketplace || x.platform, String(x.orderId))];
+      if(c && c.state){ x.state = c.state; filled++; }
+    });
+    return filled;
+  }
+  // how many captured orders are stored (stops counting at `max` so a huge pile never makes the page slow)
+  async function captureCount(uid, side, max){
+    max = max || 1000;
+    const snap = await u(uid).collection(CAPCOL(side)).limit(max + 1).get();
+    return { n: Math.min(snap.docs.length, max), more: snap.docs.length > max };
+  }
+  // Deletes captured orders (all, or only those captured BEFORE opts.beforeMonth 'YYYY-MM'). Month totals are never touched.
+  async function clearCaptures(uid, side, opts){
+    opts = opts || {};
+    const col = u(uid).collection(CAPCOL(side));
+    let deleted = 0;
+    for(let round = 0; round < 500; round++){
+      const q = opts.beforeMonth ? col.where('month', '<', opts.beforeMonth).limit(400) : col.limit(400);
+      const snap = await q.get();
+      if(!snap.docs.length) break;
+      const batch = db.batch();
+      snap.docs.forEach(d => batch.delete(col.doc(d.id)));
+      await batch.commit();
+      deleted += snap.docs.length;
+    }
+    return { deleted };
+  }
+
   /* ---------- Reorder suggestions (#7) ----------
      From the last `days` days of movements: average sold per day, days of
      stock left, and how many to order to cover `coverDays` more days.
@@ -710,5 +781,5 @@
     });
   }
 
-  global.VLS = { pkgForPlatform, reconAggregator, reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce, computeProfit, recordProfit, rebuildMonth, enrichStates, unitCosts };
+  global.VLS = { pkgForPlatform, reconAggregator, reconStatusKind, reconStatusRank, collapseReconRows, SELLER_Q, BUYER_Q, today, mapLimit, savePrintRecord, lastPrintRecord, undoPrint, linkReconRows, markReconRows, reorderRows, daysAgo, usagePerItem, reorderTableHtml, logSize, adjustSize, sellerProductOnce, buyerProductOnce, packingDone, packingOnce, queueDocId, queueUnmapped, settleQueued, sellerReturnOnce, computeProfit, recordProfit, rebuildMonth, enrichStates, unitCosts, captureOrders, capturedStates, applyCapturedStates, captureCount, clearCaptures };
 })(window);

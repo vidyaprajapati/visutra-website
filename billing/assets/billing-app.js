@@ -148,6 +148,7 @@ function activateView(viewName){
   if(viewName === 'invoices') loadInvoices();
   if(viewName === 'purchases') loadPurchases();
   if(viewName === 'trash') loadTrash();
+  if(viewName === 'profit') sellerProfitOpen();   // assets/seller-profit.js
   if(viewName === 'gstr1' && !purchasesCache.length) loadPurchases(); // preload so Purchases section has data without visiting Purchases first
 }
 document.querySelectorAll('.nav-link').forEach(link => {
@@ -881,6 +882,10 @@ function renderStockColumnMapUI(){
       return `<div class="box" style="margin-bottom:10px">
         <p style="margin:0;font-size:13px"><span class="badge">${label} — detected automatically</span></p>
         <p style="margin:6px 0 0;font-size:13px;color:var(--muted)">${esc(s.fileName)} — ${esc(s.sheetName)} (${s.rows.length} rows). Status/reason column read automatically — no columns to pick.</p>
+        <div class="grid2" style="margin-top:6px">
+          <div class="field"><label>Money column — what the marketplace paid you (for profit)</label><select id="stockSettle${i}">${spMoneyOptions(s.headers, VPT.guessMoneyCol(s.headers, VPT.SETTLE_COL_GUESSES), 'none — no profit for this file')}</select></div>
+          <div class="field"><label>GST % column (optional)</label><select id="stockGst${i}">${spMoneyOptions(s.headers, VPT.guessMoneyCol(s.headers, VPT.GST_COL_GUESSES), 'none — use the default GST %')}</select></div>
+        </div>
       </div>`;
     }
     const opts = s.headers.map((h, ci) => `<option value="${ci}">${esc(h || ('(column ' + (ci+1) + ')'))}</option>`).join('');
@@ -908,6 +913,15 @@ async function aggregateStockUpload(){
       const mk = s.detected.format === 'meesho' ? 'MEESHO' : 'FLIPKART';
       const { skuIdx, qtyIdx, orderIdx } = s.detected;
       const statusIdx = s.detected.format === 'meesho' ? s.detected.reasonIdx : s.detected.statusIdx;
+      // Money: an order's settlement = the SUM over all its rows (payment row + later return adjustment), taken before the rows are collapsed.
+      const settleEl = document.getElementById('stockSettle' + i), gstEl = document.getElementById('stockGst' + i);
+      const settleIdx = settleEl ? parseInt(settleEl.value, 10) : -1, gstIdx = gstEl ? parseInt(gstEl.value, 10) : -1;
+      const oKey = row => String(row[orderIdx] ?? '').trim() + '|' + String(row[skuIdx] ?? '').trim().toLowerCase();
+      const settleByOrder = new Map();
+      if(settleIdx >= 0 && orderIdx >= 0) s.rows.forEach(row => {
+        if(!String(row[orderIdx] ?? '').trim()) return;
+        settleByOrder.set(oKey(row), (settleByOrder.get(oKey(row)) || 0) + VPT.parseMoney(row[settleIdx]));
+      });
       // Meesho lists some orders twice (payment + later adjustment) — one row per order.
       const rows = mk === 'MEESHO' ? VLS.collapseReconRows(s.rows, orderIdx, statusIdx, skuIdx) : s.rows;
       rows.forEach(row => {
@@ -915,10 +929,13 @@ async function aggregateStockUpload(){
         if(!sku) return;
         const qty = parseFloat(row[qtyIdx]) || 0;
         const orderId = orderIdx >= 0 ? String(row[orderIdx] ?? '').trim() : '';
-        // DELIVERED / EXCHANGED = order sold, CANCELLED = not counted, anything else = returned
+        const money = settleIdx >= 0 && orderId
+          ? { settle: settleByOrder.has(oKey(row)) ? settleByOrder.get(oKey(row)) : VPT.parseMoney(row[settleIdx]),
+              gst: gstIdx >= 0 && String(row[gstIdx] ?? '').trim() !== '' ? VPT.parseMoney(row[gstIdx]) : null } : null;
+        // DELIVERED / EXCHANGED / LOST = order sold, CANCELLED = not counted, RTO / RETURN = returned
         const kind = VLS.reconStatusKind(String(row[statusIdx] ?? '').trim());
-        if(kind === 'sold') A.sold(sku, qty, mk, orderId);
-        else if(kind === 'return') A.ret(sku, qty, mk, orderId);
+        if(kind === 'sold') A.sold(sku, qty, mk, orderId, money);
+        else if(kind === 'return') A.ret(sku, qty, mk, orderId, money);
         else if(kind === 'cancel') A.cancel(sku, qty);
       });
     } else {
@@ -930,7 +947,7 @@ async function aggregateStockUpload(){
       });
     }
   });
-  stockAggregation = await A.finish(currentUser.uid, 'seller');
+  stockAggregation = await A.finish(currentUser.uid, 'seller', { addAllReturns: !!(document.getElementById('reconAddAllReturns') || {}).checked });
 
   renderStockAggregationTable();
 }
@@ -962,7 +979,9 @@ function renderStockAggregationTable(){
 async function applyStockUpload(){
   const period = document.getElementById('stockPeriod').value.trim() || new Date().toISOString().slice(0,7);
   const dateVal = new Date().toISOString().slice(0,10);
-  let applied = 0;
+  let applied = 0, forcedTotal = 0, noCostLines = 0;
+  const profitLines = [];
+  try{ await spEnsureCosts(); }catch(e){ console.warn('product costs unavailable', e); }   // profit needs each product's cost (seller-profit.js)
 
   for(let i = 0; i < stockAggregation.length; i++){
     const row = stockAggregation[i];
@@ -991,7 +1010,26 @@ async function applyStockUpload(){
     // this report all see them as already counted.
     try{ await VLS.markReconRows(currentUser.uid, 'seller', row.linkedRows || [], productId, 'reconciliation'); }
     catch(err){ console.error('Could not mark reconciled orders:', err); }
+    forcedTotal += row.forcedAdd || 0;
+    // profit lines — a product with NO cost yet is left out (not recorded at 0 and then locked in): set its cost, upload again
+    const cost = spCostOf(productId, period + '-28');
+    (row.rows || []).forEach(x => {
+      if(x.money == null) return;
+      if(!(cost.cost > 0)){ noCostLines++; return; }
+      profitLines.push({ key: x.key, qty: x.qty, isReturn: x.isReturn, settle: x.money.settle, gstRate: x.money.gst, mappingId: productId, productName: product.name,
+        marketplace: x.marketplace, sku: x.sku, orderId: x.orderId, costUnit: cost.cost });
+    });
     applied++;
+  }
+
+  // PROFIT (+ return charges, state-wise): one record per order, never twice. The customer state comes from the labels printed earlier.
+  let profitRes = null;
+  if(profitLines.length){
+    try{
+      await VLS.applyCapturedStates(currentUser.uid, 'seller', profitLines.map(l => l));
+      profitRes = await VLS.recordProfit(currentUser.uid, 'seller', period, profitLines,
+        { removeGst: document.getElementById('reconRemoveGst').checked, defaultGst: parseFloat(document.getElementById('reconDefaultGst').value) });
+    }catch(err){ console.error('Could not record profit:', err); }
   }
 
   await loadProducts();
@@ -1003,7 +1041,12 @@ async function applyStockUpload(){
   document.getElementById('stockFiles').value = '';
   stockUploadSheets = [];
   stockAggregation = [];
-  showMsg('stockUploadMsg', `Stock updated for ${applied} product(s).`, true);
+  const notes = [];
+  if(forcedTotal) notes.push(`${forcedTotal} returned / RTO unit(s) added back to stock even though this system had not deducted those orders`);
+  if(profitRes && profitRes.rows.length) notes.push(`profit recorded for ${profitRes.rows.length} order line(s): ₹${fmtMoney(profitRes.totals.profit)} — see Profit & Graphs`);
+  else if(profitRes && profitRes.already) notes.push('profit for these orders was already recorded — not added again');
+  if(noCostLines) notes.push(`${noCostLines} order line(s) were left out of profit because their product has no cost yet — set it in Profit & Graphs → Product costs, then upload the file again (stock is never changed twice)`);
+  showMsg('stockUploadMsg', `Stock updated for ${applied} product(s).` + (notes.length ? ' ' + notes.join('. ') + '.' : ''), true);
 }
 
 /* ---------------- Reorder suggestions from sales speed (shared: label-stock-core.js) ---------------- */
@@ -1064,7 +1107,8 @@ async function processSellerLabelFiles(){
         const text = content.items.map(it => it.str).join(' ');
         const pageHits = extractAllMarketplaceItems(text);
         for(const hit of pageHits){
-          hits.push({ ...hit, key: labelKey(hit.marketplace, hit.sku, text), packKey: packingKey(hit.marketplace, text) });
+          hits.push({ ...hit, key: labelKey(hit.marketplace, hit.sku, text), packKey: packingKey(hit.marketplace, text),
+            orderId: shipmentIdFromText(text, hit.marketplace), cap: extractCustomerState(text) });   // the customer's state is kept for state-wise profit
         }
       }
     }catch(err){
@@ -1086,6 +1130,7 @@ async function processSellerLabelFiles(){
    Unmapped SKUs go to the shared Unmapped Label SKUs list. */
 async function handleSellerLabelHits(hits, fileCount){
   const uid = currentUser.uid;
+  try{ await VLS.captureOrders(uid, 'seller', hits); }catch(e){ console.warn('Customer state not captured:', e); }   // never blocks the labels
   const userRef = db.collection('users').doc(uid);
   let deducted = 0, skipped = 0, packs = 0, stickers = 0;
   const unmapped = [];

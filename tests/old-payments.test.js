@@ -152,3 +152,16 @@ test('empty state: no data yet shows a friendly message, not a broken chart', as
   assert.match(pg.$('chStateSales').innerHTML, /No data in this period yet/);
   assert.match(pg.$('profitStatesTable').textContent, /No data in this period yet/);
 });
+
+test('the graph range follows the newest month when new data arrives (but keeps an earlier "To" you chose)', async () => {
+  await world();
+  const pg = await open();
+  await old(pg, [sheet(PH, [P('111111111', '2026-03-02', 'DELIVERED', 1, 168)], 'mar')]);
+  assert.equal(pg.$('profitTo').value, '2026-03');
+  await old(pg, [sheet(PH, [P('222222222', '2026-04-02', 'DELIVERED', 1, 168)], 'apr')]);
+  assert.equal(pg.$('profitTo').value, '2026-04', 'April is now the end of the range');
+  assert.match(pg.$('chMonthlySales').innerHTML, /Apr 2026 — Units sold: 1/);
+  pg.$('profitTo').value = '2026-03'; pg.w.renderProfitCharts();                    // you deliberately stop at March
+  await old(pg, [sheet(PH, [P('333333333', '2026-05-02', 'DELIVERED', 1, 168)], 'may')]);
+  assert.equal(pg.$('profitTo').value, '2026-03', 'a month you picked on purpose is kept');
+});

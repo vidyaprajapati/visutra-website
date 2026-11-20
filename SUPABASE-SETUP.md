@@ -40,6 +40,8 @@ What it creates:
 - **Redirect URLs** — add both:
   - `https://visutra.in/billing/login.html`
   - `https://visutra.in/billing/reset-password.html`
+  - `https://visutra.in/billing/supplier/dashboard.html`  ← suppliers' email login link (see SUPPLIER-ACCESS-SETUP.md)
+  - `https://visutra.in/billing/supplier/login.html`
 
 ## 3. Send emails from support@visutra.in (10 min) — important
 Supabase's built-in email is for testing only: it sends just a few emails per

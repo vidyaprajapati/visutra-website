@@ -2472,6 +2472,8 @@ async function consumeProductStockForExport(pageIndexOrder){
   const uid = cropperUser.uid;
   if(res.role === 'seller' && !sellerDataLoaded) await loadSellerData();
   const items = collectExportItems(pageIndexOrder);
+  // keep each order's customer state (read from the label text) for state-wise profit — never blocks the print
+  try{ await VLS.captureOrders(uid, res.role === 'seller' ? 'seller' : 'buyer', items); }catch(e){ console.warn('Customer state not captured:', e); }
   // Resolve first (no network), report unmapped SKUs once each.
   const work = [];
   const reportedUnmapped = new Set();

@@ -181,6 +181,15 @@
     <table data-excel-name="Monthly profit"><thead><tr><th>Month</th><th title="Units in orders counted in that month">Units sold</th><th title="Returned / RTO units counted in that month">Returns / RTO</th><th title="Money lost on returned / RTO orders (GST out)">Return charges</th><th>Revenue (ex-GST)</th><th>Cost of goods</th><th>Profit</th><th>Margin</th></tr></thead>
     <tbody id="profitMonthsTable"></tbody></table>
     <div id="profitTotals" class="sub" style="margin-top:6px"></div>
+    <div class="box" id="capBox" style="margin:16px 0">
+      <b>Captured order IDs &amp; states</b> <span id="capCount" class="sub" style="margin-left:6px">checking…</span>
+      <p class="sub" style="margin:6px 0 8px">While you read or print labels, each order's ID and its customer's state are saved, so the state-wise graphs can be filled when you upload the month's report. They are only a working copy: <b>after you have uploaded the month, clear them to free database space.</b> Your monthly profit / loss, state-wise selling and state-wise returns <b>stay</b>. (An order cleared before its report is uploaded will show as “Unknown” state.)</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="capScope" style="width:auto"><option value="all">All captured orders</option><option value="old">Only those captured before this month</option></select>
+        <button class="btn danger" onclick="clearCaptured()">Clear captured order IDs &amp; states</button>
+      </div>
+      <p class="msg" id="capMsg"></p>
+    </div>
 
     <h3 style="font-family:var(--display);font-size:16px;margin:22px 0 4px">Graphs</h3>
     <div class="grid2" style="max-width:520px">
@@ -1066,6 +1075,7 @@ async function applyStockUpload(){
 
   // PROFIT: one record per order line and month (never twice), then the month's totals are rebuilt
   let profitRes = null;
+  try{ await VLS.applyCapturedStates(currentUser.uid, 'buyer', profitLines.map(l => l)); }catch(err){ console.warn('captured states unavailable', err); }   // customer state from the labels printed earlier
   try{ profitRes = await VLS.recordProfit(currentUser.uid, 'buyer', period, profitLines, profitOpts); }
   catch(err){ console.error('Could not record profit:', err); }
   // costs you typed are remembered on the product for next time
@@ -1149,11 +1159,31 @@ async function renderMonthlyProfit(){
   // graph range: oldest → newest, default the last 12 months
   const asc = profitMonths.map(m => m.month).slice().reverse(), opts = asc.map(m => `<option value="${esc(m)}">${esc(monthShort(m))}</option>`).join('');
   const fromEl = document.getElementById('profitFrom'), toEl = document.getElementById('profitTo'), kf = fromEl.value, kt = toEl.value;
+  const prevLast = toEl.options.length ? toEl.options[toEl.options.length - 1].value : '';
   fromEl.innerHTML = opts; toEl.innerHTML = opts;
   fromEl.value = kf && asc.includes(kf) ? kf : (asc[Math.max(0, asc.length - 12)] || '');
-  toEl.value = kt && asc.includes(kt) ? kt : (asc[asc.length - 1] || '');
+  // "To" follows the newest month (new data must show up) unless you picked an earlier month on purpose
+  toEl.value = kt && asc.includes(kt) && kt !== prevLast ? kt : (asc[asc.length - 1] || '');
   renderProfitDetail();
   renderProfitCharts();
+  refreshCaptureCount();
+}
+async function refreshCaptureCount(){
+  try{
+    const c = await VLS.captureCount(currentUser.uid, 'buyer', 1000);
+    document.getElementById('capCount').textContent = c.n ? `${c.more ? '1,000+' : c.n.toLocaleString('en-IN')} order(s) stored` : 'nothing stored';
+  }catch(e){ document.getElementById('capCount').textContent = ''; }
+}
+async function clearCaptured(){
+  const old = document.getElementById('capScope').value === 'old', before = old ? new Date().toISOString().slice(0, 7) : '';
+  const c = await VLS.captureCount(currentUser.uid, 'buyer', 1000);
+  if(!c.n){ showMsg('capMsg', 'There are no captured orders to clear.', true); return; }
+  if(!confirm(`Delete ${c.more ? 'the' : c.n.toLocaleString('en-IN')} captured order ID(s) and state(s)${old ? ' captured before this month' : ''}?\n\nYour monthly profit, state-wise selling and state-wise returns are kept.\nOrders cleared BEFORE their month's report is uploaded will show as "Unknown" state.`)) return;
+  try{
+    const r = await VLS.clearCaptures(currentUser.uid, 'buyer', before ? { beforeMonth: before } : {});
+    showMsg('capMsg', `Cleared ${r.deleted.toLocaleString('en-IN')} captured order(s). Monthly profit and state-wise figures are untouched.`, true);
+  }catch(err){ showMsg('capMsg', 'Could not clear: ' + err.message, false); }
+  refreshCaptureCount();
 }
 function renderProfitDetail(){
   const m = profitMonths.find(x => x.month === document.getElementById('profitMonthSel').value);
@@ -1250,6 +1280,7 @@ async function prepareOld(){
   if(sheets.some(sh => !sh.platform)){ showMsg('oldMsg', 'Choose the platform of every file.', false); return; }
   oldBuilt = VPT.buildOldOrders(sheets, oldOpts());
   oldCostEdits = {}; oldMap = {};
+  try{ await fillOldStatesFromCaptures(); }catch(err){ console.warn('captured states unavailable', err); }
   const bySku = new Map();
   oldBuilt.orders.filter(o => o.kind === 'sold' || o.kind === 'return').forEach(o => {
     const k = o.platform + '|' + o.sku.toLowerCase();
@@ -1264,6 +1295,15 @@ async function prepareOld(){
   }
   document.getElementById('oldPreviewWrap').classList.remove('hidden');
   await renderOldPreview();
+}
+// orders with no state in the files get the customer state read off their label when it was printed
+async function fillOldStatesFromCaptures(){
+  const list = oldBuilt.orders.filter(o => (o.kind === 'sold' || o.kind === 'return') && !o.state);
+  const filled = await VLS.applyCapturedStates(currentUser.uid, 'buyer', list);
+  if(!filled) return;
+  const live = oldBuilt.orders.filter(o => o.kind === 'sold' || o.kind === 'return'), st = oldBuilt.stats;
+  st.noState = live.filter(o => !o.state).length; st.states = new Set(live.filter(o => o.state).map(o => o.state)).size;
+  st.fromLabels = filled;
 }
 function oldCostFor(skuKey){
   if(oldCostEdits[skuKey] != null) return oldCostEdits[skuKey];
@@ -1317,7 +1357,7 @@ async function renderOldPreview(){
       || '<tr><td colspan="8" style="color:var(--muted)">Nothing new to add from these files.</td></tr>'}
     <tr style="font-weight:700;background:var(--head-bg,#FAF6EF)"><td>Total</td><td>${T('n')}</td><td>${T('sold')}</td><td>${T('ret')}</td><td>${inr(T('rc'))}</td><td>${inr(T('rev'))}</td><td>${inr(T('cogs'))}</td><td style="${pcol(T('profit'))}">${inr(T('profit'))}</td></tr></tbody></table>
     <p class="sub" style="margin-top:6px">${st.orders} order(s) in the files: ${st.sold} sold, ${st.returned} returned / RTO, ${st.cancelled} cancelled (ignored).
-      Customer state found for ${st.states} state(s)${st.noState ? `; ${st.noState} order(s) have none (shown as “Unknown”)` : ''}.
+      Customer state found for ${st.states} state(s)${st.fromLabels ? ` (${st.fromLabels} order(s) from the labels you printed)` : ''}${st.noState ? `; ${st.noState} order(s) have none (shown as “Unknown”)` : ''}.
       ${already ? `${already} order line(s) were already counted earlier — they are skipped. ` : ''}${noMoney ? `${noMoney} have no money amount (skipped). ` : ''}${undated ? `<b style="color:var(--paprika-dark)">${undated} order(s) have no date — pick a month in “Month for rows that have no date” above and press Next again.</b> ` : ''}${noKey ? `${noKey} order(s) have an unreadable order number (skipped). ` : ''}${st.noStatus ? `${st.noStatus} row(s) had no status (skipped). ` : ''}
       ${oldSkuRows.some(r => !oldCostFor(r.key)) ? '<b style="color:var(--paprika-dark)">Some products have no cost yet — type it above, otherwise their profit is overstated.</b>' : ''}</p>`;
 }

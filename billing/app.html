@@ -54,6 +54,9 @@
     <a href="#products" class="nav-link" data-view="products">Products</a>
     <a href="#purchase-products" class="nav-link" data-view="purchase-products">Purchase Products</a>
 
+    <div class="sidebar-section-label">Profit</div>
+    <a href="#profit" class="nav-link" data-view="profit">Profit &amp; Graphs</a>
+
     <div class="sidebar-section-label">GST Filing</div>
     <a href="#gstr1" class="nav-link" data-view="gstr1">GSTR-1 Filing (Sales &amp; Purchases)</a>
   </div>
@@ -290,6 +293,12 @@
         <div id="stockColumnMapWrap" class="hidden" style="margin-top:18px">
           <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">Step 1 — Which column is the product, and which is the quantity?</h3>
           <div id="stockColumnMapList"></div>
+      <div class="box" style="margin:12px 0">
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13.5px;cursor:pointer"><input type="checkbox" id="reconAddAllReturns" checked style="width:auto;margin-top:3px">
+          <span><b>Add every Return and RTO back to stock.</b> Each returned / RTO unit goes back on your shelf (once — uploading the same report again never adds it twice), even if this system never deducted that order. A <b>LOST</b> parcel is never added back. Untick for the old rule: only orders this system had already deducted come back.</span></label>
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13.5px;cursor:pointer;margin-top:8px"><input type="checkbox" id="reconRemoveGst" checked style="width:auto;margin-top:3px">
+          <span><b>Profit:</b> pick the money column below and this upload also adds to <b>Profit &amp; Graphs</b> (profit, return charges, state-wise). The marketplace amounts include GST — take it out. GST % when the file has none: <input type="number" id="reconDefaultGst" value="5" min="0" max="40" step="0.5" style="width:70px;display:inline-block;padding:3px 6px"> %</span></label>
+      </div>
           <button class="btn primary" style="margin-top:10px" onclick="aggregateStockUpload()">Next: Match Products</button>
         </div>
 
@@ -701,6 +710,92 @@
     </div>
 
     <!-- GSTR-1 FILING -->
+    <div id="view-profit" class="view hidden">
+      <div class="card">
+        <h2>Profit &amp; Graphs</h2>
+        <p class="sub">Your profit from <b>selling to buyers</b> (your invoices, against what you paid your suppliers) and from <b>selling on e-commerce</b> (Meesho / Flipkart payment files, including return charges) — month by month, state-wise and product-wise. Everything is worked out ex-GST: the GST you collect is not profit, and the GST you pay suppliers comes back as input credit.</p>
+        <p class="msg" id="spMsg"></p>
+      </div>
+
+      <div class="card">
+        <h3 style="font-family:var(--display);font-size:17px;margin:0 0 6px">1. Product costs</h3>
+        <p class="sub">What each product costs you per unit (ex-GST). It is taken from your <b>supplier purchases</b> (the average up to the date of each sale, so a price change only affects later sales). Type a cost to override it; clear the box to go back to the purchase average.</p>
+        <table data-excel-name="Product costs"><thead><tr><th>Product</th><th>Selling price (ex-GST)</th><th>Cost / unit (ex-GST)</th><th>Cost from</th><th>Profit / unit</th><th>Margin</th></tr></thead>
+        <tbody id="spCostTable"></tbody></table>
+      </div>
+
+      <div class="card" id="spEcomCard">
+        <h3 style="font-family:var(--display);font-size:17px;margin:0 0 6px">2. E-commerce sales — upload marketplace payment files</h3>
+        <p class="sub">Upload your Meesho / Flipkart <b>payment</b> files for any month (new or old) and, if you like, the <b>Orders</b> report — it carries each customer's state. This feeds profit only: it does <b>not</b> change your stock and is separate from Monthly Inventory Reconciliation. Every order is counted in its own month and only once, so the same file can be uploaded twice safely.</p>
+        <div class="field"><label>Payment / orders files (.csv, .xlsx, .xls) — select as many as you like</label><input id="spFiles" type="file" multiple accept=".csv,.xlsx,.xls"></div>
+        <button class="btn" onclick="spReadFiles()">Read Files</button>
+        <p class="msg" id="spUploadMsg"></p>
+        <div id="spMapWrap" class="hidden" style="margin-top:14px">
+          <h4 style="margin:0 0 8px">Step 1 — Check the columns</h4>
+          <div id="spMapList"></div>
+          <div class="box" style="margin:12px 0">
+            <div class="grid2">
+              <div class="field"><label>Count each order in the month of its…</label><select id="spBasis"><option value="order">Order date</option><option value="pay">Payment date</option></select></div>
+              <div class="field"><label>Month for rows that have no date</label><input id="spFallback" type="month"></div>
+            </div>
+            <label style="display:flex;gap:8px;align-items:flex-start;font-size:13.5px;cursor:pointer"><input type="checkbox" id="spRemoveGst" checked style="width:auto;margin-top:3px">
+              <span><b>The marketplace amounts include GST — take it out.</b> GST % when the file has none: <input type="number" id="spDefaultGst" value="5" min="0" max="40" step="0.5" style="width:70px;display:inline-block;padding:3px 6px"> %</span></label>
+          </div>
+          <button class="btn primary" onclick="spPrepare()">Next: Match Products &amp; Preview</button>
+        </div>
+        <div id="spPreviewWrap" class="hidden" style="margin-top:16px">
+          <h4 style="margin:0 0 8px">Step 2 — Match each SKU to your product</h4>
+          <table data-excel-name="E-commerce SKUs"><thead><tr><th>SKU</th><th>Platform</th><th>Sold</th><th>Returned / RTO</th><th>Your product</th><th>Cost / unit (ex-GST)</th></tr></thead>
+          <tbody id="spSkuTable"></tbody></table>
+          <h4 style="margin:18px 0 6px">Step 3 — Preview by month, then add to Profit</h4>
+          <div id="spPreviewBox"></div>
+          <button class="btn primary" id="spApplyBtn" style="margin-top:12px" onclick="spApply()">Add to Profit</button>
+          <span class="sub" style="margin-left:8px">Your stock is not changed.</span>
+        </div>
+      </div>
+
+      <div class="card" id="spReportCard">
+        <h3 style="font-family:var(--display);font-size:17px;margin:0 0 6px">3. Monthly profit</h3>
+        <p class="sub"><b>Sales to buyers</b> come straight from your invoices (cancelled invoices left out). <b>E-commerce</b> = what the marketplaces paid you (GST out) − cost of goods; <b>return charges</b> = what a returned / RTO order cost you, already inside that profit.</p>
+        <div id="spCostWarn"></div>
+        <div style="overflow-x:auto"><table data-excel-name="Monthly profit (seller)"><thead><tr><th>Month</th><th>Buyers: units</th><th>Buyers: profit</th><th>E-com: sold</th><th>E-com: returned</th><th>Return charges</th><th>E-com: profit</th><th>Revenue (ex-GST)</th><th>Total profit</th><th>Margin</th></tr></thead>
+        <tbody id="spMonthsTable"></tbody></table></div>
+        <div id="spTotals" class="sub" style="margin-top:6px"></div>
+        <div class="box" id="spCapBox" style="margin:16px 0">
+          <b>Captured order IDs &amp; states</b> <span id="spCapCount" class="sub" style="margin-left:6px">checking…</span>
+          <p class="sub" style="margin:6px 0 8px">While you read or print labels, each order's ID and its customer's state are saved, so the state-wise graphs can be filled when you upload the month's report. They are only a working copy: <b>after you have uploaded the month, clear them to free database space.</b> Your monthly profit / loss, state-wise selling and state-wise returns <b>stay</b>. (An order cleared before its report is uploaded will show as “Unknown” state.)</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <select id="spCapScope" style="width:auto"><option value="all">All captured orders</option><option value="old">Only those captured before this month</option></select>
+            <button class="btn danger" onclick="spClearCaptured()">Clear captured order IDs &amp; states</button>
+          </div>
+          <p class="msg" id="spCapMsg"></p>
+        </div>
+
+        <h3 style="font-family:var(--display);font-size:16px;margin:22px 0 4px">Graphs</h3>
+        <div class="grid2" style="max-width:780px">
+          <div class="field"><label>Show</label><select id="spStream" onchange="spRenderReport()"><option value="all">Everything (buyers + e-commerce)</option><option value="buyers">Sales to buyers only</option><option value="ecommerce">E-commerce only</option></select></div>
+          <div class="field"><label>From month</label><select id="spFrom" onchange="spRenderReport()"></select></div>
+          <div class="field"><label>To month</label><select id="spTo" onchange="spRenderReport()"></select></div>
+        </div>
+        <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Monthly selling</b> <span class="sub">— units sold and returned / RTO</span><div id="spChSales"></div></div>
+        <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Monthly revenue and profit</b> <span class="sub">— a month in the red shows below the line</span><div id="spChMoney"></div></div>
+        <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Profit by source, month by month</b> <span class="sub">— sales to buyers vs e-commerce</span><div id="spChStreams"></div></div>
+        <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Monthly returns</b> <span class="sub">— units returned / RTO (e-commerce)</span><div id="spChReturns"></div></div>
+        <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Monthly return charges</b> <span class="sub">— money lost on returned orders</span><div id="spChCharges"></div></div>
+        <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>State-wise selling</b> <span class="sub">— units sold (revenue beside each bar)</span><div id="spChStateSales"></div></div>
+        <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>State-wise profit</b><div id="spChStateProfit"></div></div>
+        <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>State-wise returns</b> <span class="sub">— units returned / RTO, and the share of that state's orders</span><div id="spChStateReturns"></div></div>
+        <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Profit by product</b><div id="spChProduct"></div></div>
+        <div class="pchart" style="border:1px solid var(--thread);border-radius:12px;padding:12px 14px;margin:10px 0;background:#fff"><b>Top buyers by profit</b> <span class="sub">— your invoices</span><div id="spChBuyers"></div></div>
+        <div id="spStateHint" class="sub"></div>
+        <table data-excel-name="State-wise sales (seller)" style="margin-top:8px"><thead><tr><th>State</th><th>Units sold</th><th>Returns / RTO</th><th>Return rate</th><th>Return charges</th><th>Revenue (ex-GST)</th><th>Profit</th><th>Margin</th></tr></thead>
+        <tbody id="spStatesTable"></tbody></table>
+        <h3 style="font-family:var(--display);font-size:16px;margin:20px 0 6px">Profit by buyer <span class="sub">(your invoices)</span></h3>
+        <table data-excel-name="Profit by buyer"><thead><tr><th>Buyer</th><th>Units</th><th>Revenue (ex-GST)</th><th>Cost of goods</th><th>Profit</th><th>Margin</th></tr></thead>
+        <tbody id="spBuyersTable"></tbody></table>
+      </div>
+    </div>
+
     <div id="view-gstr1" class="view hidden">
       <div class="card">
         <h2>GST Filing — Sales &amp; Purchases</h2>
@@ -888,6 +983,8 @@
 <script src="assets/stock-charts.js"></script>
 <script src="assets/gst-returns.js"></script>
 <script src="assets/billing-app.js"></script>
+<script src="assets/profit-tools.js"></script>
+<script src="assets/seller-profit.js"></script>
 <script src="assets/android-download.js"></script>
 <script src="assets/vt-excel.js"></script>
 </body>

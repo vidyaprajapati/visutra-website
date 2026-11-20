@@ -273,3 +273,72 @@ function suggestBySku(sku, candidates){
   if(scored[1] && scored[0].score - scored[1].score < 0.05) return null; // too close to call
   return scored[0];
 }
+
+/* ---------------- Customer STATE / PIN from a label page ----------------
+   A shipping label or invoice page carries TWO addresses — the customer's ("Ship To", "Customer Address",
+   "Shipping Address") and the seller's ("If undelivered, return to", "Sold By", "Ship From"). Only the customer's
+   state is wanted, so the PIN is chosen by the nearest address heading in front of it, never "the first PIN on the page".
+   Order of trust:  1. "Place of Supply: <state>" (an invoice's own statement of the customer's state)
+                    2. a state NAME written just before the customer's PIN
+                    3. the PIN's first digits, for the prefixes that belong to one state only (110xxx = Delhi …)
+   Returns { state, stateCode, pin, via }  — state is '' when it cannot be told (never a guess). */
+const LABEL_STATES = [['01','Jammu and Kashmir'],['02','Himachal Pradesh'],['03','Punjab'],['04','Chandigarh'],['05','Uttarakhand'],['06','Haryana'],['07','Delhi'],
+  ['08','Rajasthan'],['09','Uttar Pradesh'],['10','Bihar'],['11','Sikkim'],['12','Arunachal Pradesh'],['13','Nagaland'],['14','Manipur'],['15','Mizoram'],
+  ['16','Tripura'],['17','Meghalaya'],['18','Assam'],['19','West Bengal'],['20','Jharkhand'],['21','Odisha'],['22','Chhattisgarh'],['23','Madhya Pradesh'],
+  ['24','Gujarat'],['26','Dadra and Nagar Haveli and Daman and Diu'],['27','Maharashtra'],['29','Karnataka'],['30','Goa'],['31','Lakshadweep'],['32','Kerala'],
+  ['33','Tamil Nadu'],['34','Puducherry'],['35','Andaman and Nicobar Islands'],['36','Telangana'],['37','Andhra Pradesh'],['38','Ladakh']];
+const LABEL_STATE_ALIASES = [['orissa','Odisha'],['pondicherry','Puducherry'],['uttaranchal','Uttarakhand'],['nct of delhi','Delhi'],['new delhi','Delhi'],
+  ['chattisgarh','Chhattisgarh'],['chhatisgarh','Chhattisgarh'],['telengana','Telangana'],['dadra and nagar haveli','Dadra and Nagar Haveli and Daman and Diu'],
+  ['daman and diu','Dadra and Nagar Haveli and Daman and Diu'],['andaman and nicobar','Andaman and Nicobar Islands'],['jammu kashmir','Jammu and Kashmir']];
+// PIN prefixes that belong to exactly ONE state (the rest — e.g. 20–28 UP/Uttarakhand, 80–85 Bihar/Jharkhand — need the name)
+const LABEL_PIN_STATE = { '11': 'Delhi', '12': 'Haryana', '13': 'Haryana', '14': 'Punjab', '15': 'Punjab', '17': 'Himachal Pradesh', '30': 'Rajasthan', '31': 'Rajasthan',
+  '32': 'Rajasthan', '33': 'Rajasthan', '34': 'Rajasthan', '36': 'Gujarat', '37': 'Gujarat', '38': 'Gujarat', '39': 'Gujarat', '41': 'Maharashtra', '42': 'Maharashtra',
+  '43': 'Maharashtra', '44': 'Maharashtra', '45': 'Madhya Pradesh', '46': 'Madhya Pradesh', '47': 'Madhya Pradesh', '48': 'Madhya Pradesh', '49': 'Chhattisgarh',
+  '56': 'Karnataka', '57': 'Karnataka', '58': 'Karnataka', '59': 'Karnataka', '60': 'Tamil Nadu', '61': 'Tamil Nadu', '62': 'Tamil Nadu', '63': 'Tamil Nadu',
+  '64': 'Tamil Nadu', '67': 'Kerala', '68': 'Kerala', '69': 'Kerala', '75': 'Odisha', '76': 'Odisha', '77': 'Odisha', '78': 'Assam' };
+function labelStateCode(name){ const r = LABEL_STATES.find(s => s[1] === name); return r ? r[0] : ''; }
+function _labelNorm(s){ return ' ' + String(s || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim() + ' '; }
+// every state NAME in `norm`, with where it starts (longest names first, so "Dadra and Nagar Haveli and Daman and Diu" beats "Daman and Diu")
+function _labelStateHits(norm){
+  const needles = LABEL_STATES.map(s => [_labelNorm(s[1]).trim(), s[1]]).concat(LABEL_STATE_ALIASES.map(a => [_labelNorm(a[0]).trim(), a[1]]))
+    .sort((a, b) => b[0].length - a[0].length);
+  const hits = [], taken = [];
+  needles.forEach(([n, canon]) => {
+    let from = 0, i;
+    while((i = norm.indexOf(' ' + n + ' ', from)) !== -1){
+      const start = i + 1, end = start + n.length;
+      if(!taken.some(t => start < t[1] && end > t[0])){ hits.push({ pos: start, end, state: canon }); taken.push([start, end]); }
+      from = i + 1;
+    }
+  });
+  return hits.sort((a, b) => a.pos - b.pos);
+}
+function extractCustomerState(text){
+  const norm = _labelNorm(text), none = { state: '', stateCode: '', pin: '', via: '' };
+  if(norm.trim().length < 20) return none;
+  const done = (state, pin, via) => ({ state, stateCode: labelStateCode(state), pin: pin || '', via });
+  // PINs: six digits, first digit 1–8, not inside a longer number (order IDs, phone numbers, GSTINs)
+  const pins = []; let m; const rePin = /(?:^| )([1-8]\d{5})(?= |$)/g;
+  while((m = rePin.exec(norm)) !== null) pins.push({ pin: m[1], pos: m.index + (m[0].length - m[1].length) });
+  const hits = _labelStateHits(norm);
+  // nearest address heading in front of a position
+  const lastIdx = (re, before) => { let best = -1, x; const r = new RegExp(re.source, 'g'); const part = norm.slice(Math.max(0, before - 450), before);
+    while((x = r.exec(part)) !== null) best = Math.max(0, before - 450) + x.index; return best; };
+  const CUST = /(customer address|shipping address|ship to|shipto|deliver to|delivery address|consignee|bill to|billing address|buyer address)/;
+  const SELL = /(return address|return to|if undelivered|sold by|ship from|shipped from|pickup address|seller address|registered address|from address)/;
+  const customerPin = pins.find(p => { const c = lastIdx(CUST, p.pos), s = lastIdx(SELL, p.pos); return c !== -1 && c > s; })
+    || pins.find(p => lastIdx(SELL, p.pos) === -1) || null;
+  // 1. an invoice's own "Place of Supply" line
+  const ps = norm.indexOf(' place of supply ');
+  if(ps !== -1){
+    const win = norm.slice(ps + 17, ps + 17 + 55), h = _labelStateHits(' ' + win.trim() + ' ')[0];
+    if(h) return done(h.state, customerPin && customerPin.pin, 'supply');
+  }
+  if(!customerPin) return none;
+  // 2. the state NAME nearest in front of the customer's PIN (inside that address block)
+  const near = hits.filter(h => h.end <= customerPin.pos + 1 && customerPin.pos - h.end <= 140 && !(lastIdx(SELL, h.pos) > lastIdx(CUST, h.pos)));
+  if(near.length) return done(near[near.length - 1].state, customerPin.pin, 'name');
+  // 3. the PIN's own prefix, where it belongs to a single state
+  const st = LABEL_PIN_STATE[customerPin.pin.slice(0, 2)];
+  return st ? done(st, customerPin.pin, 'pin') : { state: '', stateCode: '', pin: customerPin.pin, via: '' };
+}
