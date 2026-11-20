@@ -87,3 +87,7 @@ No Supabase step (new data lives under your own account).
 - Seller reconciliation: pick the money column and the upload also records profit; a product with no cost yet is left out (set its cost, upload again — stock is never changed twice).
 - Files: billing/assets/label-sku-extract.js, label-stock-core.js, profit-tools.js, seller-profit.js, billing-app.js, billing/app.html, billing/buyer/stock.html,
   billing/buyer/label-order.html, **tools/label-cropper.html**, tests/order-capture.test.js, tests/label-state.test.js.
+
+## ADMIN FIX (latest)
+Supabase SQL: run schema.sql → supplier-access.sql → admin-setup.sql (edit your email first).
+GitHub: admin.html, ADMIN-SETUP.md, billing/admin-approvals.html.

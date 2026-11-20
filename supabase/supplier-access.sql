@@ -41,16 +41,17 @@ revoke execute on function public.vt_is_supplier_email(text) from public, anon, 
 -- ---------------------------------------------------------------------
 create or replace function public.vt_new_signup() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare m jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); s jsonb; auto boolean;
+declare m jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); s jsonb; auto boolean; adm boolean;
 begin
   s := coalesce(m->'vt_signup', '{}'::jsonb);
-  auto := public.vt_is_supplier_email(new.email);
+  adm := exists (select 1 from public.store_admins where lower(email) = lower(new.email));
+  auto := adm or public.vt_is_supplier_email(new.email);
   insert into public.account_approvals(uid, email, name, business_type, mobile, username, status, decided_at, decided_by)
   values (new.id, new.email, coalesce(s->>'fullName', m->>'full_name'),
           coalesce(s->>'businessType', case when auto then 'Supplier' end), s->>'mobileNumber', s->>'username',
           case when auto then 'APPROVED' else 'PENDING' end,
           case when auto then now() end,
-          case when auto then 'auto:supplier-invite' end)
+          case when adm then 'auto:admin' when auto then 'auto:supplier-invite' end)
   on conflict (uid) do nothing;
   return new;
 end $$;

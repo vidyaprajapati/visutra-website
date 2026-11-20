@@ -41,6 +41,12 @@
       <div id="apList"><p class="sub">Loading…</p></div>
       <p class="msg" id="apMsg"></p>
     </div>
+    <div class="card" id="adminBox" style="display:none">
+      <h2>Admins</h2>
+      <p class="sub">These emails can approve accounts and edit shop products. They sign in normally at the login page. <a href="../admin.html">Open product admin →</a></p>
+      <div id="adList"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><input id="adNew" type="email" placeholder="new-admin@email.com" style="flex:1;min-width:220px"><button class="btn" id="adAdd" type="button">Add admin</button></div>
+    </div>
   </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -64,6 +70,7 @@ async function loadApprovals(){
     return;
   }
   AP.rows = data || [];
+  loadAdmins();
   if(AP.hl){ const r = AP.rows.find(x => x.uid === AP.hl); if(r) AP.filter = r.status; }
   render();
 }
@@ -84,6 +91,26 @@ function render(){
     </div>`).join('') : '<p class="sub">Nothing here.</p>';
   const hl = AP.hl && document.getElementById('ap-' + AP.hl); if(hl && hl.scrollIntoView) hl.scrollIntoView({ block: 'center' });
 }
+async function loadAdmins(){
+  const { data, error } = await firebase.supabase().rpc('vt_admin_list');
+  if(error) return;   // schema without admin functions yet — the box stays hidden
+  document.getElementById('adminBox').style.display = '';
+  document.getElementById('adList').innerHTML = (data || []).map(e =>
+    `<div class="ap-card"><div class="who"><b>${esc(e)}</b></div><div class="ap-actions"><button class="btn btn-no" type="button" onclick="removeAdmin('${esc(e)}')">Remove</button></div></div>`).join('');
+}
+async function removeAdmin(e){
+  if(!confirm('Remove ' + e + ' as admin?')) return;
+  const { error } = await firebase.supabase().rpc('vt_admin_remove', { p_email: e });
+  if(error){ showMsg(error.message.replace(/^.*VT_[A-Z_]+:\s*/, ''), false); return; }
+  showMsg(e + ' is no longer an admin.', true); loadAdmins();
+}
+document.addEventListener('click', async function(ev){
+  if(ev.target.id !== 'adAdd') return;
+  const v = document.getElementById('adNew').value.trim(); if(!v) return;
+  const { error } = await firebase.supabase().rpc('vt_admin_add', { p_email: v });
+  if(error){ showMsg('Could not add: ' + error.message, false); return; }
+  document.getElementById('adNew').value = ''; showMsg(v + ' is now an admin (they must sign up / sign in with that email).', true); loadAdmins(); loadApprovals();
+});
 async function decide(uid, status){
   const r = AP.rows.find(x => x.uid === uid); if(!r) return;
   if(status === 'REJECTED' && !confirm('Reject ' + (r.name || r.email) + '? They won\'t be able to sign in.')) return;

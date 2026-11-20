@@ -93,16 +93,17 @@ revoke execute on function public.vt_is_supplier_email(text) from public, anon, 
 
 create or replace function public.vt_new_signup() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare m jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); s jsonb; auto boolean;
+declare m jsonb := coalesce(new.raw_user_meta_data, '{}'::jsonb); s jsonb; auto boolean; adm boolean;
 begin
   s := coalesce(m->'vt_signup', '{}'::jsonb);
-  auto := public.vt_is_supplier_email(new.email);
+  adm := exists (select 1 from public.store_admins where lower(email) = lower(new.email));
+  auto := adm or public.vt_is_supplier_email(new.email);
   insert into public.account_approvals(uid, email, name, business_type, mobile, username, status, decided_at, decided_by)
   values (new.id, new.email, coalesce(s->>'fullName', m->>'full_name'),
           coalesce(s->>'businessType', case when auto then 'Supplier' end), s->>'mobileNumber', s->>'username',
           case when auto then 'APPROVED' else 'PENDING' end,
           case when auto then now() end,
-          case when auto then 'auto:supplier-invite' end)
+          case when adm then 'auto:admin' when auto then 'auto:supplier-invite' end)
   on conflict (uid) do nothing;
   return new;
 end $$;
@@ -872,7 +873,8 @@ $$;
 -- account approvals: status for the signed-in person; list / decide for admins
 create or replace function public.vt_my_account_status() returns text
 language sql stable security definer set search_path = public as $$
-  select coalesce((select status from public.account_approvals where uid = auth.uid()), 'APPROVED')
+  select case when public.vt_is_store_admin() then 'APPROVED'
+              else coalesce((select status from public.account_approvals where uid = auth.uid()), 'APPROVED') end
 $$;
 create or replace function public.vt_account_approvals() returns setof public.account_approvals
 language plpgsql stable security definer set search_path = public as $$
@@ -899,6 +901,34 @@ grant execute on function public.vt_my_account_status() to authenticated;
 grant execute on function public.vt_account_approvals() to authenticated;
 grant execute on function public.vt_set_account_status(uuid, text) to authenticated;
 grant execute on function public.vt_pending_signups() to authenticated;
+
+-- admin list / add / remove (admins only; you can't remove the last admin)
+create or replace function public.vt_admin_list() returns setof text
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.vt_is_store_admin() then raise exception 'VT_DENIED: admins only'; end if;
+  return query select email from public.store_admins order by email;
+end $$;
+create or replace function public.vt_admin_add(p_email text) returns void
+language plpgsql security definer set search_path = public as $$
+declare e text := lower(btrim(coalesce(p_email, '')));
+begin
+  if not public.vt_is_store_admin() then raise exception 'VT_DENIED: admins only'; end if;
+  if e !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'VT_BAD_EMAIL'; end if;
+  insert into public.store_admins(email) values (e) on conflict do nothing;
+  update public.account_approvals set status = 'APPROVED', decided_at = now(), decided_by = auth.jwt()->>'email'
+   where lower(email) = e and status <> 'APPROVED';
+end $$;
+create or replace function public.vt_admin_remove(p_email text) returns void
+language plpgsql security definer set search_path = public as $$
+declare e text := lower(btrim(coalesce(p_email, '')));
+begin
+  if not public.vt_is_store_admin() then raise exception 'VT_DENIED: admins only'; end if;
+  if (select count(*) from public.store_admins) <= 1 then raise exception 'VT_LAST_ADMIN: keep at least one admin'; end if;
+  delete from public.store_admins where lower(email) = e;
+end $$;
+revoke execute on function public.vt_admin_list(), public.vt_admin_add(text), public.vt_admin_remove(text) from public, anon;
+grant execute on function public.vt_admin_list(), public.vt_admin_add(text), public.vt_admin_remove(text) to authenticated;
 
 drop policy if exists store_products_public on public.store_products;
 create policy store_products_public on public.store_products for select to anon, authenticated
