@@ -12,12 +12,7 @@ insert into public.store_admins(email) values (lower('support@visutra.in')) on c
 update public.account_approvals set status = 'APPROVED', decided_at = now(), decided_by = 'auto:admin'
  where lower(email) in (select lower(email) from public.store_admins) and status <> 'APPROVED';
 
--- admins are always treated as approved
-create or replace function public.vt_my_account_status() returns text
-language sql stable security definer set search_path = public as $$
-  select case when public.vt_is_store_admin() then 'APPROVED'
-              else coalesce((select status from public.account_approvals where uid = auth.uid()), 'APPROVED') end
-$$;
+-- (admins are always treated as approved by schema.sql — nothing to do here)
 
 -- admin list / add / remove (admins only; you can't remove the last admin)
 create or replace function public.vt_admin_list() returns setof text

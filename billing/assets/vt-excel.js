@@ -44,8 +44,13 @@
   }
   function toNumber(s) {
     if (typeof s !== 'string') return s;
-    const t = s.replace(/[₹,\s]/g, '').replace(/^[−–]/, '-');
-    return /^-?\d+(\.\d+)?$/.test(t) && t.length < 16 ? Number(t) : s;
+    // Only real amounts become numbers: "₹1,234.50", "1,23,456", "−3", "42".
+    // Lists such as "4, 5" or "3, 8, 14" (page numbers) must stay text — they
+    // used to be glued into one huge number (45, 38142531406467 …).
+    const t = s.trim().replace(/^₹\s*/, '').replace(/^[−–]/, '-');
+    if (!/^-?(\d+|\d{1,3}(,\d{2,3})+)(\.\d+)?$/.test(t)) return s;
+    const n = t.replace(/,/g, '');
+    return n.length < 16 ? Number(n) : s;
   }
   function isActionColumn(headerText, rows, i) {
     if (headerText) return false;
@@ -89,6 +94,15 @@
       const wb = XLSX.utils.book_new();
       const name = tableName(table);
       XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+      // Optional extra sheets a page attaches to a table (table.__vtExtraSheets)
+      if (typeof table.__vtExtraSheets === 'function') {
+        table.__vtExtraSheets().forEach(sh => {
+          if (!sh || !sh.aoa || sh.aoa.length < 2) return;
+          const w2 = XLSX.utils.aoa_to_sheet(sh.aoa);
+          w2['!cols'] = sh.aoa[0].map((_, i) => ({ wch: Math.min(48, Math.max(8, ...sh.aoa.map(r => String(r[i] == null ? '' : r[i]).length + 2))) }));
+          XLSX.utils.book_append_sheet(wb, w2, String(sh.name).slice(0, 31));
+        });
+      }
       XLSX.writeFile(wb, `VISUTRA - ${name} - ${new Date().toISOString().slice(0, 10)}.xlsx`);
     } catch (e) {
       alert('Could not create the Excel file: ' + e.message);

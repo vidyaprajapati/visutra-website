@@ -91,3 +91,6 @@ No Supabase step (new data lives under your own account).
 ## ADMIN FIX (latest)
 Supabase SQL: run schema.sql → supplier-access.sql → admin-setup.sql (edit your email first).
 GitHub: admin.html, ADMIN-SETUP.md, billing/admin-approvals.html.
+
+## LABEL CROPPER EXCEL — courier sheet (latest)
+GitHub: tools/label-cropper.html, billing/assets/vt-excel.js (no Supabase change).
