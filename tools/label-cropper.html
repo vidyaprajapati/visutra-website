@@ -389,6 +389,26 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         <p class="vlc-help" style="margin-top:8px">Flipkart prints the SKU in a small "SKU ID | Description" table on the label (and again on the tax invoice, next to "IMEI/SrNo"). With this on, that SKU and Qty are read off and reprinted in bigger, clearer text at the bottom of the cropped label — e.g. "SKU: VST-WA-FA30-6_7.5 x1".</p>
       </div>
 
+      <div class="vlc-field" id="vlcTextPanel" style="border-top:1px solid var(--line);padding-top:12px">
+        <label style="font-weight:600;display:block;margin-bottom:6px">Text on the label — position &amp; extra text <span class="vlc-help" style="font-weight:400">(remembered separately for each platform)</span></label>
+        <div style="font-size:12.5px;font-weight:600;margin:6px 0 4px">SKU &amp; Qty text <span class="vlc-help" style="font-weight:400">(shown when "print SKU &amp; Qty" above is on)</span></div>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+          <label style="font-size:12px">Place at<select id="vlcSkuPos" onchange="onSettingChange()"><option value="bottom">Bottom</option><option value="top">Top</option></select></label>
+          <label style="font-size:12px">Align<select id="vlcSkuAlign" onchange="onSettingChange()"><option value="center">Centre</option><option value="left">Left</option><option value="right">Right</option></select></label>
+          <label style="font-size:12px">Move in from the edge <b id="valSkuOffset">0%</b><input type="range" id="vlcSkuOffset" min="0" max="40" step="0.5" value="0" oninput="onTextSettingInput()"></label>
+          <label style="font-size:12px">Size <b id="valSkuSize">Auto</b><input type="range" id="vlcSkuSize" min="0" max="24" step="1" value="0" oninput="onTextSettingInput()"></label>
+        </div>
+        <div style="font-size:12.5px;font-weight:600;margin:12px 0 4px">Extra text <span class="vlc-help" style="font-weight:400">e.g. "Thank you for your purchase!" — printed on every label. Leave empty for none.</span></div>
+        <textarea id="vlcExtraText" rows="2" maxlength="160" placeholder="Thank you for your purchase!&#10;Please share a 5-star review" oninput="onSettingChange()" style="width:100%"></textarea>
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:6px">
+          <label style="font-size:12px">Place at<select id="vlcExtraPos" onchange="onSettingChange()"><option value="top">Top</option><option value="bottom">Bottom</option></select></label>
+          <label style="font-size:12px">Align<select id="vlcExtraAlign" onchange="onSettingChange()"><option value="center">Centre</option><option value="left">Left</option><option value="right">Right</option></select></label>
+          <label style="font-size:12px">Move in from the edge <b id="valExtraOffset">0%</b><input type="range" id="vlcExtraOffset" min="0" max="40" step="0.5" value="0" oninput="onTextSettingInput()"></label>
+          <label style="font-size:12px">Size <b id="valExtraSize">Auto</b><input type="range" id="vlcExtraSize" min="0" max="24" step="1" value="0" oninput="onTextSettingInput()"></label>
+        </div>
+        <p class="vlc-help" style="margin-top:8px">Distance is measured from the label's edge as a share of its height. Use English letters, numbers and simple symbols (₹ prints as "Rs."). If two texts sit at the same place they will overlap — move one of them. A line too long for the label shrinks to fit.</p>
+      </div>
+
       <div id="vlcSendGateWrap" style="display:none;margin-bottom:10px">
         <button class="vlc-btn" style="width:100%" onclick="sendToLabelOrder()">Send to Label-Based Auto Order →</button>
         <p id="vlcSendGateNote" style="display:none;font-size:12px;color:#9E3608;margin:8px 0 0;font-weight:600">⚠ New file — send it above first. The button below unlocks right after (or automatically, if this exact file was already sent before).</p>
@@ -418,7 +438,9 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
       <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Marketplace</th>
       <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">SKU</th>
       <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">Total Qty</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)"></th>
     </tr></thead><tbody id="vlcSkuSummaryTable"></tbody></table>
+    <p class="vlc-help" style="margin:8px 0 0">Wrong SKU read from a label? Press <b>Change SKU</b> and pick the right one from your master — it is used for the printed text, the stock, your order and the Excel, and remembered next time.</p>
     <p id="vlcSkuSummarySellerNote" style="display:none;font-size:12.5px;color:var(--ink-soft,#6B6255);margin:12px 0 0">Printing as <b>Seller</b> — mapped SKUs deduct from your product stock (plus packaging &amp; label stock) the moment you crop &amp; download. Map any new SKU in the Stock box below.</p>
     <p id="vlcSkuSummaryBuyerNote" style="font-size:12.5px;color:var(--ink-soft,#6B6255);margin:12px 0 0">This list shows regardless of whether "print SKU on label" is turned on above — it's just what was read off the file. Ready to turn these into an order?
       <button class="vlc-btn" style="display:inline-block;width:auto;padding:8px 16px;margin-left:4px" onclick="sendToLabelOrder()">Send to Label-Based Auto Order →</button>
@@ -535,6 +557,7 @@ firebase.auth().onAuthStateChanged(async user => {
   try{
     const snap = await db.collection('users').doc(user.uid).get();
     buyerData = (snap.exists && snap.data()) || {};
+    loadSkuFixes();
     await loadMappings();
     await loadPackaging();
     await loadPackagingSizes();
@@ -1368,7 +1391,7 @@ function renderCourierPanel(){
   // Build this page's group key from whichever filter(s) are on. With both on,
   // the key is "Courier — SKU" so sorting it naturally sorts courier first, SKU second.
   pageGroups = pageCouriers.map((c, i) => {
-    const s = pageSkus[i];
+    const s = fixedSku('MEESHO', pageSkus[i]);
     if(groupByCourier && groupBySku) return `${c} — ${s}`;
     return groupByCourier ? c : s;
   });
@@ -1498,9 +1521,11 @@ function getDetectedByPage(){
   }
   // Shipment-based duplicate keys (see label-sku-extract.js): key = this
   // product line on this shipment, packKey = this shipment.
+  // (the duplicate key is built from the SKU as READ, so correcting a SKU later never makes a printed label count twice)
   Object.values(out).forEach(list => list.forEach(it => {
     it.key = labelKey(it.marketplace, it.sku, it.text);
     it.packKey = packingKey(it.marketplace, it.text);
+    it.rawSku = it.sku; it.sku = fixedSku(it.marketplace, it.sku);
   }));
   return out;
 }
@@ -1565,6 +1590,7 @@ function applyPreset(p){
   document.getElementById('vlcMeeshoSkuStampMode').checked = stored ? !!stored.meeshoSkuStampMode : false;
   document.getElementById('vlcAmazonSkuMode').checked = stored ? (stored.amazonSkuMode !== false) : true;
   document.getElementById('vlcFlipkartSkuStampMode').checked = stored ? !!stored.flipkartSkuStampMode : false;
+  applyTextSettings(stored);
   setMode(preset.mode || 'single');
   updateLabelStockHint();
   updateLabels();
@@ -1667,7 +1693,8 @@ function getAllSettings(){
     groupBySku: document.getElementById('vlcGroupBySku') ? document.getElementById('vlcGroupBySku').checked : false,
     meeshoSkuStampMode: document.getElementById('vlcMeeshoSkuStampMode') ? document.getElementById('vlcMeeshoSkuStampMode').checked : false,
     amazonSkuMode: document.getElementById('vlcAmazonSkuMode') ? document.getElementById('vlcAmazonSkuMode').checked : true,
-    flipkartSkuStampMode: document.getElementById('vlcFlipkartSkuStampMode') ? document.getElementById('vlcFlipkartSkuStampMode').checked : false
+    flipkartSkuStampMode: document.getElementById('vlcFlipkartSkuStampMode') ? document.getElementById('vlcFlipkartSkuStampMode').checked : false,
+    ...getTextSettings()
   };
 }
 function getCropValues(){
@@ -1827,6 +1854,104 @@ function applyDownloadGate(){
   wrap.style.display = 'block';
   note.style.display = alreadySent ? 'none' : 'block';
 }
+/* ---------------- Correct a wrongly-read SKU (from your master) ----------------
+   skuFixes: 'MARKETPLACE|detected sku (lower-case)' → the SKU you chose. Remembered in this browser per user. */
+let skuFixes = {};
+const skuFixKey = (m, sku) => String(m || '').toUpperCase() + '|' + String(sku == null ? '' : sku).trim().toLowerCase();
+const skuFixStore = () => 'vlc_skufix_' + ((cropperUser && cropperUser.uid) || 'anon');
+function fixedSku(marketplace, sku){ const f = skuFixes[skuFixKey(marketplace, sku)]; return f || sku; }
+function loadSkuFixes(){ try{ skuFixes = JSON.parse(localStorage.getItem(skuFixStore()) || '{}') || {}; }catch(e){ skuFixes = {}; } }
+function saveSkuFixes(){ try{ localStorage.setItem(skuFixStore(), JSON.stringify(skuFixes)); }catch(e){} }
+// every SKU in your master (Buyer SKU Master, or Billing's SKU mappings + products for sellers), with its product name
+function masterSkuOptions(){
+  const out = new Map(), add = (sku, name) => { sku = String(sku || '').trim(); if(sku && !out.has(sku.toLowerCase())) out.set(sku.toLowerCase(), { sku, name: name || '' }); };
+  if(getRole() === 'seller'){
+    sellerSkuMappingsCache.forEach(m => { const p = sellerProductsCache.find(x => x.id === m.productId); add(m.rawKey, p ? p.name : m.productName); });
+    sellerProductsCache.forEach(p => add(p.sku, p.name));
+  } else {
+    mappingsCache.forEach(m => [m.amazonSku, m.meeshoSku, m.flipkartSku, m.allSku].forEach(list => splitSkuList(list).forEach(k => add(k, m.productName))));
+  }
+  return [...out.values()].sort((a, b) => a.sku.localeCompare(b.sku));
+}
+function openSkuFix(i){
+  const r = lastDetectedRows[i]; if(!r) return;
+  closeSkuFix();
+  const raw = r.rawSku || r.sku, opts = masterSkuOptions();
+  const box = document.createElement('div'); box.id = 'vlcSkuFixBox';
+  box.style.cssText = 'position:fixed;inset:0;background:rgba(28,25,23,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  box.innerHTML = `<div style="background:#fff;border-radius:12px;max-width:460px;width:100%;padding:18px 20px;box-shadow:0 12px 40px rgba(0,0,0,.3)">
+    <h3 style="margin:0 0 6px;font-size:16px">Change SKU</h3>
+    <p class="vlc-help" style="margin:0 0 10px">Read from the label: <b style="font-family:monospace">${escapeHtml(raw)}</b> (${escapeHtml(r.marketplace)}, ${r.pages.length} label${r.pages.length === 1 ? '' : 's'}). Pick the right SKU from your master, or type one.</p>
+    <input id="vlcSkuFixInput" list="vlcSkuFixList" value="${escapeAttr(r.sku !== raw ? r.sku : '')}" placeholder="Start typing to search your master SKUs…" style="width:100%;padding:8px 10px;border:1.5px solid var(--ink);border-radius:8px;font-family:monospace">
+    <datalist id="vlcSkuFixList">${opts.map(o => `<option value="${escapeAttr(o.sku)}">${escapeHtml(o.name)}</option>`).join('')}</datalist>
+    <p class="vlc-help" id="vlcSkuFixNote" style="margin:8px 0 0">${opts.length ? opts.length + ' SKU(s) in your master.' : 'Your master has no SKUs yet — you can still type one.'}</p>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+      <button class="vlc-btn accent" type="button" style="width:auto;padding:8px 16px" onclick="saveSkuFix(${i})">Use this SKU</button>
+      <button class="vlc-btn" type="button" style="width:auto;padding:8px 16px" onclick="resetSkuFix(${i})">Back to detected</button>
+      <button class="vlc-btn" type="button" style="width:auto;padding:8px 16px" onclick="closeSkuFix()">Cancel</button>
+    </div></div>`;
+  document.body.appendChild(box);
+  const inp = document.getElementById('vlcSkuFixInput'); if(inp) inp.focus();
+}
+function closeSkuFix(){ const b = document.getElementById('vlcSkuFixBox'); if(b) b.remove(); }
+function saveSkuFix(i){
+  const r = lastDetectedRows[i]; if(!r) return;
+  const v = String((document.getElementById('vlcSkuFixInput') || {}).value || '').trim();
+  if(!v){ const n = document.getElementById('vlcSkuFixNote'); if(n) n.textContent = 'Type or pick a SKU first.'; return; }
+  const raw = r.rawSku || r.sku;
+  if(v.toLowerCase() === String(raw).trim().toLowerCase()) delete skuFixes[skuFixKey(r.marketplace, raw)];
+  else skuFixes[skuFixKey(r.marketplace, raw)] = v;
+  saveSkuFixes(); closeSkuFix(); skuFixChanged();
+}
+function resetSkuFix(i){
+  const r = lastDetectedRows[i]; if(!r) return;
+  delete skuFixes[skuFixKey(r.marketplace, r.rawSku || r.sku)];
+  saveSkuFixes(); closeSkuFix(); skuFixChanged();
+}
+function skuFixChanged(){
+  if(currentPlatform === 'meesho' && pageCouriers.length) renderCourierPanel();   // SKU grouping uses the corrected SKU
+  renderSkuSummary();
+}
+
+/* ---------------- Extra text + SKU text placement (per platform) ---------------- */
+const TEXT_DEFAULTS = { skuPos: 'bottom', skuAlign: 'center', skuOffset: 0, skuSize: 0, extraText: '', extraPos: 'top', extraAlign: 'center', extraOffset: 0, extraSize: 0 };
+function onTextSettingInput(){ updateTextLabels(); onSettingChange(); }
+function updateTextLabels(){
+  const g = id => document.getElementById(id);
+  if(!g('vlcSkuOffset')) return;
+  g('valSkuOffset').textContent = g('vlcSkuOffset').value + '%'; g('valExtraOffset').textContent = g('vlcExtraOffset').value + '%';
+  g('valSkuSize').textContent = +g('vlcSkuSize').value ? g('vlcSkuSize').value + ' pt' : 'Auto'; g('valExtraSize').textContent = +g('vlcExtraSize').value ? g('vlcExtraSize').value + ' pt' : 'Auto';
+}
+function getTextSettings(){
+  const g = id => document.getElementById(id); if(!g('vlcSkuPos')) return { ...TEXT_DEFAULTS };
+  return { skuPos: g('vlcSkuPos').value, skuAlign: g('vlcSkuAlign').value, skuOffset: parseFloat(g('vlcSkuOffset').value) || 0, skuSize: parseFloat(g('vlcSkuSize').value) || 0,
+    extraText: g('vlcExtraText').value, extraPos: g('vlcExtraPos').value, extraAlign: g('vlcExtraAlign').value, extraOffset: parseFloat(g('vlcExtraOffset').value) || 0, extraSize: parseFloat(g('vlcExtraSize').value) || 0 };
+}
+function applyTextSettings(st){
+  const o = { ...TEXT_DEFAULTS, ...(st || {}) }, g = id => document.getElementById(id); if(!g('vlcSkuPos')) return;
+  g('vlcSkuPos').value = o.skuPos; g('vlcSkuAlign').value = o.skuAlign; g('vlcSkuOffset').value = o.skuOffset; g('vlcSkuSize').value = o.skuSize;
+  g('vlcExtraText').value = o.extraText; g('vlcExtraPos').value = o.extraPos; g('vlcExtraAlign').value = o.extraAlign; g('vlcExtraOffset').value = o.extraOffset; g('vlcExtraSize').value = o.extraSize;
+  updateTextLabels();
+}
+// the label font (Helvetica) only has Western characters — keep what it can print, never crash the download
+function sanitizeLabelText(t){
+  return String(t == null ? '' : t).replace(/₹/g, 'Rs.').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-').replace(/ /g, ' ')
+    .replace(/[^\x20-\x7E\n¡-ÿ]/g, '').split('\n').map(l => l.trim()).filter(Boolean).slice(0, 3).join('\n');
+}
+// draws one or more lines at the chosen edge / alignment / distance; a line wider than the label shrinks to fit
+function stampText(page, font, text, o){
+  const lines = String(text).split('\n').filter(Boolean); if(!lines.length) return;
+  const size0 = o.size > 0 ? o.size : o.autoSize, lh = size0 * 1.15, off = o.pageH * (o.offsetPct || 0) / 100;
+  lines.forEach((line, k) => {
+    let size = size0; const w0 = font.widthOfTextAtSize(line, size);
+    if(w0 > o.pageW - 8) size = Math.max(4, size * (o.pageW - 8) / w0);
+    const w = font.widthOfTextAtSize(line, size);
+    const x = o.align === 'left' ? 4 : o.align === 'right' ? Math.max(4, o.pageW - w - 4) : Math.max(4, (o.pageW - w) / 2);
+    const y = o.pos === 'top' ? o.pageH - size - o.base - off - k * lh : o.base + off + (lines.length - 1 - k) * lh;
+    page.drawText(line, { x, y: Math.max(0, y), size, font, color: PDFLib.rgb(0, 0, 0) });
+  });
+}
+
 /* Courier / delivery partner of one page (0-based index). Meesho pages were
    read when the PDF was loaded; for Flipkart / Amazon the page text is
    searched for the same known courier names. */
@@ -1860,7 +1985,7 @@ function renderSkuSummary(){
   const raw = [];
   const detected = getDetectedByPage();
   Object.keys(detected).map(Number).sort((a,b)=>a-b).forEach(idx => {
-    detected[idx].forEach(it => raw.push({ page: idx+1, marketplace: it.marketplace, sku: it.sku, qty: it.qty }));
+    detected[idx].forEach(it => raw.push({ page: idx+1, marketplace: it.marketplace, sku: it.sku, rawSku: it.rawSku, qty: it.qty }));
   });
 
   // Group by marketplace + SKU: the same SKU appearing on multiple
@@ -1870,7 +1995,7 @@ function renderSkuSummary(){
   const order = [];
   raw.forEach(r => {
     const key = `${r.marketplace}|${r.sku}`;
-    if(!grouped[key]){ grouped[key] = { marketplace: r.marketplace, sku: r.sku, qty: 0, pages: [] }; order.push(key); }
+    if(!grouped[key]){ grouped[key] = { marketplace: r.marketplace, sku: r.sku, rawSku: r.rawSku, qty: 0, pages: [] }; order.push(key); }
     grouped[key].qty += (r.qty || 0);
     grouped[key].pages.push(r.page);
   });
@@ -1891,7 +2016,8 @@ function renderSkuSummary(){
     `<tr><td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.pages.join(', ')}</td>
      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${escapeHtml(r.marketplace)}</td>
      <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD);font-family:var(--font-mono,monospace)">${escapeHtml(r.sku)}</td>
-     <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.qty}</td></tr>`
+     <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD)">${r.qty}</td>
+     <td style="padding:4px 6px;border-bottom:1px solid var(--line,#E4D8BD);white-space:nowrap"><button class="vlc-map-btn" type="button" onclick="openSkuFix(${rows.indexOf(r)})">Change SKU</button>${r.rawSku && r.rawSku !== r.sku ? ` <span class="vlc-help" title="Detected on the label">(was ${escapeHtml(r.rawSku)})</span>` : ''}</td></tr>`
   ).join('');
   panel.style.display = 'block';
   const skuTable = document.getElementById('vlcSkuSummaryTable').closest('table');
@@ -2661,7 +2787,8 @@ async function processPdf(courierFilter){
       status.textContent = 'Reading SKUs from labels…';
       await detectFlipkartSkus();
     }
-    const skuFont = (amazonSkuMode || meeshoSkuStampMode || flipkartSkuStampMode) ? await outDoc.embedFont(PDFLib.StandardFonts.Helvetica) : null;
+    const txt = getTextSettings(), extraTextClean = sanitizeLabelText(txt.extraText);
+    const skuFont = (amazonSkuMode || meeshoSkuStampMode || flipkartSkuStampMode || extraTextClean) ? await outDoc.embedFont(PDFLib.StandardFonts.Helvetica) : null;
 
     // Meesho: process pages grouped by the active filter(s) — courier partner,
     // SKU, or both (courier first, then SKU) — or filtered to just one group
@@ -2742,41 +2869,26 @@ async function processPdf(courierFilter){
         if(amazonSkuMode){
           const items = amazonSkuByLabelIndex[i];
           if(items && items.length){
-            const fontSize = Math.max(7, Math.min(10, pageH * 0.018));
             // Multi-item orders: join each product's SKU with its qty, e.g.
             // "led-clr-55 x2   |   wm-top-blk x1". Qty of 1 still prints for clarity.
-            const label = 'SKU: ' + items.map(it => `${it.sku} x${it.qty}`).join('   |   ');
-            const textWidth = skuFont.widthOfTextAtSize(label, fontSize);
-            const x = Math.max(4, (pageW - textWidth) / 2);
-            newPage.drawText(label, {
-              x, y: 6, size: fontSize, font: skuFont, color: PDFLib.rgb(0,0,0)
-            });
+            const label = 'SKU: ' + items.map(it => `${fixedSku('AMAZON', it.sku)} x${it.qty}`).join('   |   ');
+            stampText(newPage, skuFont, sanitizeLabelText(label), { pageW, pageH, pos: txt.skuPos, align: txt.skuAlign, offsetPct: txt.skuOffset, size: txt.skuSize, autoSize: Math.max(7, Math.min(10, pageH * 0.018)), base: 6 });
           }
         }
         if(meeshoSkuStampMode && pageSkus[i] && pageSkus[i] !== 'Unknown SKU'){
-          // Meesho already prints the SKU on the label, but in very small text —
-          // this reprints the same SKU + Qty bigger and bolder right at the very
-          // bottom edge of the cropped label (the bottom-margin cut line you set
-          // with the sliders above), not floating higher up on the label.
-          const label = `SKU: ${pageSkus[i]} x${pageQtys[i] || 1}`;
-          const fontSize = Math.max(9, Math.min(13, pageH * 0.028));
-          const textWidth = skuFont.widthOfTextAtSize(label, fontSize);
-          const x = Math.max(4, (pageW - textWidth) / 2);
-          newPage.drawText(label, {
-            x, y: 3, size: fontSize, font: skuFont, color: PDFLib.rgb(0,0,0)
-          });
+          // Reprints the SKU + Qty bigger and bolder than the marketplace's own small print
+          // (position, alignment and size are the "Text on the label" settings).
+          const label = `SKU: ${fixedSku('MEESHO', pageSkus[i])} x${pageQtys[i] || 1}`;
+          stampText(newPage, skuFont, sanitizeLabelText(label), { pageW, pageH, pos: txt.skuPos, align: txt.skuAlign, offsetPct: txt.skuOffset, size: txt.skuSize, autoSize: Math.max(9, Math.min(13, pageH * 0.028)), base: 3 });
         }
         if(flipkartSkuStampMode && pageSkus[i] && pageSkus[i] !== 'Unknown SKU'){
-          // Same idea as the Meesho stamp above: Flipkart's own SKU table on
-          // the label is small print, so this reprints it bigger and bolder
-          // at the bottom edge of the cropped label.
-          const label = `SKU: ${pageSkus[i]} x${pageQtys[i] || 1}`;
-          const fontSize = Math.max(9, Math.min(13, pageH * 0.028));
-          const textWidth = skuFont.widthOfTextAtSize(label, fontSize);
-          const x = Math.max(4, (pageW - textWidth) / 2);
-          newPage.drawText(label, {
-            x, y: 3, size: fontSize, font: skuFont, color: PDFLib.rgb(0,0,0)
-          });
+          // Reprints the SKU + Qty bigger and bolder than the marketplace's own small print
+          // (position, alignment and size are the "Text on the label" settings).
+          const label = `SKU: ${fixedSku('FLIPKART', pageSkus[i])} x${pageQtys[i] || 1}`;
+          stampText(newPage, skuFont, sanitizeLabelText(label), { pageW, pageH, pos: txt.skuPos, align: txt.skuAlign, offsetPct: txt.skuOffset, size: txt.skuSize, autoSize: Math.max(9, Math.min(13, pageH * 0.028)), base: 3 });
+        }
+        if(extraTextClean){
+          stampText(newPage, skuFont, extraTextClean, { pageW, pageH, pos: txt.extraPos, align: txt.extraAlign, offsetPct: txt.extraOffset, size: txt.extraSize, autoSize: Math.max(8, Math.min(12, pageH * 0.024)), base: 4 });
         }
       }
     }
