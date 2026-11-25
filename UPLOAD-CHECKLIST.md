@@ -94,3 +94,8 @@ GitHub: admin.html, ADMIN-SETUP.md, billing/admin-approvals.html.
 
 ## LABEL CROPPER EXCEL — courier sheet (latest)
 GitHub: tools/label-cropper.html, billing/assets/vt-excel.js (no Supabase change).
+
+## BUSINESS EXPENSES (packing, labels …) → net profit
+GitHub (new): billing/expenses.html, billing/assets/expenses-tools.js
+GitHub (changed): billing/app.html, billing/assets/billing-app.js, billing/assets/seller-profit.js, billing/assets/user-menu.js, billing/buyer/stock.html
+Supabase: nothing to run (uses the existing docs table).

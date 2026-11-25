@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Business Expenses | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.bunny.net/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+<script src="/pwa.js" defer></script>
+<style>
+  .ex-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 14px}
+  .ex-tabs button{border:1px solid var(--thread);background:#fff;border-radius:999px;padding:8px 16px;font:600 14px inherit;cursor:pointer}
+  .ex-tabs button.on{background:var(--indigo);border-color:var(--indigo);color:#fff}
+  .ex-total{background:var(--ivory);border-radius:12px;padding:10px 14px;margin:8px 0;font-size:14px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"><b>Business Expenses</b></a>
+  <div class="topbar-right"><a class="btn small" href="app.html">Billing</a><div id="userMenuMount"></div></div>
+</div>
+<div class="shell" style="display:block;max-width:1000px;margin:0 auto">
+  <div class="main">
+    <div class="card">
+      <h2>Business expenses</h2>
+      <p class="sub">Things you buy to <b>run</b> the business, not to resell — packing material, label rolls, courier charges, tape, ads and so on. They are taken off your gross profit, so <b>Profit &amp; Graphs</b> (and the Buyer Stock → Monthly Profit) show a true <b>net profit / loss</b> every month. Amounts are worked out <b>ex-GST</b>; tick "I claim this GST" if you take it back as input credit (then it is not a cost).</p>
+      <div class="ex-tabs" id="exSide"></div>
+      <p class="msg" id="exMsg"></p>
+
+      <h3 style="font-family:var(--display);font-size:16px;margin:14px 0 8px" id="exFormTitle">New expense</h3>
+      <div class="grid2">
+        <div class="field"><label>Date</label><input type="date" id="exDate"></div>
+        <div class="field"><label>Category</label><select id="exCat"></select></div>
+        <div class="field"><label>What was it for?</label><input type="text" id="exItem" placeholder="e.g. 4×6 label roll, 500 pcs"></div>
+        <div class="field"><label>Bought from (optional)</label><input type="text" id="exVendor" placeholder="shop / supplier name"></div>
+        <div class="field"><label>Quantity</label><input type="number" id="exQty" min="0" step="any" value="1" oninput="exPreview()"></div>
+        <div class="field"><label>Rate per unit (ex-GST, ₹)</label><input type="number" id="exRate" min="0" step="any" placeholder="or type the total below" oninput="exPreview()"></div>
+        <div class="field"><label>Total (ex-GST, ₹) — only if you don't know the rate</label><input type="number" id="exAmount" min="0" step="any" oninput="exPreview()"></div>
+        <div class="field"><label>GST %</label><input type="number" id="exGst" min="0" max="40" step="0.5" value="0" oninput="exPreview()"></div>
+        <div class="field"><label class="chk"><input type="checkbox" id="exClaim" checked onchange="exPreview()"> I claim this GST as input credit</label></div>
+        <div class="field"><label>Note (optional)</label><input type="text" id="exNote"></div>
+      </div>
+      <div class="ex-total" id="exTotal">Total cost: ₹0.00</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" type="button" id="exSave" onclick="exSave()">Save expense</button>
+        <button class="btn" type="button" id="exCancel" style="display:none" onclick="exReset()">Cancel edit</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Month-wise summary</h2>
+      <div style="overflow-x:auto"><table data-excel-name="Expenses by month"><thead id="exSumHead"></thead><tbody id="exSumBody"></tbody></table></div>
+    </div>
+
+    <div class="card">
+      <h2>All entries</h2>
+      <div class="grid2" style="max-width:560px">
+        <div class="field"><label>Month</label><select id="exFMonth" onchange="exRender()"></select></div>
+        <div class="field"><label>Category</label><select id="exFCat" onchange="exRender()"></select></div>
+      </div>
+      <div style="overflow-x:auto"><table data-excel-name="Business expenses"><thead><tr><th>Date</th><th>Category</th><th>What</th><th>Bought from</th><th>Qty</th><th>Rate</th><th>Amount (ex-GST)</th><th>GST</th><th>Cost in profit</th><th></th></tr></thead>
+      <tbody id="exBody"></tbody></table></div>
+      <div class="ex-total" id="exListTotal"></div>
+    </div>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="assets/vt-firebase-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script src="assets/user-menu.js"></script>
+<script src="assets/table-sort.js"></script>
+<script src="assets/expenses-tools.js"></script>
+<script>
+let currentUser = null, exAll = [], exSide = 'seller', exEditId = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const inr = n => (Number(n) < 0 ? '−' : '') + '₹' + Math.abs(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const monthLabel = m => new Date(m + '-01T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+function showMsg(t, ok){ const m = $('exMsg'); m.textContent = t; m.className = 'msg ' + (ok ? 'success' : 'error'); }
+const col = () => db.collection('users').doc(currentUser.uid).collection('businessExpenses');
+
+function exSides(){
+  $('exSide').innerHTML = [['seller', 'Seller side (selling to buyers / my e-commerce as seller)'], ['buyer', 'Buyer side (I resell what I buy from sellers)']].map(([k, t]) =>
+    `<button type="button" class="${exSide === k ? 'on' : ''}" onclick="exSetSide('${k}')">${t}</button>`).join('');
+}
+function exSetSide(k){ exSide = k === 'buyer' ? 'buyer' : 'seller'; exSides(); exRender(); }
+function exForm(){
+  return { date: $('exDate').value, category: $('exCat').value, item: $('exItem').value, vendor: $('exVendor').value, qty: $('exQty').value,
+    rate: $('exRate').value, amount: $('exAmount').value, gstPct: $('exGst').value, claimGst: $('exClaim').checked, note: $('exNote').value, side: exSide };
+}
+function exPreview(){
+  const e = EXP.makeEntry(exForm());
+  $('exTotal').innerHTML = `Amount ex-GST <b>${inr(e.amount)}</b> + GST ${inr(e.gst)} ${e.gst ? (e.claimGst ? '(claimed back — not a cost)' : '(counted as cost)') : ''} → cost in your profit: <b>${inr(EXP.costOf(e))}</b>`;
+}
+function exReset(){
+  exEditId = null; $('exFormTitle').textContent = 'New expense'; $('exSave').textContent = 'Save expense'; $('exCancel').style.display = 'none';
+  ['exItem', 'exVendor', 'exRate', 'exAmount', 'exNote'].forEach(i => $(i).value = ''); $('exQty').value = 1; $('exGst').value = 0; $('exClaim').checked = true;
+  $('exDate').value = new Date().toISOString().slice(0, 10); exPreview();
+}
+async function exSave(){
+  const e = EXP.makeEntry(exForm()), p = EXP.problems(e);
+  if(p.length){ showMsg(p.join(' '), false); return; }
+  $('exSave').disabled = true;
+  try{
+    e.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+    if(exEditId) await col().doc(exEditId).set(e); else { e.createdAt = e.updatedAt; await col().add(e); }
+    showMsg(exEditId ? 'Expense updated.' : 'Expense saved — it is now part of your net profit.', true);
+    exReset(); await exLoad();
+  }catch(err){ showMsg('Could not save: ' + err.message, false); }
+  $('exSave').disabled = false;
+}
+function exEdit(id){
+  const e = exAll.find(x => x.id === id); if(!e) return;
+  exEditId = id; exSide = e.side || 'seller'; exSides();
+  $('exDate').value = e.date; $('exCat').value = e.category; $('exItem').value = e.item; $('exVendor').value = e.vendor || '';
+  $('exQty').value = e.qty || 1; $('exRate').value = e.rate || ''; $('exAmount').value = e.rate ? '' : e.amount; $('exGst').value = e.gstPct || 0;
+  $('exClaim').checked = e.claimGst !== false; $('exNote').value = e.note || '';
+  $('exFormTitle').textContent = 'Edit expense'; $('exSave').textContent = 'Save changes'; $('exCancel').style.display = ''; exPreview();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+async function exDelete(id){
+  const e = exAll.find(x => x.id === id); if(!e || !confirm('Delete "' + e.item + '" (' + inr(e.amount) + ')?')) return;
+  try{ await col().doc(id).delete(); showMsg('Deleted.', true); await exLoad(); }catch(err){ showMsg('Could not delete: ' + err.message, false); }
+}
+async function exLoad(){ exAll = await EXP.load(db, currentUser.uid); exRender(); }
+function exRender(){
+  const mine = exAll.filter(e => (e.side || 'seller') === exSide);
+  // month-wise × category summary
+  const tot = EXP.monthTotals(mine, exSide), months = Object.keys(tot).sort().reverse();
+  const cats = [...new Set(months.flatMap(m => Object.keys(tot[m].byCat)))].sort();
+  $('exSumHead').innerHTML = '<tr><th>Month</th>' + cats.map(c => `<th>${esc(c)}</th>`).join('') + '<th>Total</th></tr>';
+  $('exSumBody').innerHTML = months.map(m => `<tr><td data-sort="${m}-01"><b>${esc(monthLabel(m))}</b></td>${cats.map(c => `<td>${tot[m].byCat[c] ? inr(tot[m].byCat[c]) : '—'}</td>`).join('')}<td><b>${inr(tot[m].total)}</b></td></tr>`).join('')
+    || '<tr><td style="color:var(--muted)">No expenses yet.</td></tr>';
+  // filters
+  const fm = $('exFMonth'), fc = $('exFCat'), km = fm.value, kc = fc.value;
+  const ms = [...new Set(mine.map(e => e.month))].sort().reverse();
+  fm.innerHTML = '<option value="">All months</option>' + ms.map(m => `<option value="${m}">${esc(monthLabel(m))}</option>`).join(''); fm.value = ms.includes(km) ? km : '';
+  const cs = [...new Set(mine.map(e => e.category))].sort();
+  fc.innerHTML = '<option value="">All categories</option>' + cs.map(c => `<option>${esc(c)}</option>`).join(''); fc.value = cs.includes(kc) ? kc : '';
+  const list = mine.filter(e => (!fm.value || e.month === fm.value) && (!fc.value || e.category === fc.value));
+  $('exBody').innerHTML = list.map(e => `<tr><td data-sort="${esc(e.date)}">${esc(e.date)}</td><td>${esc(e.category)}</td><td>${esc(e.item)}${e.note ? '<br><span class="sub">' + esc(e.note) + '</span>' : ''}</td><td>${esc(e.vendor || '')}</td>
+      <td>${e.qty}</td><td>${e.rate ? inr(e.rate) : ''}</td><td>${inr(e.amount)}</td><td>${e.gst ? inr(e.gst) + (e.claimGst === false ? ' (cost)' : ' (claimed)') : '—'}</td><td><b>${inr(EXP.costOf(e))}</b></td>
+      <td style="white-space:nowrap"><button class="btn small" type="button" onclick="exEdit('${esc(e.id)}')">Edit</button> <button class="btn small danger" type="button" onclick="exDelete('${esc(e.id)}')">Delete</button></td></tr>`).join('')
+    || '<tr><td colspan="10" style="color:var(--muted)">No expenses here yet.</td></tr>';
+  $('exListTotal').innerHTML = `${list.length} entr${list.length === 1 ? 'y' : 'ies'} shown · total cost in profit <b>${inr(list.reduce((a, e) => a + EXP.costOf(e), 0))}</b>`;
+}
+$('exCat').innerHTML = EXP.CATEGORIES.map(c => `<option>${esc(c)}</option>`).join('');
+auth.onAuthStateChanged(async user => {
+  if(!user){ window.location.href = 'login.html?redirect=' + encodeURIComponent('expenses.html' + location.search); return; }
+  currentUser = user;
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '' });
+  const q = new URLSearchParams(location.search).get('side'); exSide = q === 'buyer' ? 'buyer' : 'seller';
+  exSides(); exReset();
+  try{ await exLoad(); }catch(err){ showMsg('Could not load your expenses: ' + err.message, false); }
+});
+</script>
+<script src="assets/vt-excel.js"></script>
+</body>
+</html>

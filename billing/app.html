@@ -56,6 +56,7 @@
 
     <div class="sidebar-section-label">Profit</div>
     <a href="#profit" class="nav-link" data-view="profit">Profit &amp; Graphs</a>
+    <a href="expenses.html?side=seller" class="nav-link">Business Expenses</a>
 
     <div class="sidebar-section-label">GST Filing</div>
     <a href="#gstr1" class="nav-link" data-view="gstr1">GSTR-1 Filing (Sales &amp; Purchases)</a>
@@ -761,6 +762,7 @@
         <div style="overflow-x:auto"><table data-excel-name="Monthly profit (seller)"><thead><tr><th>Month</th><th>Buyers: units</th><th>Buyers: profit</th><th>E-com: sold</th><th>E-com: returned</th><th>Return charges</th><th>E-com: profit</th><th>Revenue (ex-GST)</th><th>Total profit</th><th>Margin</th></tr></thead>
         <tbody id="spMonthsTable"></tbody></table></div>
         <div id="spTotals" class="sub" style="margin-top:6px"></div>
+        <div id="spNetBox"></div>
         <div class="box" id="spCapBox" style="margin:16px 0">
           <b>Captured order IDs &amp; states</b> <span id="spCapCount" class="sub" style="margin-left:6px">checking…</span>
           <p class="sub" style="margin:6px 0 8px">While you read or print labels, each order's ID and its customer's state are saved, so the state-wise graphs can be filled when you upload the month's report. They are only a working copy: <b>after you have uploaded the month, clear them to free database space.</b> Your monthly profit / loss, state-wise selling and state-wise returns <b>stay</b>. (An order cleared before its report is uploaded will show as “Unknown” state.)</p>
@@ -984,6 +986,7 @@
 <script src="assets/gst-returns.js"></script>
 <script src="assets/billing-app.js"></script>
 <script src="assets/profit-tools.js"></script>
+<script src="assets/expenses-tools.js"></script>
 <script src="assets/seller-profit.js"></script>
 <script src="assets/android-download.js"></script>
 <script src="assets/vt-excel.js"></script>

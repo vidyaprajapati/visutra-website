@@ -115,6 +115,8 @@ function spRenderReport(){
       <td>${spInr(r.returnCharges)}</td><td>${spInr(r.revenue)}</td><td style="${spCol(r.profit)}"><b>${spInr(r.profit)}</b></td><td>${r.margin}%</td></tr>`).join('')
     || '<tr><td colspan="8" style="color:var(--muted)">No data in this period yet.</td></tr>';
   spRefreshCaptureCount();
+  if(typeof EXP !== 'undefined') EXP.renderNet({ el: spEl('spNetBox'), db, uid: currentUser.uid, side: 'seller', link: 'expenses.html?side=seller',
+    gross: all.map(m => ({ month: m.month, profit: m.profit })), inr: spInr, esc, monthLabel: spMonthLabel });
   const unk = states.find(r => r.state === 'Unknown');
   spEl('spStateHint').innerHTML = unk && unk.soldUnits + unk.returnUnits
     ? `${unk.soldUnits + unk.returnUnits} unit(s) have no customer state (shown as “Unknown”). For e-commerce, upload your Orders report above — it carries “Customer State”; for invoices, add the state to the customer.` : '';

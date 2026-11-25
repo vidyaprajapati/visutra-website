@@ -153,6 +153,7 @@ function activateView(viewName){
 }
 document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', e => {
+    if(!link.dataset.view) return;   // a plain link to another page (e.g. Business Expenses)
     e.preventDefault();
     activateView(link.dataset.view);
   });

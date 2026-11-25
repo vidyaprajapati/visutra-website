@@ -181,6 +181,7 @@
     <table data-excel-name="Monthly profit"><thead><tr><th>Month</th><th title="Units in orders counted in that month">Units sold</th><th title="Returned / RTO units counted in that month">Returns / RTO</th><th title="Money lost on returned / RTO orders (GST out)">Return charges</th><th>Revenue (ex-GST)</th><th>Cost of goods</th><th>Profit</th><th>Margin</th></tr></thead>
     <tbody id="profitMonthsTable"></tbody></table>
     <div id="profitTotals" class="sub" style="margin-top:6px"></div>
+    <div id="profitNetBox"></div>
     <div class="box" id="capBox" style="margin:16px 0">
       <b>Captured order IDs &amp; states</b> <span id="capCount" class="sub" style="margin-left:6px">checking…</span>
       <p class="sub" style="margin:6px 0 8px">While you read or print labels, each order's ID and its customer's state are saved, so the state-wise graphs can be filled when you upload the month's report. They are only a working copy: <b>after you have uploaded the month, clear them to free database space.</b> Your monthly profit / loss, state-wise selling and state-wise returns <b>stay</b>. (An order cleared before its report is uploaded will show as “Unknown” state.)</p>
@@ -226,6 +227,7 @@
 <script src="../assets/label-sku-extract.js"></script>
 <script src="../assets/label-stock-core.js"></script>
 <script src="../assets/profit-tools.js"></script>
+<script src="../assets/expenses-tools.js"></script>
 <script src="../assets/stock-charts.js"></script>
 <script>
 let currentUser = null;
@@ -1153,6 +1155,8 @@ async function renderMonthlyProfit(){
   const tot = profitMonths.reduce((a, m) => ({ revenue: a.revenue + m.revenue, cogs: a.cogs + m.cogs, profit: a.profit + m.profit, ch: a.ch + (m.returnCharges || 0) }), { revenue: 0, cogs: 0, profit: 0, ch: 0 });
   document.getElementById('profitTotals').innerHTML = profitMonths.length
     ? `All ${profitMonths.length} month(s): revenue ${inr(tot.revenue)} − cost ${inr(tot.cogs)} = <b style="${pcol(tot.profit)}">profit ${inr(tot.profit)}</b> · return charges ${inr(tot.ch)} (already inside the profit)` : '';
+  if(typeof EXP !== 'undefined') EXP.renderNet({ el: document.getElementById('profitNetBox'), db, uid: currentUser.uid, side: 'buyer', link: '../expenses.html?side=buyer',
+    gross: profitMonths.map(m => ({ month: m.month, profit: m.profit })), inr, esc, monthLabel });
   const sel = document.getElementById('profitMonthSel'), keep = sel.value;
   sel.innerHTML = profitMonths.map(m => `<option value="${esc(m.month)}">${esc(monthLabel(m.month))}</option>`).join('');
   if(keep && profitMonths.some(m => m.month === keep)) sel.value = keep;
