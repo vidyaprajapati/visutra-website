@@ -9,6 +9,8 @@
   'use strict';
   const CATEGORIES = ['Packing material', 'Labels & label paper', 'Courier & shipping', 'Printing / ink / tape', 'Marketing & ads',
     'Rent & utilities', 'Salary / labour', 'Software & subscriptions', 'Other'];
+  // categories that can be bought "by size" from the packing / label sizes defined in Buyer SKU Master → stock goes up automatically
+  const STOCK_COL = { 'Packing material': 'buyerPackagingSizes', 'Labels & label paper': 'buyerLabelSizes' };
   const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
 
   // build a clean entry from form values (never trusts a typed total over qty × rate)
@@ -23,8 +25,24 @@
       category: CATEGORIES.includes(f.category) ? f.category : (String(f.category || '').trim() || 'Other'),
       item: String(f.item || '').trim().slice(0, 120), vendor: String(f.vendor || '').trim().slice(0, 80),
       qty, rate: r2(rate), amount, gstPct, gst, claimGst: f.claimGst !== false,
-      note: String(f.note || '').trim().slice(0, 200)
+      note: String(f.note || '').trim().slice(0, 200),
+      // linked size (only for Packing / Labels): quantity bought is added to that size's stock
+      sizeCol: STOCK_COL[CATEGORIES.includes(f.category) ? f.category : ''] && f.sizeId ? STOCK_COL[f.category] : '',
+      sizeId: STOCK_COL[CATEGORIES.includes(f.category) ? f.category : ''] && f.sizeId ? String(f.sizeId) : '',
+      sizeName: STOCK_COL[CATEGORIES.includes(f.category) ? f.category : ''] && f.sizeId ? String(f.sizeName || '').slice(0, 80) : ''
     };
+  }
+  /* What must change in stock when an entry is saved / edited / deleted.
+     prev = the entry as stored before (null for a new one), next = the new entry (null = deleted).
+     prev.stockApplied is what was REALLY added last time, so an edit or delete takes back exactly that.
+     → [{ col, id, name, delta, type }] */
+  function stockPlan(prev, next) {
+    const out = [], pq = prev && prev.sizeId ? (Number(prev.stockApplied) || 0) : 0, nq = next && next.sizeId ? (Number(next.qty) || 0) : 0;
+    const same = prev && next && prev.sizeId && next.sizeId && prev.sizeCol === next.sizeCol && prev.sizeId === next.sizeId;
+    if (same) { if (nq - pq) out.push({ col: next.sizeCol, id: next.sizeId, name: next.sizeName, delta: nq - pq, type: 'purchase-edit' }); return out; }
+    if (pq) out.push({ col: prev.sizeCol, id: prev.sizeId, name: prev.sizeName, delta: -pq, type: next ? 'purchase-edit' : 'purchase-deleted' });
+    if (nq) out.push({ col: next.sizeCol, id: next.sizeId, name: next.sizeName, delta: nq, type: 'purchase' });
+    return out;
   }
   function problems(e) {
     const p = [];
@@ -77,6 +95,6 @@
         <div class="sub" style="margin-top:6px">All ${rows.length} month(s): gross ${opts.inr(t.gross)} − expenses ${opts.inr(t.expenses)} = <b style="${col(t.net)}">net ${opts.inr(t.net)}</b></div>`
         : '<div class="sub" style="margin-top:6px">No profit or expenses recorded yet.</div>'}</div>`;
   }
-  root.EXP = { CATEGORIES, makeEntry, problems, costOf, monthTotals, netRows, sum, load, renderNet };
+  root.EXP = { CATEGORIES, STOCK_COL, stockPlan, makeEntry, problems, costOf, monthTotals, netRows, sum, load, renderNet };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.EXP;
 })(typeof window !== 'undefined' ? window : globalThis);
