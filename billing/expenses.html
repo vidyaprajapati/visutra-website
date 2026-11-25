@@ -34,10 +34,12 @@
       <h3 style="font-family:var(--display);font-size:16px;margin:14px 0 8px" id="exFormTitle">New expense</h3>
       <div class="grid2">
         <div class="field"><label>Date</label><input type="date" id="exDate"></div>
-        <div class="field"><label>Category</label><select id="exCat"></select></div>
+        <div class="field"><label>Category</label><select id="exCat" onchange="exCatChanged()"></select></div>
+        <div class="field" id="exSizeField" style="display:none"><label id="exSizeLabel">Size (from your master)</label><select id="exSize" onchange="exSizePicked()"></select>
+          <span class="sub" id="exSizeHint"></span></div>
         <div class="field"><label>What was it for?</label><input type="text" id="exItem" placeholder="e.g. 4×6 label roll, 500 pcs"></div>
         <div class="field"><label>Bought from (optional)</label><input type="text" id="exVendor" placeholder="shop / supplier name"></div>
-        <div class="field"><label>Quantity</label><input type="number" id="exQty" min="0" step="any" value="1" oninput="exPreview()"></div>
+        <div class="field"><label id="exQtyLabel">Quantity</label><input type="number" id="exQty" min="0" step="any" value="1" oninput="exPreview()"></div>
         <div class="field"><label>Rate per unit (ex-GST, ₹)</label><input type="number" id="exRate" min="0" step="any" placeholder="or type the total below" oninput="exPreview()"></div>
         <div class="field"><label>Total (ex-GST, ₹) — only if you don't know the rate</label><input type="number" id="exAmount" min="0" step="any" oninput="exPreview()"></div>
         <div class="field"><label>GST %</label><input type="number" id="exGst" min="0" max="40" step="0.5" value="0" oninput="exPreview()"></div>
@@ -73,9 +75,11 @@
 <script src="assets/firebase-config.js"></script>
 <script src="assets/user-menu.js"></script>
 <script src="assets/table-sort.js"></script>
+<script src="assets/label-sku-extract.js"></script>
+<script src="assets/label-stock-core.js"></script>
 <script src="assets/expenses-tools.js"></script>
 <script>
-let currentUser = null, exAll = [], exSide = 'seller', exEditId = null;
+let currentUser = null, exAll = [], exSide = 'seller', exEditId = null, exSizes = { buyerPackagingSizes: [], buyerLabelSizes: [] };
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const inr = n => (Number(n) < 0 ? '−' : '') + '₹' + Math.abs(Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -87,9 +91,35 @@ function exSides(){
   $('exSide').innerHTML = [['seller', 'Seller side (selling to buyers / my e-commerce as seller)'], ['buyer', 'Buyer side (I resell what I buy from sellers)']].map(([k, t]) =>
     `<button type="button" class="${exSide === k ? 'on' : ''}" onclick="exSetSide('${k}')">${t}</button>`).join('');
 }
+/* Packing / label SIZES defined in Buyer SKU Master. Buying one of them here also adds the quantity to its stock. */
+async function exLoadSizes(){
+  for(const c of Object.keys(exSizes)){
+    try{ const snap = await db.collection('users').doc(currentUser.uid).collection(c).get(); exSizes[c] = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.active !== false).sort((a, b) => String(a.name).localeCompare(String(b.name))); }
+    catch(e){ exSizes[c] = []; }
+  }
+  exCatChanged();
+}
+function exCatChanged(keepId){
+  const col = EXP.STOCK_COL[$('exCat').value], f = $('exSizeField');
+  if(!col){ f.style.display = 'none'; $('exSize').innerHTML = ''; $('exQtyLabel').textContent = 'Quantity'; return; }
+  const list = exSizes[col], what = col === 'buyerLabelSizes' ? 'label' : 'packing';
+  f.style.display = '';
+  $('exSizeLabel').textContent = col === 'buyerLabelSizes' ? 'Label size (stock goes up automatically)' : 'Packing size (stock goes up automatically)';
+  $('exSize').innerHTML = '<option value="">— not tracked in stock —</option>' + list.map(z => `<option value="${esc(z.id)}">${esc(z.name)} (stock ${z.stock || 0})</option>`).join('');
+  $('exSize').value = keepId && list.some(z => z.id === keepId) ? keepId : '';
+  $('exSizeHint').textContent = list.length ? 'Pick the size you bought. The quantity below is added to its stock and shown in Stock history.'
+    : `No ${what} sizes yet — add them in Buyer SKU Master → ${col === 'buyerLabelSizes' ? 'Label' : 'Packaging'} sizes, or leave this empty.`;
+  exSizePicked();
+}
+function exSizePicked(){
+  const id = $('exSize').value, col = EXP.STOCK_COL[$('exCat').value], z = col && exSizes[col].find(x => x.id === id);
+  $('exQtyLabel').textContent = z ? 'Quantity bought (pieces) — added to stock' : 'Quantity';
+  if(z && !$('exItem').value.trim()) $('exItem').value = z.name;
+}
 function exSetSide(k){ exSide = k === 'buyer' ? 'buyer' : 'seller'; exSides(); exRender(); }
 function exForm(){
   return { date: $('exDate').value, category: $('exCat').value, item: $('exItem').value, vendor: $('exVendor').value, qty: $('exQty').value,
+    sizeId: $('exSize').value, sizeName: ($('exSize').selectedOptions[0] && $('exSize').value) ? $('exSize').selectedOptions[0].textContent.replace(/ \(stock .*\)$/, '') : '',
     rate: $('exRate').value, amount: $('exAmount').value, gstPct: $('exGst').value, claimGst: $('exClaim').checked, note: $('exNote').value, side: exSide };
 }
 function exPreview(){
@@ -97,18 +127,33 @@ function exPreview(){
   $('exTotal').innerHTML = `Amount ex-GST <b>${inr(e.amount)}</b> + GST ${inr(e.gst)} ${e.gst ? (e.claimGst ? '(claimed back — not a cost)' : '(counted as cost)') : ''} → cost in your profit: <b>${inr(EXP.costOf(e))}</b>`;
 }
 function exReset(){
-  exEditId = null; $('exFormTitle').textContent = 'New expense'; $('exSave').textContent = 'Save expense'; $('exCancel').style.display = 'none';
+  exEditId = null; $('exFormTitle').textContent = 'New expense'; if($('exSize')) { $('exSize').value = ''; exSizePicked(); } $('exSave').textContent = 'Save expense'; $('exCancel').style.display = 'none';
   ['exItem', 'exVendor', 'exRate', 'exAmount', 'exNote'].forEach(i => $(i).value = ''); $('exQty').value = 1; $('exGst').value = 0; $('exClaim').checked = true;
   $('exDate').value = new Date().toISOString().slice(0, 10); exPreview();
 }
 async function exSave(){
   const e = EXP.makeEntry(exForm()), p = EXP.problems(e);
   if(p.length){ showMsg(p.join(' '), false); return; }
+  const prev = exEditId ? exAll.find(x => x.id === exEditId) : null;
+  e.stockApplied = e.sizeId ? e.qty : 0;
   $('exSave').disabled = true;
   try{
     e.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
-    if(exEditId) await col().doc(exEditId).set(e); else { e.createdAt = e.updatedAt; await col().add(e); }
-    showMsg(exEditId ? 'Expense updated.' : 'Expense saved — it is now part of your net profit.', true);
+    let id = exEditId;
+    if(id) await col().doc(id).set(e); else { e.createdAt = e.updatedAt; id = (await col().add(e)).id; }
+    // stock: add what was bought (an edit only moves the difference) — always logged in Stock history
+    const done = [], failed = [];
+    for(const a of EXP.stockPlan(prev, e)){
+      const ok = await VLS.adjustSize(currentUser.uid, a.col, a.id, a.delta, { sizeName: a.name, type: a.type, note: `Expense: ${e.item}${e.vendor ? ' — ' + e.vendor : ''}` });
+      (ok ? done : failed).push(a);
+    }
+    if(failed.length){   // keep the record honest: only what really reached stock is marked as applied
+      const reallyApplied = (prev && prev.sizeId === e.sizeId ? Number(prev.stockApplied) || 0 : 0) + done.filter(a => a.delta > 0 && a.id === e.sizeId).reduce((t, a) => t + a.delta, 0);
+      await col().doc(id).set({ stockApplied: e.sizeId ? Math.max(0, reallyApplied) : 0 }, { merge: true });
+    }
+    await exLoadSizes();
+    const z = e.sizeId && exSizes[e.sizeCol].find(x => x.id === e.sizeId);
+    showMsg((exEditId ? 'Expense updated.' : 'Expense saved — it is now part of your net profit.') + (failed.length ? ' ⚠ But the stock could not be updated — correct it in Buyer SKU Master.' : z && done.length ? ` Stock of "${z.name}" is now ${z.stock || 0}.` : ''), !failed.length);
     exReset(); await exLoad();
   }catch(err){ showMsg('Could not save: ' + err.message, false); }
   $('exSave').disabled = false;
@@ -116,15 +161,21 @@ async function exSave(){
 function exEdit(id){
   const e = exAll.find(x => x.id === id); if(!e) return;
   exEditId = id; exSide = e.side || 'seller'; exSides();
-  $('exDate').value = e.date; $('exCat').value = e.category; $('exItem').value = e.item; $('exVendor').value = e.vendor || '';
+  $('exDate').value = e.date; $('exCat').value = e.category; exCatChanged(e.sizeId); $('exItem').value = e.item; $('exVendor').value = e.vendor || '';
   $('exQty').value = e.qty || 1; $('exRate').value = e.rate || ''; $('exAmount').value = e.rate ? '' : e.amount; $('exGst').value = e.gstPct || 0;
   $('exClaim').checked = e.claimGst !== false; $('exNote').value = e.note || '';
   $('exFormTitle').textContent = 'Edit expense'; $('exSave').textContent = 'Save changes'; $('exCancel').style.display = ''; exPreview();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 async function exDelete(id){
-  const e = exAll.find(x => x.id === id); if(!e || !confirm('Delete "' + e.item + '" (' + inr(e.amount) + ')?')) return;
-  try{ await col().doc(id).delete(); showMsg('Deleted.', true); await exLoad(); }catch(err){ showMsg('Could not delete: ' + err.message, false); }
+  const e = exAll.find(x => x.id === id); if(!e) return;
+  const back = e.sizeId && Number(e.stockApplied) > 0 ? `\n\nThe ${e.stockApplied} pcs it added to the stock of "${e.sizeName}" will be taken back.` : '';
+  if(!confirm('Delete "' + e.item + '" (' + inr(e.amount) + ')?' + back)) return;
+  try{
+    await col().doc(id).delete();
+    for(const a of EXP.stockPlan(e, null)) await VLS.adjustSize(currentUser.uid, a.col, a.id, a.delta, { sizeName: a.name, type: a.type, note: `Expense deleted: ${e.item}` });
+    await exLoadSizes(); showMsg('Deleted.' + (back ? ' Stock taken back.' : ''), true); await exLoad();
+  }catch(err){ showMsg('Could not delete: ' + err.message, false); }
 }
 async function exLoad(){ exAll = await EXP.load(db, currentUser.uid); exRender(); }
 function exRender(){
@@ -142,7 +193,7 @@ function exRender(){
   const cs = [...new Set(mine.map(e => e.category))].sort();
   fc.innerHTML = '<option value="">All categories</option>' + cs.map(c => `<option>${esc(c)}</option>`).join(''); fc.value = cs.includes(kc) ? kc : '';
   const list = mine.filter(e => (!fm.value || e.month === fm.value) && (!fc.value || e.category === fc.value));
-  $('exBody').innerHTML = list.map(e => `<tr><td data-sort="${esc(e.date)}">${esc(e.date)}</td><td>${esc(e.category)}</td><td>${esc(e.item)}${e.note ? '<br><span class="sub">' + esc(e.note) + '</span>' : ''}</td><td>${esc(e.vendor || '')}</td>
+  $('exBody').innerHTML = list.map(e => `<tr><td data-sort="${esc(e.date)}">${esc(e.date)}</td><td>${esc(e.category)}</td><td>${esc(e.item)}${e.sizeId && e.stockApplied ? `<br><span class="badge">+${e.stockApplied} to stock · ${esc(e.sizeName)}</span>` : ''}${e.note ? '<br><span class="sub">' + esc(e.note) + '</span>' : ''}</td><td>${esc(e.vendor || '')}</td>
       <td>${e.qty}</td><td>${e.rate ? inr(e.rate) : ''}</td><td>${inr(e.amount)}</td><td>${e.gst ? inr(e.gst) + (e.claimGst === false ? ' (cost)' : ' (claimed)') : '—'}</td><td><b>${inr(EXP.costOf(e))}</b></td>
       <td style="white-space:nowrap"><button class="btn small" type="button" onclick="exEdit('${esc(e.id)}')">Edit</button> <button class="btn small danger" type="button" onclick="exDelete('${esc(e.id)}')">Delete</button></td></tr>`).join('')
     || '<tr><td colspan="10" style="color:var(--muted)">No expenses here yet.</td></tr>';
@@ -155,6 +206,7 @@ auth.onAuthStateChanged(async user => {
   mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '' });
   const q = new URLSearchParams(location.search).get('side'); exSide = q === 'buyer' ? 'buyer' : 'seller';
   exSides(); exReset();
+  await exLoadSizes();
   try{ await exLoad(); }catch(err){ showMsg('Could not load your expenses: ' + err.message, false); }
 });
 </script>
