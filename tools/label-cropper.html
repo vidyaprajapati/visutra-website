@@ -152,6 +152,18 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 .vlc-btn.accent:hover{background:var(--teal-dark);}
 
 .vlc-help{font-family:var(--font-mono);font-size:11px;color:var(--ink-soft);line-height:1.6;margin-top:14px;padding:12px;background:var(--paper-2);border-radius:var(--radius);border-left:3px solid var(--teal);}
+/* "Text on the label" panel — plain stacked layout (labels above controls, no boxed help text inside labels) */
+.vlc-tx{border-top:1px solid var(--line);padding-top:14px;margin-top:6px;}
+.vlc-tx-head{font-weight:600;font-size:14px;color:var(--ink);}
+.vlc-tx-title{font-weight:600;font-size:13px;color:var(--ink);margin-top:12px;}
+.vlc-tx-note{font-size:12px;line-height:1.5;color:var(--ink-soft);margin:2px 0 8px;}
+.vlc-tx-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin-top:6px;}
+.vlc-tx-cell{min-width:0;}
+.vlc-tx-lab{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:6px;}
+.vlc-tx-lab b{color:var(--ink);font-weight:600;white-space:nowrap;}
+.vlc-tx select,.vlc-tx textarea{width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid var(--ink);border-radius:var(--radius);background:var(--card);font-family:var(--font-body);font-size:13.5px;}
+.vlc-tx textarea{resize:vertical;line-height:1.4;}
+.vlc-tx input[type=range]{width:100%;accent-color:var(--teal);margin:6px 0 0;}
 .vlc-saved-note{font-family:var(--font-mono);font-size:11px;color:var(--teal);}
 
 /* preview stage */
@@ -389,24 +401,29 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
         <p class="vlc-help" style="margin-top:8px">Flipkart prints the SKU in a small "SKU ID | Description" table on the label (and again on the tax invoice, next to "IMEI/SrNo"). With this on, that SKU and Qty are read off and reprinted in bigger, clearer text at the bottom of the cropped label — e.g. "SKU: VST-WA-FA30-6_7.5 x1".</p>
       </div>
 
-      <div class="vlc-field" id="vlcTextPanel" style="border-top:1px solid var(--line);padding-top:12px">
-        <label style="font-weight:600;display:block;margin-bottom:6px">Text on the label — position &amp; extra text <span class="vlc-help" style="font-weight:400">(remembered separately for each platform)</span></label>
-        <div style="font-size:12.5px;font-weight:600;margin:6px 0 4px">SKU &amp; Qty text <span class="vlc-help" style="font-weight:400">(shown when "print SKU &amp; Qty" above is on)</span></div>
-        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
-          <label style="font-size:12px">Place at<select id="vlcSkuPos" onchange="onSettingChange()"><option value="bottom">Bottom</option><option value="top">Top</option></select></label>
-          <label style="font-size:12px">Align<select id="vlcSkuAlign" onchange="onSettingChange()"><option value="center">Centre</option><option value="left">Left</option><option value="right">Right</option></select></label>
-          <label style="font-size:12px">Move in from the edge <b id="valSkuOffset">0%</b><input type="range" id="vlcSkuOffset" min="0" max="40" step="0.5" value="0" oninput="onTextSettingInput()"></label>
-          <label style="font-size:12px">Size <b id="valSkuSize">Auto</b><input type="range" id="vlcSkuSize" min="0" max="24" step="1" value="0" oninput="onTextSettingInput()"></label>
+      <div class="vlc-field vlc-tx" id="vlcTextPanel">
+        <div class="vlc-tx-head">Text on the label — position &amp; extra text</div>
+        <div class="vlc-tx-note">Remembered separately for each platform.</div>
+
+        <div class="vlc-tx-title">SKU &amp; Qty text</div>
+        <div class="vlc-tx-note">Shown when "print SKU &amp; Qty" above is on.</div>
+        <div class="vlc-tx-grid">
+          <div class="vlc-tx-cell"><div class="vlc-tx-lab">Place at</div><select id="vlcSkuPos" onchange="onSettingChange()"><option value="bottom">Bottom</option><option value="top">Top</option></select></div>
+          <div class="vlc-tx-cell"><div class="vlc-tx-lab">Align</div><select id="vlcSkuAlign" onchange="onSettingChange()"><option value="center">Centre</option><option value="left">Left</option><option value="right">Right</option></select></div>
+          <div class="vlc-tx-cell"><div class="vlc-tx-lab"><span>Move in from edge</span><b id="valSkuOffset">0%</b></div><input type="range" id="vlcSkuOffset" min="0" max="40" step="0.5" value="0" oninput="onTextSettingInput()"></div>
+          <div class="vlc-tx-cell"><div class="vlc-tx-lab"><span>Size</span><b id="valSkuSize">Auto</b></div><input type="range" id="vlcSkuSize" min="0" max="24" step="1" value="0" oninput="onTextSettingInput()"></div>
         </div>
-        <div style="font-size:12.5px;font-weight:600;margin:12px 0 4px">Extra text <span class="vlc-help" style="font-weight:400">e.g. "Thank you for your purchase!" — printed on every label. Leave empty for none.</span></div>
-        <textarea id="vlcExtraText" rows="2" maxlength="160" placeholder="Thank you for your purchase!&#10;Please share a 5-star review" oninput="onSettingChange()" style="width:100%"></textarea>
-        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:6px">
-          <label style="font-size:12px">Place at<select id="vlcExtraPos" onchange="onSettingChange()"><option value="top">Top</option><option value="bottom">Bottom</option></select></label>
-          <label style="font-size:12px">Align<select id="vlcExtraAlign" onchange="onSettingChange()"><option value="center">Centre</option><option value="left">Left</option><option value="right">Right</option></select></label>
-          <label style="font-size:12px">Move in from the edge <b id="valExtraOffset">0%</b><input type="range" id="vlcExtraOffset" min="0" max="40" step="0.5" value="0" oninput="onTextSettingInput()"></label>
-          <label style="font-size:12px">Size <b id="valExtraSize">Auto</b><input type="range" id="vlcExtraSize" min="0" max="24" step="1" value="0" oninput="onTextSettingInput()"></label>
+
+        <div class="vlc-tx-title" style="margin-top:16px">Extra text</div>
+        <div class="vlc-tx-note">e.g. "Thank you for your purchase!" — printed on every label. Leave empty for none.</div>
+        <textarea id="vlcExtraText" rows="2" maxlength="160" placeholder="Thank you for your purchase!&#10;Please share a 5-star review" oninput="onSettingChange()"></textarea>
+        <div class="vlc-tx-grid">
+          <div class="vlc-tx-cell"><div class="vlc-tx-lab">Place at</div><select id="vlcExtraPos" onchange="onSettingChange()"><option value="top">Top</option><option value="bottom">Bottom</option></select></div>
+          <div class="vlc-tx-cell"><div class="vlc-tx-lab">Align</div><select id="vlcExtraAlign" onchange="onSettingChange()"><option value="center">Centre</option><option value="left">Left</option><option value="right">Right</option></select></div>
+          <div class="vlc-tx-cell"><div class="vlc-tx-lab"><span>Move in from edge</span><b id="valExtraOffset">0%</b></div><input type="range" id="vlcExtraOffset" min="0" max="40" step="0.5" value="0" oninput="onTextSettingInput()"></div>
+          <div class="vlc-tx-cell"><div class="vlc-tx-lab"><span>Size</span><b id="valExtraSize">Auto</b></div><input type="range" id="vlcExtraSize" min="0" max="24" step="1" value="0" oninput="onTextSettingInput()"></div>
         </div>
-        <p class="vlc-help" style="margin-top:8px">Distance is measured from the label's edge as a share of its height. Use English letters, numbers and simple symbols (₹ prints as "Rs."). If two texts sit at the same place they will overlap — move one of them. A line too long for the label shrinks to fit.</p>
+        <div class="vlc-tx-note" style="margin-top:10px">Distance is measured from the label's edge as a share of its height. English letters, numbers and simple symbols only (₹ prints as "Rs."). Two texts at the same place overlap — move one. A line too long for the label shrinks to fit.</div>
       </div>
 
       <div id="vlcSendGateWrap" style="display:none;margin-bottom:10px">
