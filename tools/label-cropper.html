@@ -168,9 +168,10 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 .vlc-saved-note{font-family:var(--font-mono);font-size:11px;color:var(--teal);}
 
 /* preview stage */
-.vlc-stage{background:var(--paper-2);border:1.5px dashed var(--line);border-radius:6px;padding:20px;min-height:420px;display:flex;align-items:center;justify-content:center;position:relative;}
+.vlc-stage{background:var(--paper-2);border:1.5px dashed var(--line);border-radius:6px;padding:20px;min-height:420px;display:flex;align-items:flex-start;justify-content:center;flex-wrap:wrap;gap:20px;position:relative;}
 .vlc-stage-tag{position:absolute;top:10px;left:12px;font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);}
-.vlc-lp{margin-top:16px}.vlc-lp-head{font-weight:700;font-size:13px;margin-bottom:8px}
+.vlc-fine{display:flex;gap:8px;align-items:center}.vlc-fine input[type=range]{flex:1;min-width:0}.vlc-num{width:74px;padding:4px 6px;border:1.5px solid var(--ink,#172436);border-radius:4px;font:inherit;font-size:12px;background:#fff}
+.vlc-lp{margin-top:0;position:sticky;top:8px;align-self:flex-start;z-index:5;background:var(--paper-2,#E4E7DD);padding:6px;border-radius:6px}.vlc-lp-head{font-weight:700;font-size:13px;margin-bottom:8px}
 .vlc-lp-stage{position:relative;margin:0 auto;background:#fff;border:1.5px solid var(--ink,#172436);box-shadow:3px 3px 0 rgba(23,36,54,.12);touch-action:none;user-select:none}
 .vlc-lp-stage canvas{display:block;width:100%;height:100%}
 .vlc-lp-box{position:absolute;white-space:nowrap;overflow:hidden;cursor:grab;padding:0 2px;line-height:1.15;border:1.5px dashed;font-family:Helvetica,Arial,sans-serif;color:#000;touch-action:none}
@@ -336,15 +337,15 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 
       <div id="vlcTopCropFields">
         <div class="vlc-field" id="vlcTopBottomFields">
-          <div class="vlc-field"><label>Top margin cut <b id="valTop">6%</b></label><input type="range" id="rngTop" min="0" max="60" value="6" oninput="updatePreview()"></div>
-          <div class="vlc-field"><label>Bottom margin cut <b id="valBottom">48%</b></label><input type="range" id="rngBottom" min="0" max="80" value="48" oninput="updatePreview()"></div>
+          <div class="vlc-field"><label>Top margin cut <b id="valTop">6%</b></label><div class="vlc-fine"><input type="range" id="rngTop" step="0.01" min="0" max="60" value="6" oninput="updatePreview()"><input type="number" class="vlc-num" id="rngTopNum" step="0.01" aria-label="exact rngTop" oninput="fineMargin('rngTop')"></div></div>
+          <div class="vlc-field"><label>Bottom margin cut <b id="valBottom">48%</b></label><div class="vlc-fine"><input type="range" id="rngBottom" step="0.01" min="0" max="80" value="48" oninput="updatePreview()"><input type="number" class="vlc-num" id="rngBottomNum" step="0.01" aria-label="exact rngBottom" oninput="fineMargin('rngBottom')"></div></div>
         </div>
-        <div class="vlc-field"><label>Left margin cut <b id="valLeft">3%</b></label><input type="range" id="rngLeft" min="0" max="40" value="3" oninput="updatePreview()"></div>
-        <div class="vlc-field"><label>Right margin cut <b id="valRight">3%</b></label><input type="range" id="rngRight" min="0" max="40" value="3" oninput="updatePreview()"></div>
+        <div class="vlc-field"><label>Left margin cut <b id="valLeft">3%</b></label><div class="vlc-fine"><input type="range" id="rngLeft" step="0.01" min="0" max="40" value="3" oninput="updatePreview()"><input type="number" class="vlc-num" id="rngLeftNum" step="0.01" aria-label="exact rngLeft" oninput="fineMargin('rngLeft')"></div></div>
+        <div class="vlc-field"><label>Right margin cut <b id="valRight">3%</b></label><div class="vlc-fine"><input type="range" id="rngRight" step="0.01" min="0" max="40" value="3" oninput="updatePreview()"><input type="number" class="vlc-num" id="rngRightNum" step="0.01" aria-label="exact rngRight" oninput="fineMargin('rngRight')"></div></div>
       </div>
 
       <div id="vlcSplitGap" style="display:none;">
-        <div class="vlc-field"><label>Gap between the two labels <b id="valGap">2%</b></label><input type="range" id="rngGap" min="0" max="20" value="2" oninput="updatePreview()"></div>
+        <div class="vlc-field"><label>Gap between the two labels <b id="valGap">2%</b></label><div class="vlc-fine"><input type="range" id="rngGap" step="0.01" min="0" max="20" value="2" oninput="updatePreview()"><input type="number" class="vlc-num" id="rngGapNum" step="0.01" aria-label="exact rngGap" oninput="fineMargin('rngGap')"></div></div>
       </div>
 
       <div class="vlc-field">
@@ -1692,17 +1693,24 @@ function setMode(mode){
   currentMode = mode;
   document.querySelectorAll('.vlc-mode-toggle button').forEach(b=>b.classList.toggle('active', b.dataset.mode===mode));
   document.getElementById('vlcSplitGap').style.display = mode==='split' ? 'block' : 'none';
-  document.getElementById('rngBottom').parentElement.querySelector('label').firstChild.textContent =
+  document.getElementById('rngBottom').closest('.vlc-field').querySelector('label').firstChild.textContent =
     mode==='split' ? 'Bottom margin cut ' : 'Bottom margin cut ';
   updatePreview();
 }
 
 function updateLabels(){
-  document.getElementById('valTop').textContent = document.getElementById('rngTop').value + '%';
-  document.getElementById('valBottom').textContent = document.getElementById('rngBottom').value + '%';
-  document.getElementById('valLeft').textContent = document.getElementById('rngLeft').value + '%';
-  document.getElementById('valRight').textContent = document.getElementById('rngRight').value + '%';
-  document.getElementById('valGap').textContent = document.getElementById('rngGap').value + '%';
+  const g = id => document.getElementById(id);
+  [['rngTop','valTop'],['rngBottom','valBottom'],['rngLeft','valLeft'],['rngRight','valRight'],['rngGap','valGap']].forEach(([r,v]) => {
+    const val = parseFloat(g(r).value); const shown = +val.toFixed(2);
+    g(v).textContent = shown + '%';
+    const n = g(r + 'Num'); if(n && document.activeElement !== n) n.value = shown;
+  });
+}
+/* typed exact value → slider (the slider clamps to its range / 0.01 step) */
+function fineMargin(id){
+  const n = document.getElementById(id + 'Num'), r = document.getElementById(id);
+  if(n.value === '' || isNaN(parseFloat(n.value))) return;
+  r.value = n.value; updatePreview();
 }
 
 ['rngTop','rngBottom','rngLeft','rngRight','rngGap'].forEach(id=>{
