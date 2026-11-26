@@ -154,7 +154,8 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 .vlc-help{font-family:var(--font-mono);font-size:11px;color:var(--ink-soft);line-height:1.6;margin-top:14px;padding:12px;background:var(--paper-2);border-radius:var(--radius);border-left:3px solid var(--teal);}
 /* "Text on the label" panel — plain stacked layout (labels above controls, no boxed help text inside labels) */
 .vlc-tx{border-top:1px solid var(--line);padding-top:14px;margin-top:6px;}
-.vlc-tx-head{font-weight:600;font-size:14px;color:var(--ink);}
+.vlc-tx-head{font-weight:600;font-size:14px;color:var(--ink);display:flex;justify-content:space-between;align-items:center;cursor:pointer;gap:10px;}
+.vlc-tx-head b{font-size:20px;line-height:1;width:26px;height:26px;border:1.5px solid var(--ink);border-radius:6px;display:inline-flex;align-items:center;justify-content:center;flex:none;}
 .vlc-tx-title{font-weight:600;font-size:13px;color:var(--ink);margin-top:12px;}
 .vlc-tx-note{font-size:12px;line-height:1.5;color:var(--ink-soft);margin:2px 0 8px;}
 .vlc-tx-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin-top:6px;}
@@ -169,6 +170,17 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
 /* preview stage */
 .vlc-stage{background:var(--paper-2);border:1.5px dashed var(--line);border-radius:6px;padding:20px;min-height:420px;display:flex;align-items:center;justify-content:center;position:relative;}
 .vlc-stage-tag{position:absolute;top:10px;left:12px;font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);}
+.vlc-lp{margin-top:16px}.vlc-lp-head{font-weight:700;font-size:13px;margin-bottom:8px}
+.vlc-lp-stage{position:relative;margin:0 auto;background:#fff;border:1.5px solid var(--ink,#172436);box-shadow:3px 3px 0 rgba(23,36,54,.12);touch-action:none;user-select:none}
+.vlc-lp-stage canvas{display:block;width:100%;height:100%}
+.vlc-lp-box{position:absolute;white-space:nowrap;overflow:hidden;cursor:grab;padding:0 2px;line-height:1.15;border:1.5px dashed;font-family:Helvetica,Arial,sans-serif;color:#000;touch-action:none}
+.vlc-lp-box.sku{border-color:#0d9488;background:rgba(13,148,136,.18)}
+.vlc-lp-box.ext{border-color:#ea580c;background:rgba(234,88,12,.18)}
+.vlc-lp-box.off{opacity:.35}.vlc-lp-box.drag{cursor:grabbing}
+.vlc-lp-box:before{content:"";position:absolute;left:-1px;top:-1px;width:7px;height:7px;border-radius:50%;background:currentColor}
+.vlc-lp-box.sku:before{background:#0d9488}.vlc-lp-box.ext:before{background:#ea580c}
+.vlc-lp-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-top:8px;color:var(--ink-soft,#6B6255)}
+.vlc-lp-legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}.vlc-lp-legend i.sku{background:#0d9488}.vlc-lp-legend i.ext{background:#ea580c}
 .vlc-canvas-wrap{position:relative;box-shadow:3px 3px 0 rgba(23,36,54,0.12);}
 #vlcPageCanvas{display:block;max-width:100%;height:auto;border:1.5px solid var(--ink);}
 .vlc-cropbox{position:absolute;border:2px dashed var(--stamp);background:rgba(193,64,31,0.06);pointer-events:none;}
@@ -402,7 +414,8 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
       </div>
 
       <div class="vlc-field vlc-tx" id="vlcTextPanel">
-        <div class="vlc-tx-head">Text on the label — position &amp; extra text</div>
+        <div class="vlc-tx-head" id="vlcTxToggle" role="button" tabindex="0" aria-expanded="false" onclick="toggleTextPanel()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleTextPanel();}"><span>Text on the label — position &amp; extra text</span><b id="vlcTxPlus">+</b></div>
+        <div id="vlcTxBody" style="display:none">
         <div class="vlc-tx-note">Remembered separately for each platform.</div>
 
         <div class="vlc-tx-title">SKU &amp; Qty text</div>
@@ -424,6 +437,7 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
           <div class="vlc-tx-cell"><div class="vlc-tx-lab"><span>Size</span><b id="valExtraSize">Auto</b></div><input type="range" id="vlcExtraSize" min="0" max="24" step="1" value="0" oninput="onTextSettingInput()"></div>
         </div>
         <div class="vlc-tx-note" style="margin-top:10px">Distance is measured from the label's edge as a share of its height. English letters, numbers and simple symbols only (₹ prints as "Rs."). Two texts at the same place overlap — move one. A line too long for the label shrinks to fit.</div>
+        </div>
       </div>
 
       <div id="vlcSendGateWrap" style="display:none;margin-bottom:10px">
@@ -445,6 +459,11 @@ body{background:var(--paper);color:var(--ink);font-family:var(--font-body);-webk
     <div class="vlc-stage">
       <span class="vlc-stage-tag">Preview — page 1</span>
       <div id="vlcPreviewMount"><div class="vlc-empty">Upload a PDF to see the crop preview here.</div></div>
+      <div id="vlcLpWrap" class="vlc-lp" style="display:none">
+        <div class="vlc-lp-head">Printed label — drag the boxes to place the text</div>
+        <div class="vlc-lp-stage" id="vlcLpStage"><canvas id="vlcLpCanvas"></canvas></div>
+        <div class="vlc-lp-legend"><span><i class="sku"></i> SKU text</span><span><i class="ext"></i> Extra text</span><span id="vlcLpNote"></span></div>
+      </div>
     </div>
   </div>
 
@@ -1666,6 +1685,7 @@ function onAmazonSkuModeChange(){
 // needs to be persisted per platform — no other side effect required.
 function onSettingChange(){
   storePreset(currentPlatform, getAllSettings());
+  try{ renderLabelPreview(); }catch(e){}
 }
 
 function setMode(mode){
@@ -2019,6 +2039,7 @@ function renderSkuSummary(){
   const rows = order.map(k => grouped[k]);
 
   lastDetectedRows = rows;
+  try{ renderLabelPreview(); }catch(e){}
   const panel = document.getElementById('vlcSkuSummary');
   const seller = getRole() === 'seller';
   if(!rows.length){
@@ -2460,6 +2481,7 @@ async function renderPreview(){
   finally{ previewRenderTask = null; }
 
   drawCropOverlay(wrap, canvas);
+  try{ renderLabelPreview(); }catch(e){}
 }
 
 function drawCropOverlay(wrap, canvas){
@@ -2504,6 +2526,119 @@ function updatePreview(){
   if(!canvas) return;
   const wrap = canvas.parentElement;
   drawCropOverlay(wrap, canvas);
+  try{ renderLabelPreview(); }catch(e){}
+}
+
+
+/* ---------------- Printed-label preview (draggable text boxes) ----------------
+   Shows the FIRST label as it will print (cropped, at the chosen paper size)
+   with a box for the SKU text and one for the extra text, placed with the same
+   maths as stampText(). Dragging a box writes the same "Text on the label"
+   controls, so what you see is what prints. (Landscape rotation is not shown.) */
+const LP_W = 300;
+var txOpen = false;
+function toggleTextPanel(){
+  txOpen = !txOpen;
+  document.getElementById('vlcTxBody').style.display = txOpen ? '' : 'none';
+  document.getElementById('vlcTxPlus').textContent = txOpen ? '\u2212' : '+';
+  document.getElementById('vlcTxToggle').setAttribute('aria-expanded', txOpen);
+  renderLabelPreview();
+}
+function lpSkuActive(){
+  const g = id => document.getElementById(id);
+  return !!((currentPlatform === 'amazon' && g('vlcAmazonSkuMode') && g('vlcAmazonSkuMode').checked) ||
+         (currentPlatform === 'meesho' && g('vlcMeeshoSkuStampMode') && g('vlcMeeshoSkuStampMode').checked) ||
+         (currentPlatform === 'flipkart' && g('vlcFlipkartSkuStampMode') && g('vlcFlipkartSkuStampMode').checked));
+}
+function lpGeom(){
+  const canvas = document.getElementById('vlcPageCanvas');
+  const v = getCropValues(), key = document.getElementById('vlcOutSize').value;
+  const amazonFull = currentPlatform === 'amazon' && document.getElementById('vlcAmazonSkuMode') && document.getElementById('vlcAmazonSkuMode').checked;
+  let topPct = v.top, bottomPct = v.bottom;
+  if(amazonFull){ topPct = 0; bottomPct = 0; }
+  else if(v.mode !== 'single'){ topPct = v.top; bottomPct = 100 - (50 - v.gap/2); }
+  const leftPct = amazonFull ? 0 : v.left, rightPct = amazonFull ? 0 : v.right;
+  const pw = canvas ? canvas.width : 1, ph = canvas ? canvas.height : 1;
+  const cropW = pw * (1 - (leftPct + rightPct) / 100), cropH = ph * (1 - (topPct + bottomPct) / 100);
+  let pageW = cropW, pageH = cropH;
+  if(key !== 'native' && OUT_SIZES[key]) [pageW, pageH] = OUT_SIZES[key];
+  return { canvas, pw, ph, leftPct, topPct, cropW, cropH, pageW, pageH };
+}
+function lpBase(kind){ return kind === 'sku' ? (currentPlatform === 'amazon' ? 6 : 3) : 4; }
+function lpBoxStyle(kind, st, geo){
+  const s = LP_W / geo.pageW, isSku = kind === 'sku';
+  const pos = isSku ? st.skuPos : st.extraPos, align = isSku ? st.skuAlign : st.extraAlign;
+  const offPct = isSku ? st.skuOffset : st.extraOffset, sizeSet = isSku ? st.skuSize : st.extraSize;
+  const auto = isSku ? (currentPlatform === 'amazon' ? Math.max(7, Math.min(10, geo.pageH * 0.018)) : Math.max(9, Math.min(13, geo.pageH * 0.028)))
+                     : Math.max(8, Math.min(12, geo.pageH * 0.024));
+  const size = sizeSet > 0 ? sizeSet : auto;
+  const edge = (lpBase(kind) + geo.pageH * (offPct || 0) / 100) * s;
+  const css = { fontSize: (size * s) + 'px', maxWidth: ((geo.pageW - 8) * s) + 'px' };
+  if(pos === 'top') css.top = edge + 'px'; else css.bottom = edge + 'px';
+  if(align === 'left') css.left = (4 * s) + 'px'; else if(align === 'right') css.right = (4 * s) + 'px';
+  else { css.left = '50%'; css.transform = 'translateX(-50%)'; }
+  return css;
+}
+function renderLabelPreview(){
+  const wrap = document.getElementById('vlcLpWrap'), stage = document.getElementById('vlcLpStage');
+  if(!wrap || !stage) return;
+  if(!txOpen){ wrap.style.display = 'none'; return; }
+  const geo = lpGeom();
+  if(!geo.canvas || !geo.canvas.width || geo.cropW <= 1 || geo.cropH <= 1){ wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  const lh = Math.round(LP_W * geo.pageH / geo.pageW);
+  stage.style.width = LP_W + 'px'; stage.style.height = lh + 'px';
+  const cv = document.getElementById('vlcLpCanvas'); cv.width = LP_W * 2; cv.height = lh * 2;
+  try{
+    const ctx = cv.getContext('2d');
+    if(ctx && ctx.drawImage){
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(geo.canvas, geo.pw * geo.leftPct / 100, geo.ph * geo.topPct / 100, geo.cropW, geo.cropH, 0, 0, cv.width, cv.height);
+    }
+  }catch(e){}
+  stage.querySelectorAll('.vlc-lp-box').forEach(el => el.remove());
+  const st = getTextSettings();
+  let sampleSku = 'YOUR-SKU-123';
+  try{ const d = getDetectedByPage(); const k = Object.keys(d).map(Number).sort((a,b)=>a-b)[0]; if(k !== undefined && d[k][0] && d[k][0].sku) sampleSku = d[k][0].sku; }catch(e){}
+  const extra = sanitizeLabelText(st.extraText).split('\n').filter(Boolean);
+  const items = [
+    { kind: 'sku', lines: ['SKU: ' + sampleSku + ' x1'], off: !lpSkuActive() },
+    { kind: 'ext', lines: extra.length ? extra : ['Your extra text'], off: !extra.length }
+  ];
+  items.forEach(it => {
+    const b = document.createElement('div'); b.className = 'vlc-lp-box ' + it.kind + (it.off ? ' off' : '');
+    b.dataset.kind = it.kind;
+    it.lines.forEach(l => { const d = document.createElement('div'); d.textContent = l; d.style.whiteSpace = 'nowrap'; b.appendChild(d); });
+    b.title = it.kind === 'sku' ? 'SKU text — drag to move' : 'Extra text — drag to move';
+    Object.assign(b.style, lpBoxStyle(it.kind, st, geo));
+    b.addEventListener('pointerdown', ev => lpStartDrag(ev, b, it.kind));
+    stage.appendChild(b);
+  });
+  document.getElementById('vlcLpNote').textContent = lpSkuActive() ? '' : 'SKU text is off — tick "print SKU & Qty" to print it';
+}
+function lpStartDrag(ev, box, kind){
+  ev.preventDefault();
+  const stage = document.getElementById('vlcLpStage'), geo = lpGeom();
+  const hFrac = (box.offsetHeight || 0) / ((stage.getBoundingClientRect().height) || 1);
+  const move = e => {
+    const r = stage.getBoundingClientRect(); if(!r.width || !r.height) return;
+    lpApply(kind, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height, geo, hFrac);
+  };
+  // listeners live on the document: the box is rebuilt on every move
+  const up = () => { document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); document.removeEventListener('pointercancel', up); };
+  document.addEventListener('pointermove', move); document.addEventListener('pointerup', up); document.addEventListener('pointercancel', up);
+}
+/* x, y = pointer position as 0..1 of the label */
+function lpApply(kind, x, y, geo, hFrac){
+  const g = id => document.getElementById(id), isSku = kind === 'sku';
+  const pos = y < 0.5 ? 'top' : 'bottom';
+  const align = x < 0.34 ? 'left' : x > 0.66 ? 'right' : 'center';
+  const dist = Math.max(0, pos === 'top' ? y - (hFrac || 0) / 2 : 1 - y - (hFrac || 0) / 2);
+  const offPct = Math.max(0, Math.min(40, Math.round((dist * geo.pageH - lpBase(kind)) / geo.pageH * 100)));
+  g(isSku ? 'vlcSkuPos' : 'vlcExtraPos').value = pos;
+  g(isSku ? 'vlcSkuAlign' : 'vlcExtraAlign').value = align;
+  g(isSku ? 'vlcSkuOffset' : 'vlcExtraOffset').value = offPct;
+  onTextSettingInput();
 }
 
 /* ---------------- Processing with pdf-lib ---------------- */
