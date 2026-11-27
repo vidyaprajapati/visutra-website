@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>VISUTRA</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link rel="stylesheet" href="assets/billing.css">
+<style>
+body{background:#F7F3EC}
+.ah-head{background:var(--brand-grad);color:#fff;padding:calc(22px + env(safe-area-inset-top)) 20px 64px;border-radius:0 0 28px 28px}
+.ah-top{display:flex;align-items:center;gap:12px}
+.ah-top img{width:42px;height:42px;border-radius:12px;background:#fff;padding:3px}
+.ah-top b{font-family:var(--display);font-size:22px;letter-spacing:.01em}
+.ah-hi{margin:18px 0 0;font-size:15px;opacity:.95}
+.ah-hi strong{display:block;font-family:var(--display);font-size:24px;margin-top:2px}
+.ah-wrap{max-width:720px;margin:-44px auto 0;padding:0 14px 20px}
+.ah-quick{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.ah-q{display:flex;flex-direction:column;gap:10px;padding:16px;border-radius:20px;background:#fff;box-shadow:var(--shadow);text-decoration:none;color:var(--ink);font-weight:700;font-size:15px}
+.ah-q i{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;font-style:normal;font-size:22px}
+.ah-q small{font-weight:500;color:var(--muted);font-size:12px;margin-top:-6px}
+.ah-sec{margin:24px 4px 10px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.ah-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.ah-t{display:flex;flex-direction:column;align-items:center;gap:7px;padding:14px 6px;border-radius:16px;background:#fff;box-shadow:var(--shadow-sm);text-decoration:none;color:var(--ink);font-size:12.5px;font-weight:600;text-align:center;line-height:1.25}
+.ah-t i{font-style:normal;font-size:24px}
+.ah-t:active,.ah-q:active{transform:scale(.96)}
+.ah-signin{display:none;margin-top:14px}
+@media(min-width:620px){.ah-grid{grid-template-columns:repeat(4,1fr)}}
+</style>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+<link rel="apple-touch-icon" href="/assets/app-icons/apple-touch-icon.png">
+<script src="/pwa.js" defer></script>
+</head>
+<body>
+<div class="ah-head">
+  <div class="ah-top"><img src="../assets/logo.png" alt=""><b>VISUTRA</b></div>
+  <p class="ah-hi">Welcome<strong id="ahName">to your business app</strong></p>
+  <a class="btn small ah-signin" id="ahSignin" href="login.html?redirect=app-home.html" style="background:#fff;color:#B33F0F">Sign in</a>
+</div>
+
+<div class="ah-wrap">
+  <div class="ah-quick">
+    <a class="ah-q" href="app.html#new-invoice"><i style="background:#FFE9DC">🧾</i>New Invoice<small>GST bill in seconds</small></a>
+    <a class="ah-q" href="../tools/label-cropper.html"><i style="background:#E4ECFB">✂️</i>Label Cropper<small>Crop &amp; print labels</small></a>
+    <a class="ah-q" href="app.html#stock"><i style="background:#E7F6EC">📦</i>Stock<small>What's in hand</small></a>
+    <a class="ah-q" href="expenses.html?side=seller"><i style="background:#FEF3D9">💸</i>Expenses<small>Packing, labels &amp; more</small></a>
+  </div>
+
+  <div class="ah-sec">Sell</div>
+  <div class="ah-grid">
+    <a class="ah-t" href="app.html#customers"><i>👥</i>Customers</a>
+    <a class="ah-t" href="app.html#invoices"><i>📄</i>Invoices</a>
+    <a class="ah-t" href="app.html#products"><i>🏷️</i>Products</a>
+    <a class="ah-t" href="app.html#receipt-entry"><i>💰</i>Receipts</a>
+    <a class="ah-t" href="app.html#profit"><i>📈</i>Profit</a>
+    <a class="ah-t" href="app.html#gstr1"><i>🏛️</i>GSTR-1</a>
+    <a class="ah-t" href="seller/order-receive.html"><i>📥</i>Orders received</a>
+    <a class="ah-t" href="app.html#purchases"><i>🛒</i>Purchases</a>
+    <a class="ah-t" href="app.html#suppliers"><i>🏭</i>Suppliers</a>
+  </div>
+
+  <div class="ah-sec">Buy</div>
+  <div class="ah-grid">
+    <a class="ah-t" href="buyer/dashboard.html"><i>🏠</i>Buyer home</a>
+    <a class="ah-t" href="buyer/place-order.html"><i>🛍️</i>Place order</a>
+    <a class="ah-t" href="buyer/my-orders.html"><i>🚚</i>My orders</a>
+    <a class="ah-t" href="buyer/label-order.html"><i>🔖</i>Label order</a>
+    <a class="ah-t" href="buyer/stock.html"><i>📦</i>Buyer stock</a>
+    <a class="ah-t" href="buyer/buyer-sku-master.html"><i>🔗</i>SKU master</a>
+  </div>
+
+  <div class="ah-sec">Tools</div>
+  <div class="ah-grid">
+    <a class="ah-t" href="../tools/label-cropper.html"><i>✂️</i>Label Cropper</a>
+    <a class="ah-t" href="../tools/label-studio.html"><i>🖨️</i>Label Studio</a>
+    <a class="ah-t" href="../tools/gst-return-tool.html"><i>🧮</i>GST return tool</a>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="assets/vt-firebase-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script>
+// Every page behind these tiles has its own sign-in check; here we only greet the user.
+auth.onAuthStateChanged(async user => {
+  if(!user){ document.getElementById('ahSignin').style.display = 'inline-block'; return; }
+  let name = user.displayName || (user.email || '').split('@')[0] || 'back';
+  try{ const d = await db.collection('users').doc(user.uid).get(); if(d.exists && d.data().businessName) name = d.data().businessName; }catch(e){}
+  document.getElementById('ahName').textContent = name;
+});
+</script>
+</body>
+</html>
