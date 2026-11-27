@@ -1,0 +1,53 @@
+# VISUTRA — builds the Android app (APK) in GitHub. No Android Studio needed.
+#
+# Run it:  GitHub → Actions → "Build Android app" → Run workflow.
+# Then open the finished run → Artifacts → "VISUTRA-app" → download → unzip → VISUTRA.apk
+# (send that file to your phone and install it).
+#
+# One-time setup: repository secrets (Settings → Secrets and variables → Actions):
+#   ANDROID_KEYSTORE_B64   contents of visutra-keystore.b64 (given with the app)
+#   ANDROID_STORE_PASS     keystore password
+#   ANDROID_KEY_ALIAS      visutra
+#   ANDROID_KEY_PASS       key password (same as the store password)
+name: Build Android app
+
+on:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.7' }
+
+      - name: Restore signing key
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then echo "::error::Secret ANDROID_KEYSTORE_B64 is missing — see the comment at the top of this file."; exit 1; fi
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/visutra.keystore"
+
+      - name: Build signed APK
+        working-directory: android
+        env:
+          VT_KEYSTORE: ${{ runner.temp }}/visutra.keystore
+          VT_STORE_PASS: ${{ secrets.ANDROID_STORE_PASS }}
+          VT_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          VT_KEY_PASS: ${{ secrets.ANDROID_KEY_PASS }}
+          VT_VERSION_CODE: ${{ github.run_number }}
+        run: gradle --no-daemon assembleRelease
+
+      - name: Name the file
+        run: cp android/app/build/outputs/apk/release/app-release.apk VISUTRA.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VISUTRA-app
+          path: VISUTRA.apk
+          retention-days: 30
