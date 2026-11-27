@@ -20,5 +20,5 @@ if('serviceWorker' in navigator){
   document.documentElement.classList.add('vt-app');
   // the app opens on the Portal page → show the app home instead
   if(/\/billing\/portal\.html$/.test(location.pathname)){ location.replace('/billing/app-home.html'); return; }
-  var s = document.createElement('script'); s.src = '/app-shell.js?v=1'; s.defer = true; document.head.appendChild(s);
+  var s = document.createElement('script'); s.src = '/app-shell.js?v=2'; s.defer = true; document.head.appendChild(s);
 })();
