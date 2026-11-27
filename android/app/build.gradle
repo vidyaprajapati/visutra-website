@@ -11,8 +11,9 @@ android {
         applicationId 'in.visutra.app'          // permanent — must match .well-known/assetlinks.json
         minSdk 21
         targetSdk 34
-        versionCode (System.getenv('VT_VERSION_CODE') ?: '1').toInteger()
-        versionName '1.0.' + (System.getenv('VT_VERSION_CODE') ?: '1')
+        def vc = Integer.parseInt(System.getenv('VT_VERSION_CODE') ?: '1')
+        versionCode = vc
+        versionName = '1.0.' + vc
     }
     signingConfigs {
         release {
