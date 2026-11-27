@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">VISUTRA</string>
+    <string name="asset_statements">[{\"relation\": [\"delegate_permission/common.handle_all_urls\"], \"target\": {\"namespace\": \"web\", \"site\": \"https://visutra.in\"}}]</string>
+</resources>
