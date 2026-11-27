@@ -1,1 +1,39 @@
-plugins { id 'com.android.application' version '8.5.2' apply false }
+plugins { id 'com.android.application' }
+
+// Signing details come from the workflow (environment variables). Without them the
+// build is unsigned — the workflow always provides them.
+def ks = System.getenv('VT_KEYSTORE')
+
+android {
+    namespace 'in.visutra.app'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'in.visutra.app'          // permanent — must match .well-known/assetlinks.json
+        minSdk 21
+        targetSdk 34
+        def vc = Integer.parseInt(System.getenv('VT_VERSION_CODE') ?: '1')
+        versionCode = vc
+        versionName = '1.0.' + vc
+    }
+    signingConfigs {
+        release {
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('VT_STORE_PASS')
+                keyAlias System.getenv('VT_KEY_ALIAS')
+                keyPassword System.getenv('VT_KEY_PASS')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (ks) signingConfig signingConfigs.release
+        }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}
