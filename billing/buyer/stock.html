@@ -326,11 +326,10 @@ async function loadStock(){
     return `<tr><td>${esc(m.date||'')}</td><td>${esc(m.productName||'Unknown product')}</td><td>${m.qty>0?'+':''}${m.qty}</td><td>${esc(m.note||'')}</td></tr>`;
   }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No stock movements yet.</td></tr>';
 }
-function renderStockTable(){
-  document.getElementById('stockTable').innerHTML = mySkuMappingsCache.map(m => {
-    const updated = m.updatedAt?.toDate ? m.updatedAt.toDate().toISOString().slice(0,10) : '—';
-    return `<tr>
-      <td>${esc(m.productName)}</td>
+function stockRow(m, indent){
+  const updated = m.updatedAt?.toDate ? m.updatedAt.toDate().toISOString().slice(0,10) : '—';
+  return `<tr>
+      <td${indent ? ' style="padding-left:26px"' : ''}>${m.buyerSku ? `<code style="font-size:11.5px">${esc(m.buyerSku)}</code> ` : ''}${esc(m.productName)}</td>
       <td>${esc(m.sellerName||'—')}</td>
       <td>${esc(m.unit||'PCS')}</td>
       <td><input type="number" id="stockQty_${m.id}" value="${m.stock||0}" style="width:90px"></td>
@@ -338,6 +337,20 @@ function renderStockTable(){
       <td>${updated}</td>
       <td><button class="btn small primary" onclick="saveStock('${m.id}')">Update</button></td>
     </tr>`;
+}
+/* Stock by PRODUCT (group) → its SKUs; a mapping with no group is its own row. */
+function renderStockTable(){
+  const groups = new Map();
+  mySkuMappingsCache.forEach(m => {
+    const g = (m.groupName || '').trim();
+    const key = g || ('__' + m.id);
+    if(!groups.has(key)) groups.set(key, { name: g, list: [] });
+    groups.get(key).list.push(m);
+  });
+  document.getElementById('stockTable').innerHTML = Array.from(groups.values()).map(g => {
+    if(!g.name) return stockRow(g.list[0], false);
+    const total = g.list.reduce((s, m) => s + (Number(m.stock) || 0), 0);
+    return `<tr style="background:var(--ivory)"><td colspan="2"><b>${esc(g.name)}</b> <span style="color:var(--muted);font-size:12px">· ${g.list.length} SKU${g.list.length > 1 ? 's' : ''}</span></td><td></td><td><b>${total}</b></td><td colspan="3"></td></tr>` + g.list.map(m => stockRow(m, true)).join('');
   }).join('') || `<tr><td colspan="7" style="color:var(--muted)">No products in Buyer SKU Master yet — <a href="buyer-sku-master.html">add one</a> to start tracking stock.</td></tr>`;
 }
 // Buyer SKU Master used to let the same seller+product be mapped more than

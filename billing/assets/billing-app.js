@@ -369,7 +369,7 @@ function renderProducts(){
     const isActive = p.active !== false; // missing = treat as active (backward compatible with products created before this field existed)
     const isVisible = !!p.buyerVisibility;
     return `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.sku||'—')}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td>
+    <tr><td>${esc(p.name)}${p.groupName ? `<br><span style="font-size:11.5px;color:var(--muted)">${esc(p.groupName)}${p.variant ? ' · ' + esc(p.variant) : ''}</span>` : ''}</td><td>${esc(p.sku||'—')}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td>
     <td><button class="btn small" onclick="toggleProductActive('${p.id}', ${!isActive})">${isActive ? 'Active ✓' : 'Inactive'}</button></td>
     <td><button class="btn small" onclick="toggleBuyerVisibility('${p.id}', ${!isVisible})" title="Whether linked buyer accounts can see this product">${isVisible ? 'Visible ✓' : 'Hidden'}</button></td>
     <td class="row-actions">
@@ -401,6 +401,8 @@ async function saveProduct(){
   const existing = id ? productsCache.find(p => p.id === id) : null;
   const data = {
     name: document.getElementById('pName').value.trim(),
+    groupName: document.getElementById('pGroup').value.trim(),
+    variant: document.getElementById('pVariant').value.trim(),
     hsn: document.getElementById('pHsn').value.trim(),
     unit: document.getElementById('pUnit').value.trim() || 'PCS',
     sku: document.getElementById('pSku').value.trim(),
@@ -421,7 +423,7 @@ async function saveProduct(){
     const { stock, active, buyerVisibility, ...formFields } = data;
     await col.doc(id).set(formFields, { merge: true });
   } else { await col.add(data); }
-  ['pName','pHsn','pUnit','pSku','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
+  ['pName','pGroup','pVariant','pHsn','pUnit','pSku','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('pGst').value = '0';
   showMsg('productMsg', 'Saved.', true);
   await loadProducts();
@@ -434,6 +436,8 @@ function editProduct(id){
   const p = productsCache.find(x => x.id === id);
   document.getElementById('pEditId').value = id;
   document.getElementById('pName').value = p.name;
+  document.getElementById('pGroup').value = p.groupName || '';
+  document.getElementById('pVariant').value = p.variant || '';
   document.getElementById('pHsn').value = p.hsn;
   document.getElementById('pUnit').value = p.unit;
   document.getElementById('pSku').value = p.sku || '';
@@ -473,12 +477,24 @@ function renderStockDropdowns(){
     if(prev && productsCache.some(p => p.id === prev)) ppSel.value = prev;
   }
 }
+/* Stock by PRODUCT (group) → its SKUs. A product with no group is its own one-row group. */
+function stockGroups(list){
+  const groups = new Map();
+  (list || productsCache).forEach(p => {
+    const key = (p.groupName || '').trim() || p.name || '—';
+    if(!groups.has(key)) groups.set(key, { name: key, grouped: !!(p.groupName || '').trim(), skus: [] });
+    groups.get(key).skus.push(p);
+  });
+  return Array.from(groups.values()).map(g => Object.assign(g, { total: g.skus.reduce((s, p) => s + (Number(p.stock) || 0), 0) }));
+}
 function renderStockTable(){
   const tbody = document.getElementById('stockTable');
   if(!tbody) return;
-  tbody.innerHTML = productsCache.map(p => `
-    <tr><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td>${p.stock || 0}</td><td>${p.reorderLevel || 0}</td></tr>
-  `).join('') || '<tr><td colspan="4" style="color:var(--muted)">No products yet.</td></tr>';
+  tbody.innerHTML = stockGroups().map(g => {
+    if(!g.grouped){ const p = g.skus[0]; return `<tr><td>${esc(p.name)}${p.sku ? ` <code style="font-size:11.5px">${esc(p.sku)}</code>` : ''}</td><td>${esc(p.unit)}</td><td>${p.stock || 0}</td><td>${p.reorderLevel || 0}</td></tr>`; }
+    return `<tr style="background:var(--ivory)"><td><b>${esc(g.name)}</b> <span style="color:var(--muted);font-size:12px">· ${g.skus.length} SKU${g.skus.length > 1 ? 's' : ''}</span></td><td>${esc(g.skus[0].unit)}</td><td><b>${g.total}</b></td><td></td></tr>`
+      + g.skus.map(p => `<tr><td style="padding-left:26px">${p.sku ? `<code style="font-size:11.5px">${esc(p.sku)}</code> ` : ''}${esc(p.variant || p.name)}</td><td>${esc(p.unit)}</td><td>${p.stock || 0}</td><td>${p.reorderLevel || 0}</td></tr>`).join('');
+  }).join('') || '<tr><td colspan="4" style="color:var(--muted)">No products yet.</td></tr>';
   renderReorderTable();
 }
 function renderReorderTable(){

@@ -79,7 +79,7 @@
     <p class="sub">Step 2 — <b>select one of your products</b>, then (optionally) <b>link it to a seller's product</b> (the one you buy it as — lets orders and Label-Based Auto Order go to that seller, and accepted orders add to its stock) and type only the <b>new marketplace SKU(s)</b> you want to add — they're added to the SKUs the product already has (shown below the boxes). Several at once: separate with commas. All of a product's SKUs share its one stock.</p>
     <div class="grid2">
       <div class="field"><label>Product *</label><select id="mProductSel" onchange="onMapProductSelect()"><option value="">Select your product…</option></select></div>
-      <div class="field"></div>
+      <div class="field"><label>Product group (optional) — SKUs of the same product are shown together in Stock</label><input id="mGroup" placeholder="e.g. Washing Machine Cover"></div>
     </div>
     <div class="grid2">
       <div class="field"><label>Linked to</label><select id="mSeller" onchange="onMappingSellerChange()"><option value="__own__">Not linked (my own product)</option></select></div>
@@ -768,6 +768,7 @@ async function saveMapping(){
   const data = {
     linkType: isOwn ? 'OWN' : (sellerId === currentUser.uid ? 'SELF_BILLING' : 'SELLER'),
     sellerId, sellerName, productId, sellerProductName, sellerSku,
+    groupName: (document.getElementById('mGroup').value || '').trim(),
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   SKU_FIELDS.forEach(f => {
@@ -837,6 +838,7 @@ function editMapping(id, fromSelect){
   if(!m) return;
   fillProductSelect(id);
   document.getElementById('mEditId').value = id;
+  document.getElementById('mGroup').value = m.groupName || '';
   const src = sourceOf(m);
   // A seller that's since been unlinked isn't in the dropdown — say so
   // rather than silently switching the product to "Not linked".
@@ -857,7 +859,7 @@ function editMapping(id, fromSelect){
   if(!fromSelect) document.getElementById('mappingFormCard').scrollIntoView({ behavior: 'smooth' });
 }
 function resetMappingForm(){
-  ['mEditId','mAmazonSku','mMeeshoSku','mFlipkartSku','mAllSku','mSellerSku','mSellerProductName'].forEach(f => document.getElementById(f).value = '');
+  ['mEditId','mGroup','mAmazonSku','mMeeshoSku','mFlipkartSku','mAllSku','mSellerSku','mSellerProductName'].forEach(f => document.getElementById(f).value = '');
   document.getElementById('mProductSel').value = '';
   renderExistingSkus(null);
   document.getElementById('mSeller').value = OWN_SOURCE;

@@ -466,14 +466,17 @@ function renderSummary(){
     const costItems = products.map(p => ({ productId: p.mapping ? p.mapping.productId : null, qty: (balanceToOrder(p.mapping, sid) ?? p.qty) })).filter(i => i.qty > 0);
     const orderCost = vtOrderCost(costItems.map(i => ({ ...i, productId: i.productId })), prices);
     const pend = pendingOrderBySeller[sid];
+    products.sort((a, b) => String((a.mapping && a.mapping.groupName) || '~').localeCompare(String((b.mapping && b.mapping.groupName) || '~')) || String(a.productName).localeCompare(String(b.productName)));
     const rows = products.map(p => {
       const bal = balanceToOrder(p.mapping, sid);
       const stockNow = p.mapping ? (p.mapping.stock || 0) : null;
       const onOrder = p.mapping ? inflightQty(sid, p.mapping.productId) : 0;
       const q = bal === null ? p.qty : bal, pr = p.mapping ? prices[p.mapping.productId] : null;
       const lineCost = pr ? vtMoney(q * pr.price * (1 + (pr.gstRate || 0) / 100)) : '—';
-      return `<tr><td>${esc(p.productName)}</td><td>${esc(p.sellerSku||'—')}</td>
-      <td>${p.breakdown.amazon ? 'Amazon: '+p.breakdown.amazon+'<br>' : ''}${p.breakdown.meesho ? 'Meesho: '+p.breakdown.meesho+'<br>' : ''}${p.breakdown.flipkart ? 'Flipkart: '+p.breakdown.flipkart : ''}</td>
+      const mk = (label, n, codes) => n ? `${label}: ${n}${codes ? ` <span style="color:var(--muted);font-size:11px">(${esc(String(codes).split(',').map(x => x.trim()).filter(Boolean).slice(0, 3).join(', '))})</span>` : ''}<br>` : '';
+      const grp = p.mapping && p.mapping.groupName ? `<div style="font-size:11.5px;color:var(--muted)">${esc(p.mapping.groupName)}</div>` : '';
+      return `<tr><td>${grp}${esc(p.productName)}</td><td>${esc(p.sellerSku||'—')}${p.mapping && p.mapping.buyerSku ? `<br><span style="font-size:11px;color:var(--muted)">my SKU ${esc(p.mapping.buyerSku)}</span>` : ''}</td>
+      <td>${mk('Amazon', p.breakdown.amazon, p.mapping && p.mapping.amazonSku)}${mk('Meesho', p.breakdown.meesho, p.mapping && p.mapping.meeshoSku)}${mk('Flipkart', p.breakdown.flipkart, p.mapping && p.mapping.flipkartSku)}</td>
       <td>${p.qty}</td>
       <td>${stockNow===null ? '—' : stockNow}${p.mapping ? ` <a href="#" title="Stock figure wrong? Correct it" onclick="fixStock('${p.mapping.id}');return false" style="text-decoration:none">✎</a>` : ''}</td>
       <td title="Ordered earlier and not accepted by the seller yet — counted, so it is not ordered twice">${onOrder || '—'}</td>
@@ -484,7 +487,7 @@ function renderSummary(){
     return `<div style="margin-bottom:22px;padding:${old ? '12px 14px' : '0 0 18px'};border-bottom:1px solid var(--line);${old ? 'background:#FFF7ED;border:1.5px solid #F2B266;border-radius:12px' : ''}">
       <h3 style="font-family:var(--display);font-size:16px;margin:0 0 10px">${esc(g.sellerName)} <span style="font-weight:400;font-size:13px;color:var(--muted)">· all pending labels · printed ${esc(dayRange(g))}${nDays > 1 ? ' (' + nDays + ' days)' : ''}</span>
         ${old ? '<span class="badge warn">📅 not sent yet — from an earlier day</span>' : ''}</h3>
-      <table><thead><tr><th>Product</th><th>Seller SKU</th><th>Marketplace breakdown</th><th>Labels printed</th><th>Stock Now</th><th>On order</th><th>Balance to Order</th><th>Cost (incl. GST)</th></tr></thead>
+      <table><thead><tr><th>Product / SKU</th><th>Seller SKU</th><th>Marketplace SKU &amp; labels</th><th>Labels printed</th><th>Stock Now</th><th>On order</th><th>Balance to Order</th><th>Cost (incl. GST)</th></tr></thead>
       <tbody>${rows}</tbody></table>
       <div style="margin-top:8px;font-size:14px">🧾 <b>Order cost: ${anyToOrder0(products, sid) ? vtMoney(orderCost.total) : '₹0.00'}</b>
         <span style="color:var(--muted);font-size:12px">${vtMoney(orderCost.taxable)} + ${vtMoney(orderCost.gst)} GST at ${esc(g.sellerName)}'s current prices${orderCost.unpriced ? ' · ' + orderCost.unpriced + ' item(s) priced on acceptance' : ''}</span></div>

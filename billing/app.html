@@ -54,6 +54,7 @@
     <a href="#stock" class="nav-link" data-view="stock">Stock Management</a>
     <a href="#products" class="nav-link" data-view="products">Products</a>
     <a href="#purchase-products" class="nav-link" data-view="purchase-products">Purchase Products</a>
+    <a href="order-sheet.html?side=seller" class="nav-link">Order Sheet (PDF with photos)</a>
 
     <div class="sidebar-section-label">Profit</div>
     <a href="#profit" class="nav-link" data-view="profit">Profit &amp; Graphs</a>
@@ -226,7 +227,7 @@
       <div class="card">
         <h2>Current Stock</h2>
         <p class="sub">Stock goes up automatically when you record a purchase of a linked purchase product, and down when you apply a monthly marketplace sales upload below. Use "Adjust Stock" for an opening balance or a correction.</p>
-        <table><thead><tr><th>Product</th><th>Unit</th><th>Current Stock</th><th>Reorder Level</th></tr></thead>
+        <table><thead><tr><th>Product / SKU</th><th>Unit</th><th>Current Stock</th><th>Reorder Level</th></tr></thead>
         <tbody id="stockTable"></tbody></table>
       </div>
 
@@ -353,6 +354,12 @@
       <div class="card">
         <h2>Product Master</h2>
         <p class="sub">Set up each product once with its HSN code and GST rate — you'll just pick from this list when billing. Enter the price <b>including GST</b> (your selling/MRP price) — the taxable value used on invoices is worked out for you automatically.</p>
+        <div class="grid3">
+          <div class="field"><label>Product (group) — optional</label><input id="pGroup" placeholder="e.g. Washing Machine Cover"></div>
+          <div class="field"><label>SKU variant — optional</label><input id="pVariant" placeholder="e.g. Top load 7 kg · Blue"></div>
+          <div class="field"></div>
+        </div>
+        <p class="sub" style="margin-top:-4px">One row here = <b>one SKU</b> with its own stock. Give the SKUs of the same product the same "Product (group)" and the Stock page shows them together under that product with a total.</p>
         <div class="grid3">
           <div class="field"><label>Product name</label><input id="pName"></div>
           <div class="field"><label>HSN / SAC code</label><input id="pHsn"></div>

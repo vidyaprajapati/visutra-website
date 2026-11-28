@@ -77,3 +77,24 @@ test('usual items are listed first and last quantities can be filled', () => {
   assert.strictEqual(w.document.getElementById('q-a').value, '');
   assert.match(w.document.getElementById('osSel').textContent, /2 items · total qty 50/);
 });
+test('buyer order for a linked seller is placed only for items linked to that seller\'s SKU', async () => {
+  const { w } = setup('buyer');
+  let captured = null;
+  w.eval("currentUser = { uid: 'B', email: 'b@x.in' }; SIDE = 'buyer'; me = { businessName: 'Buyer Co', stateCode: '09', state: 'UP' }; showMsg = function(){};");
+  w.db = { collection: () => ({ doc: () => ({ id: 'abcdef123456' }) }) };
+  w.vtPlaceOrMergeOrder = async (uid, ref, data) => { captured = data; return { orderId: ref.id, orderNumber: data.orderNumber, merged: false, items: data.items }; };
+  w.eval("linkOpts = [{id:'m1', sellerId:'SEL', productId:'PR1', sellerSku:'WM-7', sellerProductName:'Cover 7kg'},{id:'m2', sellerId:'OTHER', productId:'PR2', sellerSku:'X'},{id:'m3', ownLink:true, sellerId:'B', productId:'own_1'}];");
+  w.document.getElementById('osNote').value = 'urgent';
+  const lines = [{ itemId: 'i1', link: 'm1', name: 'Cover 7kg', unit: 'PCS', qty: 10 }, { itemId: 'i2', link: 'm2', name: 'Other', unit: 'PCS', qty: 5 }, { itemId: 'i3', link: 'm3', name: 'Own', unit: 'PCS', qty: 1 }, { itemId: 'i4', link: '', name: 'Unlinked', unit: 'PCS', qty: 2 }];
+  const r = await w.osPlaceRealOrder({ key: 'L:SEL', name: 'Seller' }, lines, 'OS-9');
+  assert.strictEqual(r.ids.size, 1); assert.ok(r.ids.has('i1')); assert.strictEqual(r.skipped, 3);
+  assert.strictEqual(captured.sellerUid, 'SEL');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(captured.items)), [{ productId: 'PR1', productName: 'Cover 7kg', sellerSku: 'WM-7', unit: 'PCS', qty: 10 }]);
+  assert.match(captured.note, /urgent/);
+});
+test('lines placed in the seller portal are not receivable by hand (no double stock)', () => {
+  const { w } = setup('buyer');
+  const h = { lines: [{ sku: 'A', qty: 5, placed: true }, { sku: 'B', qty: 3 }], received: {} };
+  assert.deepStrictEqual(Array.from(w.osShort(h).map(x => x.sku)), ['B']);
+  assert.strictEqual(w.osStatus({ lines: [{ sku: 'A', qty: 5, placed: true }], received: {} })[0], "In seller's portal");
+});
