@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Order Sheet (PDF with photos) | VISUTRA Billing</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="../favicon.svg">
+<link href="https://fonts.bunny.net/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/billing.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#FF5A00">
+<script src="/pwa.js" defer></script>
+<style>
+  .os-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 14px}
+  .os-tabs button{border:1px solid var(--thread);background:#fff;border-radius:999px;padding:8px 16px;font:600 14px inherit;cursor:pointer}
+  .os-tabs button.on{background:var(--indigo);border-color:var(--indigo);color:#fff}
+  .os-thumb{width:64px;height:64px;object-fit:cover;border-radius:10px;border:1px solid var(--thread);background:#faf6ee;display:block}
+  .os-noimg{width:64px;height:64px;border-radius:10px;border:1px dashed var(--thread);display:grid;place-items:center;color:var(--muted);font-size:11px}
+  .os-item{display:flex;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--thread)}
+  .os-item .grow{flex:1;min-width:0}
+  .os-item .sku{font-family:var(--mono);font-weight:600;font-size:13px}
+  .os-item .desc{font-size:12.5px;color:var(--muted);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .os-item input[type=number]{width:78px}
+  .os-bar{position:sticky;bottom:0;background:#fff;border-top:2px solid var(--thread);padding:10px 0;margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .os-prev{max-width:140px;max-height:140px;border-radius:10px;border:1px solid var(--thread);margin-top:6px;display:none}
+  .hidden{display:none!important}
+</style>
+<script src="/info-toggle.js" defer></script>
+</head>
+<body>
+<div class="topbar">
+  <a class="brand" href="../index.html"><img src="../assets/logo.png" alt="VISUTRA"><b>Order Sheet</b></a>
+  <div class="topbar-right"><a class="btn small" href="app.html" id="osBack">Billing</a><div id="userMenuMount"></div></div>
+</div>
+<div class="shell" style="display:block;max-width:1000px;margin:0 auto">
+  <div class="main">
+    <div class="card">
+      <h2>Order sheet — PDF with product photos</h2>
+      <p class="sub">Add your products once, with a photo, a description and <b>your own SKU</b>. To order, tick the products and quantities — a PDF with the photo, SKU, description and quantity of each item is made and sent to your seller / supplier on WhatsApp.</p>
+      <div class="os-tabs" id="osTabs"></div>
+      <p class="msg" id="osMsg"></p>
+
+      <!-- ===== CREATE ORDER ===== -->
+      <div id="paneOrder">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
+          <div class="field"><label id="osToLabel">Send to</label><select id="osTo" onchange="osOnRecipient()"><option value="">Select…</option></select></div>
+          <div class="field"><label>WhatsApp number</label><input id="osPhone" inputmode="tel" placeholder="10-digit number (optional)"></div>
+          <div class="field"><label>PDF layout</label><select id="osLayout" onchange="try{localStorage.setItem('vt_os_layout',this.value)}catch(e){}"><option value="cards">Photo cards (large photos)</option><option value="table">Compact table (15–20 items per page)</option></select></div>
+        </div>
+        <div class="field"><label>Note for the seller (optional)</label><input id="osNote" placeholder="e.g. Need by Friday, pack separately"></div>
+        <div class="field"><label>Find product</label><input id="osSearch" placeholder="Search by SKU or name" oninput="osRenderPick()"></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:2px 0 6px">
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="osUsual" checked onchange="osRenderPick()"> Usual items first</label>
+          <button class="btn small" type="button" onclick="osFillUsual()">Fill last quantities</button>
+        </div>
+        <div id="osPick"></div>
+        <div class="os-bar">
+          <span id="osSel" style="flex:1 1 160px;font-weight:600">No items selected</span>
+          <button class="btn" onclick="osClearCart()">Clear</button>
+          <button class="btn" id="osBtnPdf" onclick="osGenerate('download')">Download PDF</button>
+          <button class="btn primary" id="osBtnWa" style="background:#25D366;border-color:#25D366;color:#fff" onclick="osGenerate('share')">Send on WhatsApp</button>
+        </div>
+      </div>
+
+      <!-- ===== MY PRODUCTS ===== -->
+      <div id="paneCatalog" class="hidden">
+        <h3 style="font-family:var(--display);font-size:16px;margin:6px 0 8px" id="osFormTitle">Add product</h3>
+        <input type="hidden" id="cId">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
+          <div class="field"><label>My SKU *</label><input id="cSku" placeholder="e.g. WM-TOP-7KG" style="text-transform:uppercase"></div>
+          <div class="field"><label>Product name *</label><input id="cName" placeholder="e.g. Washing machine cover — top load 7 kg"></div>
+          <div class="field"><label>Unit (set once — used in every order)</label><input id="cUnit" value="PCS" list="osUnits" placeholder="PCS, ROLL, KG…" style="text-transform:uppercase"></div>
+          <datalist id="osUnits"><option value="PCS"><option value="ROLL"><option value="KG"><option value="GRAM"><option value="METER"><option value="BOX"><option value="BUNDLE"><option value="PACK"><option value="SET"><option value="DOZEN"><option value="LITRE"><option value="BAG"><option value="SHEET"><option value="PAIR"><option value="CARTON"></datalist>
+        </div>
+        <div class="field"><label>Description</label><textarea id="cDesc" rows="3" placeholder="Size, colour, material, any detail the seller must know"></textarea></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+          <div class="field"><label id="cLinkLabel">Link to stock item (for receiving)</label><select id="cLink"><option value="">Not linked</option></select></div>
+          <div class="field"><label>Usual rate (₹, optional)</label><input id="cRate" type="number" min="0" step="0.01" placeholder="0.00"></div>
+          <div class="field"><label>GST %</label><select id="cGst"><option value="0">0</option><option value="3">3</option><option value="5">5</option><option value="12">12</option><option value="18">18</option><option value="28">28</option><option value="40">40</option></select></div>
+          <div class="field"><label>Rate is</label><select id="cMode"><option value="incl">incl. GST</option><option value="excl">excl. GST</option></select></div>
+        </div>
+        <div class="field"><label>Photo</label><input type="file" id="cFile" accept="image/*" onchange="osPickPhoto(this)">
+          <img id="cPrev" class="os-prev" alt="">
+          <button class="btn small hidden" id="cRemoveImg" type="button" onclick="osRemovePhoto()" style="margin-top:6px">Remove photo</button></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn primary" onclick="osSaveProduct()">Save product</button>
+          <button class="btn" onclick="osResetForm()">Clear form</button>
+        </div>
+        <div style="margin-top:18px;padding:12px 14px;background:var(--ivory);border-radius:12px">
+          <b>Add many products from photos at once</b>
+          <p class="sub" style="margin:4px 0 8px">Choose several photos. Each becomes a product — the file name is used as the name and SKU; you can fix the details afterwards.</p>
+          <input type="file" id="cBulk" accept="image/*" multiple onchange="osBulkAdd(this)">
+        </div>
+        <h3 style="font-family:var(--display);font-size:16px;margin:18px 0 6px">My products <span id="cCount" style="color:var(--muted);font-weight:400"></span></h3>
+        <div class="field"><input id="cSearch" placeholder="Search my products" oninput="osRenderCatalog()"></div>
+        <div id="cList"></div>
+      </div>
+
+      <!-- ===== HISTORY ===== -->
+      <div id="paneHist" class="hidden">
+        <div id="recvBox" class="hidden" style="border:2px solid #25a05a;border-radius:14px;padding:14px;margin-bottom:14px;background:#f3fbf6"></div>
+        <div id="hList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="assets/vt-firebase-compat.js"></script>
+<script src="assets/firebase-config.js"></script>
+<script src="assets/user-menu.js"></script>
+<script src="/statement-share.js"></script>
+<script src="/order-sheet-core.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let currentUser = null, me = {}, SIDE = 'seller', TAB = 'order';
+let items = [], recips = [], osHist = [], cart = {}, photo = null, linkOpts = []; // photo: {data,w,h} | null | undefined (= unchanged)
+function showMsg(t, ok){ const m = $('osMsg'); m.textContent = t; m.className = 'msg ' + (ok ? 'success' : 'error'); if(t) m.scrollIntoView({block:'nearest'}); }
+const col = name => db.collection('users').doc(currentUser.uid).collection(name);
+
+function osTabs(){
+  $('osTabs').innerHTML = [['order','Create order'],['catalog','My products (' + items.length + ')'],['hist','History']]
+    .map(([k, t]) => `<button class="${TAB === k ? 'on' : ''}" onclick="osTab('${k}')">${t}</button>`).join('');
+  $('paneOrder').classList.toggle('hidden', TAB !== 'order');
+  $('paneCatalog').classList.toggle('hidden', TAB !== 'catalog');
+  $('paneHist').classList.toggle('hidden', TAB !== 'hist');
+}
+function osTab(k){ TAB = k; osTabs(); if(k === 'hist') osRenderHist(); if(k === 'order') osRenderPick(); if(k === 'catalog') osRenderCatalog(); }
+
+/* ---------- load ---------- */
+async function osLoad(){
+  const snap = await col('orderItems').get();
+  items = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.sku || '').localeCompare(String(b.sku || ''), undefined, { numeric: true }));
+  const hs = await col('orderSheets').get();
+  osHist = hs.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.orderNo || '').localeCompare(String(a.orderNo || '')));
+  linkOpts = [];
+  try{
+    if(SIDE === 'buyer'){
+      (await col('buyerSkuMappings').get()).docs.forEach(d => { const x = d.data(); if(x.status !== 'INACTIVE') linkOpts.push({ id: d.id, name: x.productName || x.name || d.id, unit: x.unit || '' }); });
+    } else {
+      (await col('purchaseProducts').get()).docs.forEach(d => { const x = d.data(); if(!x.deleted) linkOpts.push({ id: d.id, name: x.name || d.id, unit: x.unit || '', hsn: x.hsn || '', linkedProductId: x.linkedProductId || null }); });
+    }
+  }catch(e){ console.warn('link list', e); }
+  linkOpts.sort((a, b) => a.name.localeCompare(b.name));
+  $('cLink').innerHTML = '<option value="">Not linked</option>' + linkOpts.map(o => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join('');
+  $('cLinkLabel').textContent = SIDE === 'buyer' ? 'Link to my Buyer SKU Master item (stock goes up on receipt)' : 'Link to my Purchase Product (stock goes up on receipt)';
+  recips = [];
+  if(SIDE === 'buyer'){
+    try{
+      const l = await db.collection('sellerLinks').where('buyerUid', '==', currentUser.uid).get();
+      l.docs.map(d => d.data()).filter(x => x.status === 'ACTIVE').forEach(x => recips.push({ key: 'L:' + x.sellerUid, name: x.sellerName || x.sellerEmail || 'Seller', phone: '', group: 'Linked VISUTRA sellers' }));
+    }catch(e){ console.warn(e); }
+    const s = await col('buyerSuppliers').get();
+    s.docs.forEach(d => { const x = d.data(); if(!x.deleted) recips.push({ key: 'S:' + d.id, name: x.name || x.legalName || 'Supplier', phone: x.phone || '', group: 'My suppliers' }); });
+  } else {
+    const s = await col('suppliers').get();
+    s.docs.forEach(d => { const x = d.data(); if(!x.deleted) recips.push({ key: 'S:' + d.id, name: x.name || x.legalName || 'Supplier', phone: x.phone || '', group: 'My suppliers' }); });
+  }
+  const groups = {};
+  recips.forEach(r => { (groups[r.group] = groups[r.group] || []).push(r); });
+  $('osTo').innerHTML = '<option value="">Select…</option>' + Object.keys(groups).map(g =>
+    `<optgroup label="${esc(g)}">` + groups[g].sort((a, b) => a.name.localeCompare(b.name)).map(r => `<option value="${esc(r.key)}">${esc(r.name)}</option>`).join('') + '</optgroup>').join('');
+}
+function osOnRecipient(){
+  const r = recips.find(x => x.key === $('osTo').value);
+  if(r && r.phone) $('osPhone').value = r.phone;
+  else if(r){ let saved = ''; try{ saved = localStorage.getItem('vt_os_phone_' + r.key) || ''; }catch(e){} $('osPhone').value = saved; }
+}
+
+/* ---------- create order ---------- */
+function thumb(it){ return it.imageData ? `<img class="os-thumb" src="${it.imageData}" alt="">` : '<div class="os-noimg">No photo</div>'; }
+function osRenderPick(){
+  const q = ($('osSearch').value || '').trim().toLowerCase();
+  let list = items.filter(i => !q || String(i.sku || '').toLowerCase().includes(q) || String(i.name || '').toLowerCase().includes(q));
+  if($('osUsual').checked) list = list.slice().sort((a, b) => (Number(b.orderCount) || 0) - (Number(a.orderCount) || 0) || String(a.sku || '').localeCompare(String(b.sku || ''), undefined, { numeric: true }));
+  $('osPick').innerHTML = list.map(i => `<div class="os-item">${thumb(i)}
+    <div class="grow"><div class="sku">${esc(i.sku)}${i.orderCount ? ` <span style="font-weight:400;color:#1a7f45;font-size:11px">★ ordered ${i.orderCount}×</span>` : ''}</div><div><b>${esc(i.name)}</b></div><div class="desc">${esc(i.description || '')}</div></div>
+    <div style="text-align:right"><input type="number" min="0" step="1" placeholder="Qty" id="q-${i.id}" value="${cart[i.id] || ''}" oninput="osQty('${i.id}', this.value)"><div style="font-size:12px;font-weight:600;margin-top:3px;text-transform:uppercase">${esc(i.unit || 'PCS')}</div>${i.lastQty ? `<button class="btn small" type="button" style="margin-top:3px;padding:3px 9px;display:block;margin-left:auto" onclick="osUseLast('${i.id}')">↺ ${i.lastQty}</button>` : ''}</div></div>`).join('')
+    || `<p style="color:var(--muted)">${items.length ? 'No product matches.' : 'No products yet — open "My products" and add your products with photos and SKUs.'}</p>`;
+  osSel();
+}
+function osQty(id, v){ const n = parseFloat(v); if(n > 0) cart[id] = n; else delete cart[id]; osSel(); }
+function osSel(){
+  const ids = Object.keys(cart), q = ids.reduce((s, k) => s + cart[k], 0);
+  $('osSel').textContent = ids.length ? `${ids.length} item${ids.length > 1 ? 's' : ''} · total qty ${q}` : 'No items selected';
+}
+function osUseLast(id){ const i = items.find(x => x.id === id); if(!i || !i.lastQty) return; cart[id] = Number(i.lastQty); osRenderPick(); }
+function osFillUsual(){ let n = 0; items.forEach(i => { if(i.lastQty){ cart[i.id] = Number(i.lastQty); n++; } }); osRenderPick(); showMsg(n ? `Filled last quantities for ${n} usual item${n > 1 ? 's' : ''} — change any quantity you need.` : 'No earlier orders yet, so there are no usual quantities.', !!n); }
+function osClearCart(){ cart = {}; osRenderPick(); }
+
+async function osGenerate(mode){
+  const ids = Object.keys(cart).filter(id => items.find(i => i.id === id));
+  const r = recips.find(x => x.key === $('osTo').value);
+  if(!r){ showMsg('Select who the order is for.', false); return; }
+  if(!ids.length){ showMsg('Enter a quantity for at least one product.', false); return; }
+  const btns = [$('osBtnPdf'), $('osBtnWa')]; btns.forEach(b => b.disabled = true);
+  showMsg('Preparing the PDF…', true);
+  try{
+    const lines = ids.map(id => { const i = items.find(x => x.id === id); return { itemId: id, sku: i.sku, name: i.name, description: i.description || '', unit: String(i.unit || 'PCS').toUpperCase(), qty: cart[id], imageData: i.imageData || '', imgW: i.imgW, imgH: i.imgH, link: i.link || '', hsn: i.hsn || '', rate: Number(i.rate) || 0, gstRate: Number(i.gstRate) || 0, priceMode: i.priceMode || (SIDE === 'buyer' ? 'excl' : 'incl') }; });
+    const sig = r.key + '|' + lines.map(l => String(l.sku).toUpperCase() + ':' + l.qty).sort().join(',');
+    const today = new Date().toISOString().slice(0, 10), dup = osHist.find(h => h.sig === sig && h.date === today);
+    if(dup && !confirm(`The same order (${dup.orderNo}) was already sent to ${r.name} today.\n\nSend it again?`)){ showMsg('Cancelled — the same order was already sent today.', false); btns.forEach(b => b.disabled = false); return; }
+    const orderNo = 'OS-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+    const out = await OSHEET.makePdf({ ownerName: me.businessName || currentUser.email, orderNo, toName: r.name, note: $('osNote').value.trim(), lines, layout: $('osLayout').value });
+    const phone = $('osPhone').value.trim();
+    if(phone){ try{ localStorage.setItem('vt_os_phone_' + r.key, phone); }catch(e){} }
+    const text = `Order ${orderNo} from ${me.businessName || currentUser.email}\n${lines.length} item${lines.length > 1 ? 's' : ''}, total qty ${out.totalQty}.\nPlease see the attached PDF (photo, SKU, description and quantity of each item).` + ($('osNote').value.trim() ? `\nNote: ${$('osNote').value.trim()}` : '');
+    await col('orderSheets').add({ orderNo, date: new Date().toISOString().slice(0, 10), recipientKey: r.key, recipientName: r.name, note: $('osNote').value.trim(),
+      sig, status: 'SENT', received: {},
+      lines: lines.map(l => ({ sku: l.sku, name: l.name, unit: l.unit, qty: l.qty, link: l.link, hsn: l.hsn, rate: l.rate, gstRate: l.gstRate, priceMode: l.priceMode })), totalQty: out.totalQty, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    for(const l of lines){   // remember usual quantity + how often each product is ordered
+      const it = items.find(x => x.id === l.itemId);
+      try{ await col('orderItems').doc(l.itemId).set({ lastQty: l.qty, lastOrdered: today, orderCount: (Number(it && it.orderCount) || 0) + 1 }, { merge: true }); }catch(e){}
+    }
+    await osLoad(); osRenderPick();
+    const hs = await col('orderSheets').get(); osHist = hs.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+    if(mode === 'download'){ window.vtStatement.download(out.blob, out.name); showMsg(`PDF ${orderNo} downloaded and saved in History.`, true); }
+    else {
+      const res = await window.vtStatement.sharePdf({ blob: out.blob, name: out.name, phone, text });
+      showMsg(res === 'cancelled' ? 'Sharing cancelled — the order is saved in History.' : res === 'fallback' ? 'PDF downloaded and WhatsApp opened — attach the PDF in the chat.' : `Order ${orderNo} shared.`, true);
+    }
+  }catch(err){ showMsg('Could not create the PDF: ' + err.message, false); }
+  btns.forEach(b => b.disabled = false);
+}
+
+/* ---------- catalog ---------- */
+function osRenderCatalog(){
+  const q = ($('cSearch').value || '').trim().toLowerCase();
+  $('cCount').textContent = items.length ? '(' + items.length + ')' : '';
+  const list = items.filter(i => !q || String(i.sku || '').toLowerCase().includes(q) || String(i.name || '').toLowerCase().includes(q));
+  $('cList').innerHTML = list.map(i => `<div class="os-item">${thumb(i)}
+    <div class="grow"><div class="sku">${esc(i.sku)}</div><div><b>${esc(i.name)}</b> <span style="color:var(--muted);font-size:12px">· ${esc(i.unit || 'PCS')}</span></div><div class="desc">${esc(i.description || '')}</div></div>
+    <div style="display:flex;gap:6px"><button class="btn small" onclick="osEdit('${i.id}')">Edit</button><button class="btn small danger" onclick="osDelete('${i.id}')">Delete</button></div></div>`).join('')
+    || '<p style="color:var(--muted)">No products yet.</p>';
+}
+function osResetForm(){ ['cId','cSku','cName','cDesc','cFile','cRate'].forEach(f => $(f).value = ''); $('cUnit').value = 'PCS'; $('cLink').value = ''; $('cGst').value = '0'; $('cMode').value = SIDE === 'buyer' ? 'excl' : 'incl'; photo = null; osShowPrev(null); $('osFormTitle').textContent = 'Add product'; }
+function osShowPrev(src){ const p = $('cPrev'); p.style.display = src ? 'block' : 'none'; if(src) p.src = src; $('cRemoveImg').classList.toggle('hidden', !src); }
+async function osPickPhoto(inp){
+  const f = inp.files && inp.files[0]; if(!f) return;
+  try{ photo = await OSHEET.resizeImage(f); osShowPrev(photo.data); }
+  catch(e){ showMsg(e.message, false); inp.value = ''; }
+}
+function osRemovePhoto(){ photo = null; $('cFile').value = ''; osShowPrev(null); }
+function osEdit(id){
+  const i = items.find(x => x.id === id); if(!i) return;
+  $('cId').value = id; $('cSku').value = i.sku || ''; $('cName').value = i.name || ''; $('cUnit').value = i.unit || 'PCS'; $('cDesc').value = i.description || '';
+  $('cLink').value = i.link || ''; $('cRate').value = i.rate || ''; $('cGst').value = String(i.gstRate || 0); $('cMode').value = i.priceMode || (SIDE === 'buyer' ? 'excl' : 'incl');
+  photo = i.imageData ? { data: i.imageData, w: i.imgW, h: i.imgH } : null; osShowPrev(i.imageData || null);
+  $('osFormTitle').textContent = 'Edit product'; window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+async function osSaveProduct(){
+  const id = $('cId').value, sku = $('cSku').value.trim().toUpperCase(), name = $('cName').value.trim();
+  if(!sku || !name){ showMsg('SKU and product name are required.', false); return; }
+  if(items.some(i => i.id !== id && String(i.sku || '').toUpperCase() === sku)){ showMsg(`SKU ${sku} is already used by another product.`, false); return; }
+  const data = { sku, name, link: $('cLink').value || '', rate: parseFloat($('cRate').value) || 0, gstRate: parseFloat($('cGst').value) || 0, priceMode: $('cMode').value, hsn: (linkOpts.find(o => o.id === $('cLink').value) || {}).hsn || '', unit: ($('cUnit').value.trim() || 'PCS').toUpperCase(), description: $('cDesc').value.trim(), imageData: photo ? photo.data : '', imgW: photo ? photo.w : 0, imgH: photo ? photo.h : 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+  try{
+    if(id) await col('orderItems').doc(id).set(data, { merge: true }); else await col('orderItems').add(data);
+    showMsg(`${sku} saved.`, true); osResetForm(); await osLoad(); osTabs(); osRenderCatalog();
+  }catch(e){ showMsg('Could not save: ' + e.message, false); }
+}
+async function osDelete(id){
+  const i = items.find(x => x.id === id); if(!i || !confirm(`Delete ${i.sku}? (Past order history is not affected.)`)) return;
+  try{ await col('orderItems').doc(id).delete(); delete cart[id]; await osLoad(); osTabs(); osRenderCatalog(); showMsg('Deleted.', true); }catch(e){ showMsg('Could not delete: ' + e.message, false); }
+}
+async function osBulkAdd(inp){
+  const files = Array.from(inp.files || []); if(!files.length) return;
+  let ok = 0, fail = 0, dup = 0; const used = new Set(items.map(i => String(i.sku || '').toUpperCase()));
+  for(let n = 0; n < files.length; n++){
+    showMsg(`Adding ${n + 1} of ${files.length}…`, true);
+    try{
+      const base = files[n].name.replace(/\.[^.]+$/, '');
+      let sku = base.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toUpperCase().slice(0, 24) || ('ITEM-' + (items.length + n + 1));
+      if(used.has(sku)){ dup++; let k = 2; while(used.has(sku + '-' + k)) k++; sku = sku + '-' + k; }
+      used.add(sku);
+      const img = await OSHEET.resizeImage(files[n]);
+      await col('orderItems').add({ sku, name: base.replace(/[-_]+/g, ' ').trim(), unit: 'PCS', description: '', imageData: img.data, imgW: img.w, imgH: img.h, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+      ok++;
+    }catch(e){ fail++; }
+  }
+  inp.value = '';
+  await osLoad(); osTabs(); osRenderCatalog();
+  showMsg(`${ok} product${ok === 1 ? '' : 's'} added${dup ? ` (${dup} SKU${dup > 1 ? 's' : ''} renamed to stay unique)` : ''}${fail ? `, ${fail} photo${fail > 1 ? 's' : ''} could not be read` : ''}. Now edit each product's SKU and description.`, !fail);
+}
+
+/* ---------- osHist ---------- */
+function osShort(h){ return (h.lines || []).map(l => ({ sku: l.sku, short: Math.max(0, (Number(l.qty) || 0) - (Number((h.received || {})[l.sku]) || 0)) })).filter(x => x.short > 0); }
+function osStatus(h){
+  const rec = Object.values(h.received || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+  if(!rec) return ['Sent', '#8a6d1a', '#fff4d6'];
+  return osShort(h).length ? ['Partly received', '#9E3608', '#ffe9dc'] : ['Received', '#1a7f45', '#dff5e8'];
+}
+function osRenderHist(){
+  $('hList').innerHTML = osHist.map(h => {
+    const st = osStatus(h), sh = osShort(h), rec = Object.keys(h.received || {}).length > 0;
+    return `<div class="os-item"><div class="grow"><div class="sku">${esc(h.orderNo)} <span style="font-family:inherit;font-weight:600;font-size:11px;border-radius:999px;padding:2px 9px;background:${st[2]};color:${st[1]}">${st[0]}</span></div>
+    <div><b>${esc(h.recipientName || '')}</b> · ${esc(h.date || '')}</div>
+    <div class="desc">${(h.lines || []).map(l => esc(l.sku) + ' × ' + l.qty).join(', ')}</div>
+    ${rec && sh.length ? `<div style="font-size:12.5px;color:#9E3608;margin-top:3px">Short: ${sh.map(x => esc(x.sku) + ' ' + x.short).join(', ')}</div>` : ''}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${sh.length ? `<button class="btn small primary" onclick="osReceiveOpen('${h.id}')">Receive</button>` : ''}<button class="btn small" onclick="osReuse('${h.id}')">Reuse</button></div></div>`;
+  }).join('') || '<p style="color:var(--muted)">No order sheets yet.</p>';
+}
+/* ---------- receive goods against an order ---------- */
+let recvId = null;
+function osReceiveOpen(id){
+  const h = osHist.find(x => x.id === id); if(!h) return; recvId = id;
+  const rows = (h.lines || []).map((l, n) => {
+    const got = Number((h.received || {})[l.sku]) || 0, left = Math.max(0, (Number(l.qty) || 0) - got);
+    return `<tr><td style="padding:6px 8px"><input type="checkbox" id="rv-c${n}" ${left ? 'checked' : 'disabled'}></td>
+      <td style="padding:6px 8px"><b>${esc(l.sku)}</b><br><span style="font-size:12px;color:var(--muted)">${esc(l.name)}</span></td>
+      <td style="padding:6px 8px;text-align:right">${l.qty}<br><span style="font-size:11px;color:var(--muted)">got ${got}</span></td>
+      <td style="padding:6px 8px"><input type="number" min="0" step="1" id="rv-q${n}" value="${left}" style="width:76px" ${left ? '' : 'disabled'}></td>
+      <td style="padding:6px 8px"><input type="number" min="0" step="0.01" id="rv-r${n}" value="${l.rate || ''}" placeholder="rate" style="width:84px" ${left ? '' : 'disabled'}></td></tr>`;
+  }).join('');
+  $('recvBox').classList.remove('hidden');
+  $('recvBox').innerHTML = `<h3 style="font-family:var(--display);font-size:16px;margin:0 0 4px">Receive goods — ${esc(h.orderNo)} from ${esc(h.recipientName)}</h3>
+    <p class="sub" style="margin:0 0 8px">Tick what arrived and enter the quantity actually received. A purchase entry is created and stock goes up for linked items; anything short stays open for the next delivery.</p>
+    <div style="overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:13.5px"><thead><tr style="text-align:left;color:var(--muted);font-size:12px"><th></th><th>Product</th><th style="text-align:right">Ordered</th><th>Received now</th><th>Rate ₹ (${SIDE === 'buyer' ? 'per unit' : 'per unit'})</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:end">
+      <div class="field" style="margin:0"><label>Supplier bill no. (optional)</label><input id="rv-inv" placeholder="Invoice / challan no."></div>
+      <div class="field" style="margin:0"><label>Date received</label><input type="date" id="rv-date" value="${new Date().toISOString().slice(0, 10)}"></div>
+      <div class="field" style="margin:0"><label>Paid now ₹ (optional)</label><input type="number" min="0" step="0.01" id="rv-paid" value="0" style="width:110px"></div>
+      <button class="btn primary" id="rv-save" onclick="osReceiveSave()">Save receipt</button><button class="btn" onclick="osReceiveClose()">Cancel</button></div>`;
+  $('recvBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function osReceiveClose(){ recvId = null; $('recvBox').classList.add('hidden'); $('recvBox').innerHTML = ''; }
+async function osReceiveSave(){
+  const h = osHist.find(x => x.id === recvId); if(!h) return;
+  const btn = $('rv-save'); if(btn.disabled) return;
+  const date = $('rv-date').value || new Date().toISOString().slice(0, 10), invoiceNo = $('rv-inv').value.trim(), paid = parseFloat($('rv-paid').value) || 0;
+  const picked = [];
+  (h.lines || []).forEach((l, n) => {
+    const c = $('rv-c' + n); if(!c || c.disabled || !c.checked) return;
+    const qty = parseFloat($('rv-q' + n).value) || 0; if(qty <= 0) return;
+    picked.push({ l, qty, rate: parseFloat($('rv-r' + n).value) || 0 });
+  });
+  if(!picked.length){ showMsg('Tick at least one item and enter the quantity received.', false); return; }
+  // which supplier record gets the purchase
+  let sup = null;
+  if(String(h.recipientKey).startsWith('S:')){
+    const d = await col(SIDE === 'buyer' ? 'buyerSuppliers' : 'suppliers').doc(h.recipientKey.slice(2)).get();
+    if(d.exists) sup = { id: d.id, name: d.data().name || h.recipientName };
+  } else if(SIDE === 'buyer'){
+    const all = await col('buyerSuppliers').get(); const m = all.docs.find(d => d.data().sellerUid === h.recipientKey.slice(2));
+    if(m) sup = { id: m.id, name: m.data().name || h.recipientName };
+  }
+  if(!sup){ showMsg(`Add ${h.recipientName} under Suppliers first (Purchase Entry), then receive this order.`, false); return; }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try{
+    const lines = picked.map(({ l, qty, rate }) => {
+      const gst = Number(l.gstRate) || 0, mode = l.priceMode || (SIDE === 'buyer' ? 'excl' : 'incl');
+      let taxable, gstAmt, total;
+      if(mode === 'excl'){ taxable = qty * rate; gstAmt = taxable * gst / 100; total = taxable + gstAmt; }
+      else { total = qty * rate; taxable = gst ? total / (1 + gst / 100) : total; gstAmt = total - taxable; }
+      return { l, qty, rate, gst, mode, taxable, gstAmt, total };
+    });
+    const sum = k => lines.reduce((s, x) => s + x[k], 0), subtotal = sum('taxable'), gstTotal = sum('gstAmt'), grand = subtotal + gstTotal;
+    const FV = firebase.firestore.FieldValue, now = FV.serverTimestamp();
+    let linked = 0;
+    if(SIDE === 'buyer'){
+      await col('buyerPurchases').add({ supplierId: sup.id, supplierName: sup.name, date, invoiceNo, orderSheetNo: h.orderNo,
+        items: lines.map(x => ({ name: x.l.name, qty: x.qty, rate: x.rate, gstRate: x.gst, priceMode: x.mode, taxable: x.taxable, gstAmt: x.gstAmt, total: x.total, linkedSkuMappingId: x.l.link || null })),
+        subtotal, gstTotal, grandTotal: grand, recordedByBuyer: true, createdAt: now });
+      for(const x of lines){ if(!x.l.link) continue;
+        await col('buyerSkuMappings').doc(x.l.link).update({ stock: FV.increment(x.qty), updatedAt: now });
+        await col('buyerStockMovements').add({ type: 'purchase-in', mappingId: x.l.link, productName: x.l.name, qty: x.qty, date, note: `Received against order ${h.orderNo} from ${sup.name}`, createdAt: now }); linked++; }
+      if(paid > 0) await col('buyerPayments').add({ supplierId: sup.id, supplierName: sup.name, date, amount: paid, mode: '', note: 'Paid with purchase', createdAt: now });
+    } else {
+      const pp = {}; linkOpts.forEach(o => pp[o.id] = o);
+      await col('purchases').add({ supplierId: sup.id, supplierName: sup.name, date, invoiceNo, orderSheetNo: h.orderNo,
+        items: lines.map(x => { const o = pp[x.l.link] || {}; return { productId: x.l.link || '', name: x.l.name, unit: x.l.unit, hsn: x.l.hsn || o.hsn || '', qty: x.qty, rate: x.rate, gstRate: x.gst, priceMode: x.mode, taxable: x.taxable, gstAmt: x.gstAmt, total: x.total, linkedProductId: o.linkedProductId || null }; }),
+        subtotal, gstTotal, grandTotal: grand, createdAt: now });
+      for(const x of lines){ const o = pp[x.l.link]; if(!o || !o.linkedProductId) continue;
+        await col('products').doc(o.linkedProductId).update({ stock: FV.increment(x.qty) });
+        await col('stockMovements').add({ type: 'purchase-in', productId: o.linkedProductId, productName: x.l.name, qty: x.qty, date, note: `Received against order ${h.orderNo} from ${sup.name}`, createdAt: now }); linked++; }
+      if(paid > 0) await col('payments').add({ supplierId: sup.id, supplierName: sup.name, date, amount: paid, mode: 'On purchase', note: `Paid against purchase dated ${date}`, createdAt: now });
+    }
+    const received = Object.assign({}, h.received || {});
+    picked.forEach(p => { received[p.l.sku] = (Number(received[p.l.sku]) || 0) + p.qty; });
+    const short = (h.lines || []).some(l => (Number(l.qty) || 0) > (Number(received[l.sku]) || 0));
+    await col('orderSheets').doc(h.id).set({ received, status: short ? 'PARTIAL' : 'RECEIVED', lastReceivedOn: date }, { merge: true });
+    await osLoad(); osReceiveClose(); osRenderHist();
+    showMsg(`Receipt saved: purchase of ₹${(Math.round(grand * 100) / 100).toLocaleString('en-IN')} added${linked ? `, stock increased for ${linked} linked item${linked > 1 ? 's' : ''}` : ' (no items were linked to stock — link them in My products)'}.${short ? ' Some items are still short.' : ' Order complete.'}`, true);
+  }catch(err){ showMsg('Could not save the receipt: ' + err.message, false); btn.disabled = false; btn.textContent = 'Save receipt'; }
+}
+function osReuse(id){
+  const h = osHist.find(x => x.id === id); if(!h) return;
+  cart = {}; let miss = 0;
+  (h.lines || []).forEach(l => { const i = items.find(x => String(x.sku).toUpperCase() === String(l.sku).toUpperCase()); if(i) cart[i.id] = l.qty; else miss++; });
+  if(recips.some(r => r.key === h.recipientKey)){ $('osTo').value = h.recipientKey; osOnRecipient(); }
+  $('osNote').value = h.note || '';
+  osTab('order'); showMsg(miss ? `${miss} product${miss > 1 ? 's' : ''} from that order no longer exist in My products.` : 'Items loaded — change quantities and send.', !miss);
+}
+
+auth.onAuthStateChanged(async user => {
+  if(!user){ window.location.href = 'login.html?redirect=' + encodeURIComponent('order-sheet.html' + location.search); return; }
+  currentUser = user;
+  SIDE = new URLSearchParams(location.search).get('side') === 'buyer' ? 'buyer' : 'seller';
+  mountUserMenu('userMenuMount', user, { showBillingLink: true, basePath: '' });
+  if(SIDE === 'buyer'){ $('osBack').href = 'buyer/dashboard.html'; $('osBack').textContent = 'Buyer'; $('osToLabel').textContent = 'Send to seller'; }
+  else { $('osToLabel').textContent = 'Send to supplier'; }
+  try{
+    const snap = await db.collection('users').doc(user.uid).get(); me = snap.exists ? (snap.data() || {}) : {};
+    await osLoad();
+  }catch(err){ showMsg('Could not load: ' + err.message, false); }
+  try{ const L = localStorage.getItem('vt_os_layout'); if(L) $('osLayout').value = L; }catch(e){}
+  osResetForm(); osTabs(); osRenderPick();
+});
+</script>
+</body>
+</html>
