@@ -99,7 +99,10 @@
           <div class="field"><label>GST %</label><select id="cGst"><option value="0">0</option><option value="3">3</option><option value="5">5</option><option value="12">12</option><option value="18">18</option><option value="28">28</option><option value="40">40</option></select></div>
           <div class="field"><label>Rate is</label><select id="cMode"><option value="incl">incl. GST</option><option value="excl">excl. GST</option></select></div>
         </div>
-        <div class="field"><label>Photo</label><input type="file" id="cFile" accept="image/*" onchange="osPickPhoto(this)">
+        <div class="field"><label>Photo</label>
+          <select id="cPhotoSame" onchange="osSamePick()" style="margin-bottom:6px"></select>
+          <div id="cPhotoHint" style="font-size:11.5px;color:var(--muted);margin-bottom:6px">One photo can serve many SKUs (size / colour variants) — it is stored only once, which saves space.</div>
+          <input type="file" id="cFile" accept="image/*" onchange="osPickPhoto(this)">
           <img id="cPrev" class="os-prev" alt="">
           <button class="btn small hidden" id="cRemoveImg" type="button" onclick="osRemovePhoto()" style="margin-top:6px">Remove photo</button></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -136,6 +139,7 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let currentUser = null, me = {}, SIDE = 'seller', TAB = 'order';
+let sharedPhoto = '';
 let items = [], recips = [], osHist = [], cart = {}, photo = null, linkOpts = [], stockProds = {}; // photo: {data,w,h} | null | undefined (= unchanged)
 function showMsg(t, ok){ const m = $('osMsg'); m.textContent = t; m.className = 'msg ' + (ok ? 'success' : 'error'); if(t) m.scrollIntoView({block:'nearest'}); }
 const col = name => db.collection('users').doc(currentUser.uid).collection(name);
@@ -165,7 +169,7 @@ async function osLoad(){
     }
   }catch(e){ console.warn('link list', e); }
   linkOpts.sort((a, b) => a.name.localeCompare(b.name));
-  osOverlayMaster();
+  osOverlayMaster(); osResolveImages();
   $('cLink').innerHTML = '<option value="">Not linked</option>' + linkOpts.map(o => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join('');
   $('cLinkLabel').textContent = SIDE === 'buyer' ? 'Link to my Buyer SKU Master item (stock goes up on receipt)' : 'Link to my Purchase Product (stock goes up on receipt)';
   recips = [];
@@ -318,6 +322,25 @@ function osRenderCatalog(){
 }
 /* Product Master / Buyer SKU Master is the single source of truth: an Order Sheet product that is linked to a master SKU
    always shows the master's current SKU code, variant and product (so editing there is reflected here). */
+/* A SKU may point to another SKU's photo (imageRef) instead of storing its own copy. */
+function osResolveImages(){
+  items.forEach(i => {
+    i._ownImg = !!i.imageData;
+    if(!i.imageData && i.imageRef){ const o = items.find(x => x.id === i.imageRef && x.imageData); if(o){ i.imageData = o.imageData; i.imgW = o.imgW; i.imgH = o.imgH; } }
+  });
+}
+function osFillPhotoSel(cur){
+  const id = $('cId').value, sel = $('cPhotoSame'), g = osGroupValue();
+  const owners = items.filter(x => x._ownImg && x.id !== id).sort((a, b) => ((b.group === g) - (a.group === g)) || String(a.sku).localeCompare(String(b.sku)));
+  sel.innerHTML = '<option value="">Upload a photo for this SKU</option>' + owners.map(o => `<option value="${esc(o.id)}">Same photo as ${esc(o.sku)} — ${esc(o.name)}</option>`).join('');
+  sel.value = cur || ''; sel.style.display = owners.length ? '' : 'none';
+  $('cFile').style.display = sel.value ? 'none' : '';
+}
+function osSamePick(){
+  const v = $('cPhotoSame').value; sharedPhoto = v;
+  if(v){ const o = items.find(x => x.id === v); photo = { data: o.imageData, w: o.imgW, h: o.imgH }; osShowPrev(o.imageData); $('cFile').value = ''; $('cFile').style.display = 'none'; }
+  else { photo = null; osShowPrev(null); $('cFile').style.display = ''; }
+}
 function osOverlayMaster(){
   items.forEach(i => {
     if(!i.masterId) return;
@@ -371,7 +394,8 @@ function osSkuPick(){
   const ex = items.find(i => x.sku && String(i.sku).toUpperCase() === String(x.sku).toUpperCase());
   if(ex && !$('cId').value) showMsg(`${x.sku} is already in My products — use Edit on it, or pick another SKU.`, false); else showMsg('', true);
 }
-function osGroupPick(){ const isNew = $('cGroupSel').value === '__new'; $('cGroupNewWrap').style.display = isNew ? 'block' : 'none'; if(!isNew) $('cGroup').value = $('cGroupSel').value; osFillSkuSel(); }
+function osGroupPick(){ const isNew = $('cGroupSel').value === '__new'; $('cGroupNewWrap').style.display = isNew ? 'block' : 'none'; if(!isNew) $('cGroup').value = $('cGroupSel').value; osFillSkuSel();
+  if(!photo && !$('cId').value){ const sib = items.find(x => x._ownImg && x.group && x.group === osGroupValue()); osFillPhotoSel(sib ? sib.id : ''); if(sib) osSamePick(); } else osFillPhotoSel($('cPhotoSame').value); }
 function osGroupValue(){ return $('cGroupSel').value === '__new' ? $('cGroup').value.trim() : $('cGroupSel').value; }
 function osMapText(i){
   if(i.masterId) return `<div style="font-size:11.5px;color:#1a7f45">✓ Synced with ${SIDE === 'buyer' ? 'Buyer SKU Master' : 'Product Master'} — edit the SKU here or there, it stays the same in both</div>`;
@@ -379,19 +403,19 @@ function osMapText(i){
   if(!i.link || !o) return '<div style="font-size:11.5px;color:#9E3608">Not linked to a stock SKU yet</div>';
   return `<div style="font-size:11.5px;color:#1a7f45">${SIDE === 'buyer' ? 'Linked: ' : 'Stock link: '}${esc(o.name)}</div>`;
 }
-function osResetForm(){ ['cMaster','cId','cSku','cName','cGroup','cDesc','cFile','cRate'].forEach(f => $(f).value = ''); osFillGroupSel(''); $('cGroupNewWrap').style.display = 'none'; $('cUnit').value = 'PCS'; $('cLink').value = ''; $('cGst').value = '0'; $('cMode').value = SIDE === 'buyer' ? 'excl' : 'incl'; photo = null; osShowPrev(null); $('osFormTitle').textContent = 'Add product'; }
+function osResetForm(){ ['cMaster','cId','cSku','cName','cGroup','cDesc','cFile','cRate'].forEach(f => $(f).value = ''); osFillGroupSel(''); $('cGroupNewWrap').style.display = 'none'; $('cUnit').value = 'PCS'; $('cLink').value = ''; $('cGst').value = '0'; $('cMode').value = SIDE === 'buyer' ? 'excl' : 'incl'; photo = null; sharedPhoto = ''; osShowPrev(null); osFillPhotoSel(''); $('osFormTitle').textContent = 'Add product'; }
 function osShowPrev(src){ const p = $('cPrev'); p.style.display = src ? 'block' : 'none'; if(src) p.src = src; $('cRemoveImg').classList.toggle('hidden', !src); }
 async function osPickPhoto(inp){
   const f = inp.files && inp.files[0]; if(!f) return;
-  try{ photo = await OSHEET.resizeImage(f); osShowPrev(photo.data); }
+  try{ photo = await OSHEET.resizeImage(f); sharedPhoto = ''; osShowPrev(photo.data); }
   catch(e){ showMsg(e.message, false); inp.value = ''; }
 }
-function osRemovePhoto(){ photo = null; $('cFile').value = ''; osShowPrev(null); }
+function osRemovePhoto(){ photo = null; sharedPhoto = ''; osFillPhotoSel(''); $('cFile').value = ''; osShowPrev(null); }
 function osEdit(id){
   const i = items.find(x => x.id === id); if(!i) return;
   $('cId').value = id; $('cMaster').value = i.masterId || ''; osFillGroupSel(i.group || ''); $('cGroup').value = i.group || ''; $('cGroupNewWrap').style.display = 'none'; $('cSku').value = i.sku || ''; $('cName').value = i.name || ''; $('cUnit').value = i.unit || 'PCS'; $('cDesc').value = i.description || '';
   $('cLink').value = i.link || ''; $('cRate').value = i.rate || ''; $('cGst').value = String(i.gstRate || 0); $('cMode').value = i.priceMode || (SIDE === 'buyer' ? 'excl' : 'incl');
-  photo = i.imageData ? { data: i.imageData, w: i.imgW, h: i.imgH } : null; osShowPrev(i.imageData || null);
+  photo = i.imageData ? { data: i.imageData, w: i.imgW, h: i.imgH } : null; sharedPhoto = (!i._ownImg && i.imageRef) ? i.imageRef : ''; osShowPrev(i.imageData || null); osFillPhotoSel(sharedPhoto);
   $('osFormTitle').textContent = 'Edit product'; window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 async function osSaveProduct(){
@@ -399,7 +423,7 @@ async function osSaveProduct(){
   if(!sku || !name){ showMsg('SKU and product name are required.', false); return; }
   if(items.some(i => i.id !== id && String(i.sku || '').toUpperCase() === sku)){ showMsg(`SKU ${sku} is already used by another product.`, false); return; }
   const masterId = $('cMaster').value || '', group = osGroupValue();
-  const data = { masterId, sku, name, group, link: $('cLink').value || '', rate: parseFloat($('cRate').value) || 0, gstRate: parseFloat($('cGst').value) || 0, priceMode: $('cMode').value, hsn: (linkOpts.find(o => o.id === $('cLink').value) || {}).hsn || '', unit: ($('cUnit').value.trim() || 'PCS').toUpperCase(), description: $('cDesc').value.trim(), imageData: photo ? photo.data : '', imgW: photo ? photo.w : 0, imgH: photo ? photo.h : 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+  const data = { masterId, sku, name, group, link: $('cLink').value || '', rate: parseFloat($('cRate').value) || 0, gstRate: parseFloat($('cGst').value) || 0, priceMode: $('cMode').value, hsn: (linkOpts.find(o => o.id === $('cLink').value) || {}).hsn || '', unit: ($('cUnit').value.trim() || 'PCS').toUpperCase(), description: $('cDesc').value.trim(), imageData: photo && !sharedPhoto ? photo.data : '', imageRef: sharedPhoto || '', imgW: photo ? photo.w : 0, imgH: photo ? photo.h : 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
   try{
     let masterNote = '';
     if(masterId){
@@ -431,7 +455,14 @@ async function osSaveProduct(){
 }
 async function osDelete(id){
   const i = items.find(x => x.id === id); if(!i || !confirm(`Delete ${i.sku}? (Past order history is not affected.)`)) return;
-  try{ await col('orderItems').doc(id).delete(); delete cart[id]; await osLoad(); osTabs(); osRenderCatalog(); showMsg('Deleted.', true); }catch(e){ showMsg('Could not delete: ' + e.message, false); }
+  try{
+    const deps = items.filter(x => x.imageRef === id && !x._ownImg);
+    if(i._ownImg && deps.length){ // keep the photo for the SKUs that were using it
+      const [first, ...rest] = deps;
+      await col('orderItems').doc(first.id).set({ imageData: i.imageData, imgW: i.imgW, imgH: i.imgH, imageRef: '' }, { merge: true });
+      for(const d of rest) await col('orderItems').doc(d.id).set({ imageRef: first.id }, { merge: true });
+    }
+    await col('orderItems').doc(id).delete(); delete cart[id]; await osLoad(); osTabs(); osRenderCatalog(); showMsg('Deleted.', true); }catch(e){ showMsg('Could not delete: ' + e.message, false); }
 }
 async function osBulkAdd(inp){
   const files = Array.from(inp.files || []); if(!files.length) return;

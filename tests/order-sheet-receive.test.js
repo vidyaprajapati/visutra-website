@@ -152,3 +152,20 @@ test('master sync: master edits show in order items; saving an item writes back 
   assert.strictEqual(wr.d.variant, '72x95');
   assert.strictEqual(wr.d.name, 'Bed sheet 72x95');
 });
+
+test('one photo can serve many SKUs: stored once, others reference it', async () => {
+  const { w } = setup('seller');
+  w.eval("showMsg = function(){}; confirm = function(){ return true; }; linkOpts = []; stockProds = {};");
+  w.eval("items = [{ id:'A', sku:'BS-1', name:'60x90', group:'Bed sheet', imageData:'data:image/jpeg;base64,AAA', imgW:10, imgH:10 }, { id:'B', sku:'BS-2', name:'72x95', group:'Bed sheet', imageData:'', imageRef:'A' }]; osResolveImages();");
+  assert.strictEqual(w.eval('items[1].imageData'), 'data:image/jpeg;base64,AAA');   // B shows A's photo
+  assert.strictEqual(w.eval('items[1]._ownImg'), false);
+  w.eval("osResetForm(); osFillGroupSel('Bed sheet')");
+  w.document.getElementById('cGroupSel').value = 'Bed sheet'; w.eval('osGroupPick()');
+  assert.strictEqual(w.document.getElementById('cPhotoSame').value, 'A');            // sibling photo suggested
+  w.document.getElementById('cSku').value = 'BS-3'; w.document.getElementById('cName').value = '90x100';
+  w.eval("var __w = null; col = function(n){ return { doc: function(){ return { set: async function(){} }; }, add: async function(d){ __w = d; } }; }; osLoad = async function(){};");
+  await w.eval('osSaveProduct()');
+  const d = w.eval('__w');
+  assert.strictEqual(d.imageData, '');       // no second copy stored
+  assert.strictEqual(d.imageRef, 'A');
+});
