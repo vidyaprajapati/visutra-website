@@ -21,11 +21,18 @@
       img.src = url;
     });
   }
+  /* Loads jsPDF + autotable itself, so it works even if an older statement-share.js is on the site. */
+  function ensureLib(){
+    if(window.vtStatement && typeof window.vtStatement.ensurePdf === 'function') return window.vtStatement.ensurePdf();
+    function load(src){ return new Promise(function(res, rej){ var t = document.createElement('script'); t.src = src; t.onload = res; t.onerror = function(){ rej(new Error('Could not load PDF library')); }; document.head.appendChild(t); }); }
+    if(window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.API && window.jspdf.jsPDF.API.autoTable) return Promise.resolve();
+    return load('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js').then(function(){ return load('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'); });
+  }
   function fit(w, h, bw, bh){ if(!w || !h) return { w: bw, h: bh }; var k = Math.min(bw / w, bh / h); return { w: w * k, h: h * k }; }
   function dmy(){ var d = new Date(); return ('0' + d.getDate()).slice(-2) + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + d.getFullYear(); }
   /* o: { ownerName, orderNo, toName, note, lines:[{sku,name,description,unit,qty,imageData,imgW,imgH}] } */
   function makePdf(o){
-    return window.vtStatement.ensurePdf().then(function(){
+    return ensureLib().then(function(){
       var J = window.jspdf.jsPDF, doc = new J({ unit: 'pt', format: 'a4' }), W = 595, H = 842, M = 36, ROW = 112, GAP = 8;
       var y = 0, page = 1, totalQty = 0;
       function header(first){

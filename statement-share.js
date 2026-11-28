@@ -98,6 +98,22 @@
     window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent(text + '\n\nThe PDF is saved in your Downloads — please attach it in this chat.'), '_blank');
     return 'fallback';
   }
+  /* Generic: share any PDF blob (order sheets etc.) — same three routes as share(). */
+  async function sharePdf(o){
+    var phone = phoneDigits(o.phone), file = null;
+    try{ file = new File([o.blob], o.name, { type: 'application/pdf' }); }catch(e){}
+    if(file && navigator.canShare && navigator.canShare({ files: [file] })){
+      try{ await navigator.share({ files: [file], text: o.text, title: o.name }); return 'shared'; }
+      catch(e){ if(e && e.name === 'AbortError') return 'cancelled'; }
+    }
+    if(window.AndroidBridge && typeof window.AndroidBridge.shareFile === 'function'){
+      window.AndroidBridge.shareFile(await blobToB64(o.blob), o.name, 'application/pdf', phone, o.text || '');
+      return 'shared';
+    }
+    download(o.blob, o.name);
+    window.open('https://wa.me/' + phone + '?text=' + encodeURIComponent((o.text || '') + '\n\nThe PDF is saved in your Downloads — please attach it in this chat.'), '_blank');
+    return 'fallback';
+  }
   function offer(o){
     var anchor = document.getElementById(o.anchorId || 'purchaseMsg'); if(!anchor) return;
     var box = document.getElementById('vtStmtBox');
@@ -119,5 +135,5 @@
     };
     document.getElementById('vtStmtX').onclick = function(){ box.remove(); };
   }
-  window.vtStatement = { offer: offer, buildRows: buildRows, phoneDigits: phoneDigits, share: share, makePdf: makePdf, message: message };
+  window.vtStatement = { sharePdf: sharePdf, ensurePdf: ensurePdf, download: download, offer: offer, buildRows: buildRows, phoneDigits: phoneDigits, share: share, makePdf: makePdf, message: message };
 })();
