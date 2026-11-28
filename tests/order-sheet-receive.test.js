@@ -114,3 +114,19 @@ test('quick add: product -> SKU -> qty puts the item in the order', () => {
   assert.strictEqual(w.eval('cart.b'), 25);
   assert.strictEqual(w.document.querySelectorAll('#osPick .os-item').length, 1);
 });
+test('My products form: product list comes from the master, SKU dropdown follows, name/variant fills itself', () => {
+  const { w } = setup('seller');
+  w.eval("showMsg = function(){}; items = []; linkOpts = [{id:'PP1', name:'Bedsheet Printed', linkedProductId:'P2'}];");
+  w.eval("stockProds = { P1: { name:'Bed sheet Printed 60x90', groupName:'Bed sheet Printed', variant:'60x90', sku:'BSP-1', unit:'pc', gstRate:5 }, P2: { name:'Bed sheet Printed 72x95', groupName:'Bed sheet Printed', variant:'72x95', sku:'BSP-2', unit:'pc', gstRate:5 }, P3: { name:'Towel', sku:'T-1', unit:'pc', gstRate:12 } };");
+  w.eval("osFillGroupSel('')");
+  const prods = Array.from(w.document.querySelectorAll('#cGroupSel option')).map(o => o.value);
+  assert.deepStrictEqual(prods, ['', 'Bed sheet Printed', 'Towel', '__new']);
+  w.document.getElementById('cGroupSel').value = 'Bed sheet Printed'; w.eval('osGroupPick()');
+  assert.strictEqual(w.document.getElementById('cSkuSelWrap').style.display, 'block');
+  assert.strictEqual(w.document.querySelectorAll('#cSkuSel option').length, 3);          // placeholder + 2 SKUs
+  w.document.getElementById('cSkuSel').value = '1'; w.eval('osSkuPick()');               // BSP-2
+  assert.strictEqual(w.document.getElementById('cSku').value, 'BSP-2');
+  assert.strictEqual(w.document.getElementById('cName').value, '72x95');
+  assert.strictEqual(w.document.getElementById('cUnit').value, 'PC');
+  assert.strictEqual(w.document.getElementById('cGst').value, '5');
+});

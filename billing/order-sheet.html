@@ -84,6 +84,7 @@
         <input type="hidden" id="cId">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
           <div class="field"><label>Product *</label><select id="cGroupSel" onchange="osGroupPick()"><option value="">Select product…</option></select></div>
+          <div class="field" id="cSkuSelWrap" style="display:none"><label>SKU of this product</label><select id="cSkuSel" onchange="osSkuPick()"></select></div>
           <div class="field" id="cGroupNewWrap" style="display:none"><label>New product name *</label><input id="cGroup" placeholder="e.g. Washing Machine Cover"></div>
           <div class="field"><label>My SKU *</label><input id="cSku" placeholder="e.g. WM-TOP-7KG" style="text-transform:uppercase"></div>
           <div class="field"><label>SKU name / variant *</label><input id="cName" placeholder="e.g. Top load 7 kg · Blue"></div>
@@ -156,7 +157,7 @@ async function osLoad(){
   linkOpts = [];
   try{
     if(SIDE === 'buyer'){
-      (await col('buyerSkuMappings').get()).docs.forEach(d => { const x = d.data(); if(x.status !== 'INACTIVE') linkOpts.push({ id: d.id, name: (x.productName || x.name || d.id) + (x.buyerSku ? ' · ' + x.buyerSku : '') + (x.sellerSku ? '  →  seller SKU ' + x.sellerSku : ''), unit: x.unit || '', sellerId: x.sellerId || '', productId: x.productId || '', sellerSku: x.sellerSku || '', sellerProductName: x.sellerProductName || x.productName || '', ownLink: x.linkType === 'OWN' }); });
+      (await col('buyerSkuMappings').get()).docs.forEach(d => { const x = d.data(); if(x.status !== 'INACTIVE') linkOpts.push({ id: d.id, name: (x.productName || x.name || d.id) + (x.buyerSku ? ' · ' + x.buyerSku : '') + (x.sellerSku ? '  →  seller SKU ' + x.sellerSku : ''), unit: x.unit || '', sellerId: x.sellerId || '', productId: x.productId || '', sellerSku: x.sellerSku || '', sellerProductName: x.sellerProductName || x.productName || '', ownLink: x.linkType === 'OWN', pname: x.productName || x.name || '', group: (x.groupName || '').trim(), buyerSku: x.buyerSku || '' }); });
     } else {
       stockProds = {}; (await col('products').get()).docs.forEach(d => { stockProds[d.id] = d.data(); });
       (await col('purchaseProducts').get()).docs.forEach(d => { const x = d.data(); if(!x.deleted) linkOpts.push({ id: d.id, name: (x.name || d.id) + (x.linkedProductId && stockProds[x.linkedProductId] ? '  →  stock SKU ' + (stockProds[x.linkedProductId].sku || stockProds[x.linkedProductId].name) : ''), unit: x.unit || '', hsn: x.hsn || '', linkedProductId: x.linkedProductId || null }); });
@@ -313,13 +314,45 @@ function osRenderCatalog(){
     <div style="display:flex;gap:6px"><button class="btn small" onclick="osEdit('${i.id}')">Edit</button><button class="btn small danger" onclick="osDelete('${i.id}')">Delete</button></div></div>`).join('')
     || '<p style="color:var(--muted)">No products yet.</p>';
 }
-function osGroupNames(){ return Array.from(new Set(items.map(i => (i.group || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)); }
+/* "My products" master: seller = Product Master (products); buyer = Buyer SKU Master (mappings). */
+function osMaster(){
+  const m = {};
+  if(SIDE === 'buyer'){
+    linkOpts.forEach(o => { if(!o.pname) return; const g = o.group || o.pname; (m[g] = m[g] || []).push({ sku: o.buyerSku || o.sellerSku || '', variant: o.pname, unit: o.unit || '', gstRate: 0, link: o.id }); });
+  } else {
+    Object.keys(stockProds).forEach(id => {
+      const x = stockProds[id]; if(x.active === false || x.deleted) return;
+      const g = (x.groupName || '').trim() || x.name; if(!g) return;
+      const pp = linkOpts.find(o => o.linkedProductId === id);
+      (m[g] = m[g] || []).push({ sku: x.sku || '', variant: x.variant || x.name, unit: x.unit || '', gstRate: Number(x.gstRate) || 0, link: pp ? pp.id : '' });
+    });
+  }
+  Object.keys(m).forEach(g => m[g].sort((a, b) => String(a.sku).localeCompare(String(b.sku), undefined, { numeric: true })));
+  return m;
+}
+function osGroupNames(){ const set = new Set(Object.keys(osMaster())); items.forEach(i => { if((i.group || '').trim()) set.add(i.group.trim()); }); return Array.from(set).sort((a, b) => a.localeCompare(b)); }
 function osFillGroupSel(keep){
   const sel = $('cGroupSel'), prev = keep !== undefined ? keep : sel.value;
-  sel.innerHTML = '<option value="">Select product…</option>' + osGroupNames().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('') + '<option value="__new">➕ New product…</option>';
+  sel.innerHTML = '<option value="">Select product…</option>' + osGroupNames().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('') + '<option value="__new">➕ Other / new product…</option>';
   if(prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  osFillSkuSel();
 }
-function osGroupPick(){ const isNew = $('cGroupSel').value === '__new'; $('cGroupNewWrap').style.display = isNew ? 'block' : 'none'; if(!isNew) $('cGroup').value = $('cGroupSel').value; }
+function osFillSkuSel(){
+  const g = $('cGroupSel').value, list = osMaster()[g] || [], wrap = $('cSkuSelWrap'), sel = $('cSkuSel');
+  wrap.style.display = list.length ? 'block' : 'none';
+  sel.innerHTML = '<option value="">Select SKU…</option>' + list.map((x, n) => `<option value="${n}">${esc(x.sku || '(no SKU code)')} — ${esc(x.variant)}${items.some(i => String(i.sku).toUpperCase() === String(x.sku).toUpperCase() && x.sku) ? ' ✓ added' : ''}</option>`).join('');
+}
+function osSkuPick(){
+  const list = osMaster()[$('cGroupSel').value] || [], x = list[parseInt($('cSkuSel').value, 10)];
+  if(!x) return;
+  $('cSku').value = String(x.sku || '').toUpperCase(); $('cName').value = x.variant || '';
+  if(x.unit) $('cUnit').value = String(x.unit).toUpperCase();
+  const gs = $('cGst'); if(x.gstRate){ gs.value = String(x.gstRate); }
+  if(x.link) $('cLink').value = x.link;
+  const ex = items.find(i => x.sku && String(i.sku).toUpperCase() === String(x.sku).toUpperCase());
+  if(ex && !$('cId').value) showMsg(`${x.sku} is already in My products — use Edit on it, or pick another SKU.`, false); else showMsg('', true);
+}
+function osGroupPick(){ const isNew = $('cGroupSel').value === '__new'; $('cGroupNewWrap').style.display = isNew ? 'block' : 'none'; if(!isNew) $('cGroup').value = $('cGroupSel').value; osFillSkuSel(); }
 function osGroupValue(){ return $('cGroupSel').value === '__new' ? $('cGroup').value.trim() : $('cGroupSel').value; }
 function osMapText(i){
   const o = linkOpts.find(x => x.id === i.link);
@@ -498,7 +531,7 @@ auth.onAuthStateChanged(async user => {
     await osLoad();
   }catch(err){ showMsg('Could not load: ' + err.message, false); }
   try{ const L = localStorage.getItem('vt_os_layout'); if(L) $('osLayout').value = L; }catch(e){}
-  osResetForm(); osQuickFill(); osTabs(); osRenderPick();
+  osResetForm(); osFillGroupSel(''); osQuickFill(); osTabs(); osRenderPick();
 });
 </script>
 </body>
