@@ -359,17 +359,54 @@ async function loadProducts(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('products').orderBy('name').get();
   productsCache = snap.docs.map(d => ({id:d.id, ...d.data()}));
   renderProducts();
+  renderProductGroupDropdown();
   renderProductDropdowns();
   renderStockDropdowns();
   renderStockTable();
   try{ if(window.vtLowStock) window.vtLowStock(productsCache); }catch(e){ console.warn('Low-stock alert failed:', e); }
+}
+/* ---- Product Master: pick the PRODUCT from a dropdown, then add its SKU/variant ---- */
+function productGroupNames(){
+  return Array.from(new Set(productsCache.map(p => ((p.groupName || '').trim() || (p.name || '').trim())).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+}
+function renderProductGroupDropdown(keep){
+  const sel = document.getElementById('pGroupSel'); if(!sel) return;
+  const prev = keep || sel.value;
+  sel.innerHTML = '<option value="">Select product…</option>' + productGroupNames().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('') + '<option value="__new">➕ New product…</option>';
+  if(prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+function currentProductGroup(){
+  const sel = document.getElementById('pGroupSel');
+  return sel.value === '__new' ? document.getElementById('pGroup').value.trim() : sel.value;
+}
+function updateProductName(){
+  const g = currentProductGroup(), v = document.getElementById('pVariant').value.trim();
+  document.getElementById('pName').value = g ? (g + (v ? ' ' + v : '')) : '';
+}
+function onProductPick(){
+  const sel = document.getElementById('pGroupSel'), isNew = sel.value === '__new';
+  document.getElementById('pGroupNewWrap').style.display = isNew ? 'block' : 'none';
+  if(!isNew) document.getElementById('pGroup').value = sel.value;
+  // an existing product: borrow HSN / unit / GST / price from its earlier SKU when those boxes are still empty (new SKU only)
+  if(!isNew && sel.value && !document.getElementById('pEditId').value){
+    const sib = productsCache.find(p => ((p.groupName || '').trim() || (p.name || '').trim()) === sel.value);
+    if(sib){
+      if(!document.getElementById('pHsn').value) document.getElementById('pHsn').value = sib.hsn || '';
+      if(!document.getElementById('pUnit').value) document.getElementById('pUnit').value = sib.unit || '';
+      const gs = document.getElementById('pGst');
+      if(gs.value === '0' && sib.gstRate){ if(![...gs.options].some(o => Number(o.value) === Number(sib.gstRate))) gs.insertAdjacentHTML('beforeend', `<option value="${Number(sib.gstRate)}">${Number(sib.gstRate)}%</option>`); gs.value = String(Number(sib.gstRate)); }
+      if(!document.getElementById('pPriceIncl').value && sib.price) document.getElementById('pPriceIncl').value = (sib.price * (1 + (sib.gstRate || 0) / 100)).toFixed(2);
+      if(typeof updateProductExclusivePreview === 'function') updateProductExclusivePreview();
+    }
+  }
+  updateProductName();
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => {
     const isActive = p.active !== false; // missing = treat as active (backward compatible with products created before this field existed)
     const isVisible = !!p.buyerVisibility;
     return `
-    <tr><td>${esc(p.name)}${p.groupName ? `<br><span style="font-size:11.5px;color:var(--muted)">${esc(p.groupName)}${p.variant ? ' · ' + esc(p.variant) : ''}</span>` : ''}</td><td>${esc(p.sku||'—')}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td>
+    <tr><td>${esc(p.name)}${p.groupName && (p.variant || p.groupName !== p.name) ? `<br><span style="font-size:11.5px;color:var(--muted)">${esc(p.groupName)}${p.variant ? ' · ' + esc(p.variant) : ''}</span>` : ''}</td><td>${esc(p.sku||'—')}</td><td>${esc(p.hsn)}</td><td>${esc(p.unit)}</td><td>₹${fmtMoney(p.price)}</td><td>${p.gstRate}%</td><td>₹${fmtMoney(p.price * (1 + (p.gstRate||0)/100))}</td><td>${p.stock||0}</td><td>${p.reorderLevel||0}</td>
     <td><button class="btn small" onclick="toggleProductActive('${p.id}', ${!isActive})">${isActive ? 'Active ✓' : 'Inactive'}</button></td>
     <td><button class="btn small" onclick="toggleBuyerVisibility('${p.id}', ${!isVisible})" title="Whether linked buyer accounts can see this product">${isVisible ? 'Visible ✓' : 'Hidden'}</button></td>
     <td class="row-actions">
@@ -395,6 +432,7 @@ function updateProductExclusivePreview(){
 }
 async function saveProduct(){
   const id = document.getElementById('pEditId').value;
+  { const g = currentProductGroup(); if(!g){ showMsg('productMsg', 'Pick a product (or choose ➕ New product and type its name).', false); return; } document.getElementById('pGroup').value = g; updateProductName(); }
   const inclPrice = parseFloat(document.getElementById('pPriceIncl').value) || 0;
   const gstRate = parseFloat(document.getElementById('pGst').value);
   const exclPrice = Math.round((gstRate ? inclPrice / (1 + gstRate/100) : inclPrice) * 100) / 100;
@@ -424,6 +462,7 @@ async function saveProduct(){
     await col.doc(id).set(formFields, { merge: true });
   } else { await col.add(data); }
   ['pName','pGroup','pVariant','pHsn','pUnit','pSku','pPriceIncl','pPrice','pReorderLevel','pEditId'].forEach(f => document.getElementById(f).value = '');
+  document.getElementById('pGroupNewWrap').style.display = 'none'; document.getElementById('pGroupSel').value = '';
   document.getElementById('pGst').value = '0';
   showMsg('productMsg', 'Saved.', true);
   await loadProducts();
@@ -435,9 +474,9 @@ async function saveProduct(){
 function editProduct(id){
   const p = productsCache.find(x => x.id === id);
   document.getElementById('pEditId').value = id;
-  document.getElementById('pName').value = p.name;
-  document.getElementById('pGroup').value = p.groupName || '';
+  { const g = (p.groupName || '').trim() || p.name; renderProductGroupDropdown(g); document.getElementById('pGroupSel').value = g; document.getElementById('pGroupNewWrap').style.display = 'none'; document.getElementById('pGroup').value = g; }
   document.getElementById('pVariant').value = p.variant || '';
+  document.getElementById('pName').value = p.name;
   document.getElementById('pHsn').value = p.hsn;
   document.getElementById('pUnit').value = p.unit;
   document.getElementById('pSku').value = p.sku || '';
@@ -485,7 +524,7 @@ function stockGroups(list){
     if(!groups.has(key)) groups.set(key, { name: key, grouped: !!(p.groupName || '').trim(), skus: [] });
     groups.get(key).skus.push(p);
   });
-  return Array.from(groups.values()).map(g => Object.assign(g, { total: g.skus.reduce((s, p) => s + (Number(p.stock) || 0), 0) }));
+  return Array.from(groups.values()).map(g => Object.assign(g, { grouped: g.grouped && g.skus.length > 1, total: g.skus.reduce((s, p) => s + (Number(p.stock) || 0), 0) }));
 }
 function renderStockTable(){
   const tbody = document.getElementById('stockTable');

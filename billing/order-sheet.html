@@ -52,6 +52,18 @@
           <label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="osPlace" checked style="margin-top:3px"><span><b>Also place this as a real order in the seller's portal</b> — items linked to the seller's product SKU go into their Order Receive page; when they accept, their stock goes down and your purchase and stock are updated automatically. <span id="osPlaceInfo" style="color:var(--muted)"></span></span></label>
         </div>
         <div class="field"><label>Note for the seller (optional)</label><input id="osNote" placeholder="e.g. Need by Friday, pack separately"></div>
+        <div style="border:1px solid var(--thread);border-radius:14px;padding:12px;margin-bottom:10px;background:#fff">
+          <b style="font-size:14px">Add item</b>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:8px;align-items:end">
+            <div class="field" style="margin:0"><label>Product</label><select id="qProd" onchange="osQuickProd()"><option value="">Select product…</option></select></div>
+            <div class="field" style="margin:0"><label>SKU</label><select id="qSku"><option value="">Select SKU…</option></select></div>
+            <div class="field" style="margin:0"><label>Quantity <span id="qUnit" style="text-transform:uppercase;color:var(--muted)"></span></label><input id="qQty" type="number" min="0" step="1" placeholder="Qty" onkeydown="if(event.key==='Enter'){event.preventDefault();osQuickAdd();}"></div>
+            <button class="btn primary" type="button" onclick="osQuickAdd()">Add to order</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 6px">
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="osAll" onchange="osRenderPick()"> Show all my products (not only the selected)</label>
+        </div>
         <div class="field"><label>Find product</label><input id="osSearch" placeholder="Search by SKU or name" oninput="osRenderPick()"></div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:2px 0 6px">
           <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="osUsual" checked onchange="osRenderPick()"> Usual items first</label>
@@ -71,7 +83,8 @@
         <h3 style="font-family:var(--display);font-size:16px;margin:6px 0 8px" id="osFormTitle">Add product</h3>
         <input type="hidden" id="cId">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
-          <div class="field"><label>Product (group) — optional</label><input id="cGroup" placeholder="e.g. Washing Machine Cover"></div>
+          <div class="field"><label>Product *</label><select id="cGroupSel" onchange="osGroupPick()"><option value="">Select product…</option></select></div>
+          <div class="field" id="cGroupNewWrap" style="display:none"><label>New product name *</label><input id="cGroup" placeholder="e.g. Washing Machine Cover"></div>
           <div class="field"><label>My SKU *</label><input id="cSku" placeholder="e.g. WM-TOP-7KG" style="text-transform:uppercase"></div>
           <div class="field"><label>SKU name / variant *</label><input id="cName" placeholder="e.g. Top load 7 kg · Blue"></div>
           <div class="field"><label>Unit (set once — used in every order)</label><input id="cUnit" value="PCS" list="osUnits" placeholder="PCS, ROLL, KG…" style="text-transform:uppercase"></div>
@@ -185,9 +198,32 @@ function osOnRecipient(){ osPlaceState();
 
 /* ---------- create order ---------- */
 function thumb(it){ return it.imageData ? `<img class="os-thumb" src="${it.imageData}" alt="">` : '<div class="os-noimg">No photo</div>'; }
+function osQuickFill(){
+  const sel = $('qProd'), prev = sel.value, groups = {};
+  items.forEach(i => { const g = (i.group || '').trim() || i.name; (groups[g] = groups[g] || []).push(i); });
+  sel.innerHTML = '<option value="">Select product…</option>' + Object.keys(groups).sort((a, b) => a.localeCompare(b)).map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
+  if(prev && groups[prev]) sel.value = prev;
+  osQuickProd();
+}
+function osQuickProd(){
+  const g = $('qProd').value, sel = $('qSku');
+  const list = items.filter(i => ((i.group || '').trim() || i.name) === g).sort((a, b) => String(a.sku).localeCompare(String(b.sku), undefined, { numeric: true }));
+  sel.innerHTML = (list.length === 1 ? '' : '<option value="">Select SKU…</option>') + list.map(i => `<option value="${i.id}">${esc(i.sku)} — ${esc(i.name)}</option>`).join('');
+  osQuickUnit();
+  sel.onchange = osQuickUnit;
+}
+function osQuickUnit(){ const i = items.find(x => x.id === $('qSku').value); $('qUnit').textContent = i ? '(' + (i.unit || 'PCS') + ')' : ''; if(i && i.lastQty && !$('qQty').value) $('qQty').placeholder = 'last: ' + i.lastQty; }
+function osQuickAdd(){
+  const id = $('qSku').value, q = parseFloat($('qQty').value);
+  if(!id){ showMsg('Select the product and its SKU.', false); return; }
+  if(!(q > 0)){ showMsg('Enter a quantity greater than zero.', false); return; }
+  cart[id] = (cart[id] || 0) + q; $('qQty').value = '';
+  showMsg('', true); osRenderPick(); $('qQty').focus();
+}
 function osRenderPick(){
   const q = ($('osSearch').value || '').trim().toLowerCase();
-  let list = items.filter(i => !q || String(i.sku || '').toLowerCase().includes(q) || String(i.name || '').toLowerCase().includes(q) || String(i.group || '').toLowerCase().includes(q));
+  const onlySel = !$('osAll').checked && Object.keys(cart).length && !q;
+  let list = items.filter(i => (!onlySel || cart[i.id]) && (!q || String(i.sku || '').toLowerCase().includes(q) || String(i.name || '').toLowerCase().includes(q) || String(i.group || '').toLowerCase().includes(q)));
   if(!$('osUsual').checked) list = list.slice().sort((a, b) => String(a.group || a.name || '').localeCompare(String(b.group || b.name || '')) || String(a.sku || '').localeCompare(String(b.sku || ''), undefined, { numeric: true }));
   if($('osUsual').checked) list = list.slice().sort((a, b) => (Number(b.orderCount) || 0) - (Number(a.orderCount) || 0) || String(a.sku || '').localeCompare(String(b.sku || ''), undefined, { numeric: true }));
   $('osPick').innerHTML = list.map(i => `<div class="os-item">${thumb(i)}
@@ -235,7 +271,7 @@ async function osGenerate(mode){
       const it = items.find(x => x.id === l.itemId);
       try{ await col('orderItems').doc(l.itemId).set({ lastQty: l.qty, lastOrdered: today, orderCount: (Number(it && it.orderCount) || 0) + 1 }, { merge: true }); }catch(e){}
     }
-    await osLoad(); osRenderPick();
+    await osLoad(); osQuickFill(); osRenderPick();
     const hs = await col('orderSheets').get(); osHist = hs.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
     if(mode === 'download'){ window.vtStatement.download(out.blob, out.name); showMsg(`PDF ${orderNo} downloaded and saved in History.${osPlacedText(placedInfo)}`, true); }
     else {
@@ -277,12 +313,20 @@ function osRenderCatalog(){
     <div style="display:flex;gap:6px"><button class="btn small" onclick="osEdit('${i.id}')">Edit</button><button class="btn small danger" onclick="osDelete('${i.id}')">Delete</button></div></div>`).join('')
     || '<p style="color:var(--muted)">No products yet.</p>';
 }
+function osGroupNames(){ return Array.from(new Set(items.map(i => (i.group || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)); }
+function osFillGroupSel(keep){
+  const sel = $('cGroupSel'), prev = keep !== undefined ? keep : sel.value;
+  sel.innerHTML = '<option value="">Select product…</option>' + osGroupNames().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('') + '<option value="__new">➕ New product…</option>';
+  if(prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+function osGroupPick(){ const isNew = $('cGroupSel').value === '__new'; $('cGroupNewWrap').style.display = isNew ? 'block' : 'none'; if(!isNew) $('cGroup').value = $('cGroupSel').value; }
+function osGroupValue(){ return $('cGroupSel').value === '__new' ? $('cGroup').value.trim() : $('cGroupSel').value; }
 function osMapText(i){
   const o = linkOpts.find(x => x.id === i.link);
   if(!i.link || !o) return '<div style="font-size:11.5px;color:#9E3608">Not linked to a stock SKU yet</div>';
   return `<div style="font-size:11.5px;color:#1a7f45">${SIDE === 'buyer' ? 'Linked: ' : 'Stock link: '}${esc(o.name)}</div>`;
 }
-function osResetForm(){ ['cId','cSku','cName','cGroup','cDesc','cFile','cRate'].forEach(f => $(f).value = ''); $('cUnit').value = 'PCS'; $('cLink').value = ''; $('cGst').value = '0'; $('cMode').value = SIDE === 'buyer' ? 'excl' : 'incl'; photo = null; osShowPrev(null); $('osFormTitle').textContent = 'Add product'; }
+function osResetForm(){ ['cId','cSku','cName','cGroup','cDesc','cFile','cRate'].forEach(f => $(f).value = ''); osFillGroupSel(''); $('cGroupNewWrap').style.display = 'none'; $('cUnit').value = 'PCS'; $('cLink').value = ''; $('cGst').value = '0'; $('cMode').value = SIDE === 'buyer' ? 'excl' : 'incl'; photo = null; osShowPrev(null); $('osFormTitle').textContent = 'Add product'; }
 function osShowPrev(src){ const p = $('cPrev'); p.style.display = src ? 'block' : 'none'; if(src) p.src = src; $('cRemoveImg').classList.toggle('hidden', !src); }
 async function osPickPhoto(inp){
   const f = inp.files && inp.files[0]; if(!f) return;
@@ -292,7 +336,7 @@ async function osPickPhoto(inp){
 function osRemovePhoto(){ photo = null; $('cFile').value = ''; osShowPrev(null); }
 function osEdit(id){
   const i = items.find(x => x.id === id); if(!i) return;
-  $('cId').value = id; $('cGroup').value = i.group || ''; $('cSku').value = i.sku || ''; $('cName').value = i.name || ''; $('cUnit').value = i.unit || 'PCS'; $('cDesc').value = i.description || '';
+  $('cId').value = id; osFillGroupSel(i.group || ''); $('cGroup').value = i.group || ''; $('cGroupNewWrap').style.display = 'none'; $('cSku').value = i.sku || ''; $('cName').value = i.name || ''; $('cUnit').value = i.unit || 'PCS'; $('cDesc').value = i.description || '';
   $('cLink').value = i.link || ''; $('cRate').value = i.rate || ''; $('cGst').value = String(i.gstRate || 0); $('cMode').value = i.priceMode || (SIDE === 'buyer' ? 'excl' : 'incl');
   photo = i.imageData ? { data: i.imageData, w: i.imgW, h: i.imgH } : null; osShowPrev(i.imageData || null);
   $('osFormTitle').textContent = 'Edit product'; window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -301,10 +345,10 @@ async function osSaveProduct(){
   const id = $('cId').value, sku = $('cSku').value.trim().toUpperCase(), name = $('cName').value.trim();
   if(!sku || !name){ showMsg('SKU and product name are required.', false); return; }
   if(items.some(i => i.id !== id && String(i.sku || '').toUpperCase() === sku)){ showMsg(`SKU ${sku} is already used by another product.`, false); return; }
-  const data = { sku, name, group: $('cGroup').value.trim(), link: $('cLink').value || '', rate: parseFloat($('cRate').value) || 0, gstRate: parseFloat($('cGst').value) || 0, priceMode: $('cMode').value, hsn: (linkOpts.find(o => o.id === $('cLink').value) || {}).hsn || '', unit: ($('cUnit').value.trim() || 'PCS').toUpperCase(), description: $('cDesc').value.trim(), imageData: photo ? photo.data : '', imgW: photo ? photo.w : 0, imgH: photo ? photo.h : 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+  const data = { sku, name, group: osGroupValue(), link: $('cLink').value || '', rate: parseFloat($('cRate').value) || 0, gstRate: parseFloat($('cGst').value) || 0, priceMode: $('cMode').value, hsn: (linkOpts.find(o => o.id === $('cLink').value) || {}).hsn || '', unit: ($('cUnit').value.trim() || 'PCS').toUpperCase(), description: $('cDesc').value.trim(), imageData: photo ? photo.data : '', imgW: photo ? photo.w : 0, imgH: photo ? photo.h : 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
   try{
     if(id) await col('orderItems').doc(id).set(data, { merge: true }); else await col('orderItems').add(data);
-    showMsg(`${sku} saved.`, true); osResetForm(); await osLoad(); osTabs(); osRenderCatalog();
+    showMsg(`${sku} saved.`, true); await osLoad(); osResetForm(); osTabs(); osRenderCatalog();
   }catch(e){ showMsg('Could not save: ' + e.message, false); }
 }
 async function osDelete(id){
@@ -454,7 +498,7 @@ auth.onAuthStateChanged(async user => {
     await osLoad();
   }catch(err){ showMsg('Could not load: ' + err.message, false); }
   try{ const L = localStorage.getItem('vt_os_layout'); if(L) $('osLayout').value = L; }catch(e){}
-  osResetForm(); osTabs(); osRenderPick();
+  osResetForm(); osQuickFill(); osTabs(); osRenderPick();
 });
 </script>
 </body>

@@ -74,6 +74,8 @@ test('usual items are listed first and last quantities can be filled', () => {
   assert.strictEqual(w.document.getElementById('q-b').value, '40');
   assert.match(w.document.querySelector('#osPick .os-item').textContent, /PCS/);
   assert.strictEqual(w.document.querySelectorAll('#osPick input[list]').length, 0);
+  assert.strictEqual(w.document.getElementById('q-a'), null);   // only the selected items are listed now
+  w.document.getElementById('osAll').checked = true; w.eval('osRenderPick()');
   assert.strictEqual(w.document.getElementById('q-a').value, '');
   assert.match(w.document.getElementById('osSel').textContent, /2 items · total qty 50/);
 });
@@ -97,4 +99,18 @@ test('lines placed in the seller portal are not receivable by hand (no double st
   const h = { lines: [{ sku: 'A', qty: 5, placed: true }, { sku: 'B', qty: 3 }], received: {} };
   assert.deepStrictEqual(Array.from(w.osShort(h).map(x => x.sku)), ['B']);
   assert.strictEqual(w.osStatus({ lines: [{ sku: 'A', qty: 5, placed: true }], received: {} })[0], "In seller's portal");
+});
+
+test('quick add: product -> SKU -> qty puts the item in the order', () => {
+  const { w } = setup('seller');
+  w.eval("items = [{id:'a',sku:'BSP-1',name:'Bed sheet 60x90',group:'Bed sheet',unit:'PCS'},{id:'b',sku:'BSP-2',name:'Bed sheet 72x95',group:'Bed sheet',unit:'PCS'},{id:'c',sku:'T1',name:'Towel',unit:'PCS'}]; showMsg = function(){};");
+  w.eval('osQuickFill()');
+  const prods = Array.from(w.document.querySelectorAll('#qProd option')).map(o => o.value);
+  assert.deepStrictEqual(prods, ['', 'Bed sheet', 'Towel']);
+  w.document.getElementById('qProd').value = 'Bed sheet'; w.eval('osQuickProd()');
+  assert.strictEqual(w.document.querySelectorAll('#qSku option').length, 3);   // placeholder + 2 SKUs
+  w.document.getElementById('qSku').value = 'b'; w.document.getElementById('qQty').value = '25';
+  w.eval('osQuickAdd()');
+  assert.strictEqual(w.eval('cart.b'), 25);
+  assert.strictEqual(w.document.querySelectorAll('#osPick .os-item').length, 1);
 });

@@ -79,7 +79,7 @@
     <p class="sub">Step 2 — <b>select one of your products</b>, then (optionally) <b>link it to a seller's product</b> (the one you buy it as — lets orders and Label-Based Auto Order go to that seller, and accepted orders add to its stock) and type only the <b>new marketplace SKU(s)</b> you want to add — they're added to the SKUs the product already has (shown below the boxes). Several at once: separate with commas. All of a product's SKUs share its one stock.</p>
     <div class="grid2">
       <div class="field"><label>Product *</label><select id="mProductSel" onchange="onMapProductSelect()"><option value="">Select your product…</option></select></div>
-      <div class="field"><label>Product group (optional) — SKUs of the same product are shown together in Stock</label><input id="mGroup" placeholder="e.g. Washing Machine Cover"></div>
+      <div class="field"><label>Product group (optional) — SKUs of the same product are shown together in Stock</label><input id="mGroup" list="mGroupList" placeholder="Pick from the list or type a new one"><datalist id="mGroupList"></datalist></div>
     </div>
     <div class="grid2">
       <div class="field"><label>Linked to</label><select id="mSeller" onchange="onMappingSellerChange()"><option value="__own__">Not linked (my own product)</option></select></div>
@@ -629,7 +629,12 @@ function skuRowsOf(m){
   MK_LIST.forEach(([mk, label, field]) => splitSkuList(m[field]).forEach(sku => out.push({ mk, label, sku, off: isSkuInactive(m, mk, sku) })));
   return out;
 }
+function fillGroupList(){
+  const dl = document.getElementById('mGroupList'); if(!dl) return;
+  dl.innerHTML = Array.from(new Set(mappingsCache.map(m => (m.groupName || '').trim()).filter(Boolean))).sort().map(g => `<option value="${esc(g)}">`).join('');
+}
 function renderMappings(){
+  fillGroupList();
   const search = document.getElementById('fSearch').value.trim().toLowerCase();
   const fSeller = document.getElementById('fSeller').value;
   const fStatus = document.getElementById('fStatus').value;

@@ -353,19 +353,18 @@
     <div id="view-products" class="view hidden">
       <div class="card">
         <h2>Product Master</h2>
-        <p class="sub">Set up each product once with its HSN code and GST rate — you'll just pick from this list when billing. Enter the price <b>including GST</b> (your selling/MRP price) — the taxable value used on invoices is worked out for you automatically.</p>
+        <p class="sub">Pick the product (or add a new one), then add each size / variant as its own SKU with its own stock. HSN and GST are filled from the product's earlier SKUs. Enter the price <b>including GST</b> (your selling/MRP price) — the taxable value used on invoices is worked out for you automatically.</p>
         <div class="grid3">
-          <div class="field"><label>Product (group) — optional</label><input id="pGroup" placeholder="e.g. Washing Machine Cover"></div>
-          <div class="field"><label>SKU variant — optional</label><input id="pVariant" placeholder="e.g. Top load 7 kg · Blue"></div>
-          <div class="field"></div>
+          <div class="field"><label>Product *</label><select id="pGroupSel" onchange="onProductPick()"><option value="">Select product…</option></select></div>
+          <div class="field" id="pGroupNewWrap" style="display:none"><label>New product name *</label><input id="pGroup" placeholder="e.g. Bed sheet Printed" oninput="updateProductName()"></div>
+          <div class="field"><label>Size / variant</label><input id="pVariant" placeholder="e.g. 72x95 (leave empty if none)" oninput="updateProductName()"></div>
         </div>
-        <p class="sub" style="margin-top:-4px">One row here = <b>one SKU</b> with its own stock. Give the SKUs of the same product the same "Product (group)" and the Stock page shows them together under that product with a total.</p>
         <div class="grid3">
-          <div class="field"><label>Product name</label><input id="pName"></div>
+          <div class="field"><label>SKU code *</label><input id="pSku" placeholder="e.g. BSP-2"></div>
           <div class="field"><label>HSN / SAC code</label><input id="pHsn"></div>
           <div class="field"><label>Unit</label><input id="pUnit" placeholder="e.g. PCS, NOS, KG"></div>
         </div>
-        <div class="field" style="max-width:260px"><label>SKU (optional — used by linked buyers' SKU Master)</label><input id="pSku" placeholder="e.g. WMC-001"></div>
+        <div class="field" style="max-width:420px"><label>Name on invoice (made automatically)</label><input id="pName" readonly style="background:var(--ivory);color:var(--muted)"></div>
         <div class="grid3">
           <div class="field"><label>Price incl. GST (₹)</label><input id="pPriceIncl" type="number" step="0.01" oninput="updateProductExclusivePreview()"></div>
           <div class="field"><label>GST rate</label>
