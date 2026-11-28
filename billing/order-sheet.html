@@ -84,6 +84,7 @@
         <input type="hidden" id="cId">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
           <div class="field"><label>Product *</label><select id="cGroupSel" onchange="osGroupPick()"><option value="">Select product…</option></select></div>
+          <input type="hidden" id="cMaster">
           <div class="field" id="cSkuSelWrap" style="display:none"><label>SKU of this product</label><select id="cSkuSel" onchange="osSkuPick()"></select></div>
           <div class="field" id="cGroupNewWrap" style="display:none"><label>New product name *</label><input id="cGroup" placeholder="e.g. Washing Machine Cover"></div>
           <div class="field"><label>My SKU *</label><input id="cSku" placeholder="e.g. WM-TOP-7KG" style="text-transform:uppercase"></div>
@@ -164,6 +165,7 @@ async function osLoad(){
     }
   }catch(e){ console.warn('link list', e); }
   linkOpts.sort((a, b) => a.name.localeCompare(b.name));
+  osOverlayMaster();
   $('cLink').innerHTML = '<option value="">Not linked</option>' + linkOpts.map(o => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join('');
   $('cLinkLabel').textContent = SIDE === 'buyer' ? 'Link to my Buyer SKU Master item (stock goes up on receipt)' : 'Link to my Purchase Product (stock goes up on receipt)';
   recips = [];
@@ -314,17 +316,33 @@ function osRenderCatalog(){
     <div style="display:flex;gap:6px"><button class="btn small" onclick="osEdit('${i.id}')">Edit</button><button class="btn small danger" onclick="osDelete('${i.id}')">Delete</button></div></div>`).join('')
     || '<p style="color:var(--muted)">No products yet.</p>';
 }
+/* Product Master / Buyer SKU Master is the single source of truth: an Order Sheet product that is linked to a master SKU
+   always shows the master's current SKU code, variant and product (so editing there is reflected here). */
+function osOverlayMaster(){
+  items.forEach(i => {
+    if(!i.masterId) return;
+    if(SIDE === 'buyer'){
+      const m = linkOpts.find(o => o.id === i.masterId); if(!m) return;
+      if(m.buyerSku) i.sku = String(m.buyerSku).toUpperCase(); if(m.pname) i.name = m.pname; i.group = m.group || i.group || '';
+    } else {
+      const x = stockProds[i.masterId]; if(!x) return;
+      if(x.sku) i.sku = String(x.sku).toUpperCase();
+      i.name = x.variant || x.name || i.name; i.group = (x.groupName || '').trim() || x.name || i.group || '';
+    }
+  });
+  items.sort((a, b) => String(a.sku || '').localeCompare(String(b.sku || ''), undefined, { numeric: true }));
+}
 /* "My products" master: seller = Product Master (products); buyer = Buyer SKU Master (mappings). */
 function osMaster(){
   const m = {};
   if(SIDE === 'buyer'){
-    linkOpts.forEach(o => { if(!o.pname) return; const g = o.group || o.pname; (m[g] = m[g] || []).push({ sku: o.buyerSku || o.sellerSku || '', variant: o.pname, unit: o.unit || '', gstRate: 0, link: o.id }); });
+    linkOpts.forEach(o => { if(!o.pname) return; const g = o.group || o.pname; (m[g] = m[g] || []).push({ id: o.id, sku: o.buyerSku || o.sellerSku || '', variant: o.pname, unit: o.unit || '', gstRate: 0, link: o.id }); });
   } else {
     Object.keys(stockProds).forEach(id => {
       const x = stockProds[id]; if(x.active === false || x.deleted) return;
       const g = (x.groupName || '').trim() || x.name; if(!g) return;
       const pp = linkOpts.find(o => o.linkedProductId === id);
-      (m[g] = m[g] || []).push({ sku: x.sku || '', variant: x.variant || x.name, unit: x.unit || '', gstRate: Number(x.gstRate) || 0, link: pp ? pp.id : '' });
+      (m[g] = m[g] || []).push({ id, sku: x.sku || '', variant: x.variant || x.name, unit: x.unit || '', gstRate: Number(x.gstRate) || 0, link: pp ? pp.id : '' });
     });
   }
   Object.keys(m).forEach(g => m[g].sort((a, b) => String(a.sku).localeCompare(String(b.sku), undefined, { numeric: true })));
@@ -345,6 +363,7 @@ function osFillSkuSel(){
 function osSkuPick(){
   const list = osMaster()[$('cGroupSel').value] || [], x = list[parseInt($('cSkuSel').value, 10)];
   if(!x) return;
+  $('cMaster').value = x.id || '';
   $('cSku').value = String(x.sku || '').toUpperCase(); $('cName').value = x.variant || '';
   if(x.unit) $('cUnit').value = String(x.unit).toUpperCase();
   const gs = $('cGst'); if(x.gstRate){ gs.value = String(x.gstRate); }
@@ -355,11 +374,12 @@ function osSkuPick(){
 function osGroupPick(){ const isNew = $('cGroupSel').value === '__new'; $('cGroupNewWrap').style.display = isNew ? 'block' : 'none'; if(!isNew) $('cGroup').value = $('cGroupSel').value; osFillSkuSel(); }
 function osGroupValue(){ return $('cGroupSel').value === '__new' ? $('cGroup').value.trim() : $('cGroupSel').value; }
 function osMapText(i){
+  if(i.masterId) return `<div style="font-size:11.5px;color:#1a7f45">✓ Synced with ${SIDE === 'buyer' ? 'Buyer SKU Master' : 'Product Master'} — edit the SKU here or there, it stays the same in both</div>`;
   const o = linkOpts.find(x => x.id === i.link);
   if(!i.link || !o) return '<div style="font-size:11.5px;color:#9E3608">Not linked to a stock SKU yet</div>';
   return `<div style="font-size:11.5px;color:#1a7f45">${SIDE === 'buyer' ? 'Linked: ' : 'Stock link: '}${esc(o.name)}</div>`;
 }
-function osResetForm(){ ['cId','cSku','cName','cGroup','cDesc','cFile','cRate'].forEach(f => $(f).value = ''); osFillGroupSel(''); $('cGroupNewWrap').style.display = 'none'; $('cUnit').value = 'PCS'; $('cLink').value = ''; $('cGst').value = '0'; $('cMode').value = SIDE === 'buyer' ? 'excl' : 'incl'; photo = null; osShowPrev(null); $('osFormTitle').textContent = 'Add product'; }
+function osResetForm(){ ['cMaster','cId','cSku','cName','cGroup','cDesc','cFile','cRate'].forEach(f => $(f).value = ''); osFillGroupSel(''); $('cGroupNewWrap').style.display = 'none'; $('cUnit').value = 'PCS'; $('cLink').value = ''; $('cGst').value = '0'; $('cMode').value = SIDE === 'buyer' ? 'excl' : 'incl'; photo = null; osShowPrev(null); $('osFormTitle').textContent = 'Add product'; }
 function osShowPrev(src){ const p = $('cPrev'); p.style.display = src ? 'block' : 'none'; if(src) p.src = src; $('cRemoveImg').classList.toggle('hidden', !src); }
 async function osPickPhoto(inp){
   const f = inp.files && inp.files[0]; if(!f) return;
@@ -369,7 +389,7 @@ async function osPickPhoto(inp){
 function osRemovePhoto(){ photo = null; $('cFile').value = ''; osShowPrev(null); }
 function osEdit(id){
   const i = items.find(x => x.id === id); if(!i) return;
-  $('cId').value = id; osFillGroupSel(i.group || ''); $('cGroup').value = i.group || ''; $('cGroupNewWrap').style.display = 'none'; $('cSku').value = i.sku || ''; $('cName').value = i.name || ''; $('cUnit').value = i.unit || 'PCS'; $('cDesc').value = i.description || '';
+  $('cId').value = id; $('cMaster').value = i.masterId || ''; osFillGroupSel(i.group || ''); $('cGroup').value = i.group || ''; $('cGroupNewWrap').style.display = 'none'; $('cSku').value = i.sku || ''; $('cName').value = i.name || ''; $('cUnit').value = i.unit || 'PCS'; $('cDesc').value = i.description || '';
   $('cLink').value = i.link || ''; $('cRate').value = i.rate || ''; $('cGst').value = String(i.gstRate || 0); $('cMode').value = i.priceMode || (SIDE === 'buyer' ? 'excl' : 'incl');
   photo = i.imageData ? { data: i.imageData, w: i.imgW, h: i.imgH } : null; osShowPrev(i.imageData || null);
   $('osFormTitle').textContent = 'Edit product'; window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -378,10 +398,35 @@ async function osSaveProduct(){
   const id = $('cId').value, sku = $('cSku').value.trim().toUpperCase(), name = $('cName').value.trim();
   if(!sku || !name){ showMsg('SKU and product name are required.', false); return; }
   if(items.some(i => i.id !== id && String(i.sku || '').toUpperCase() === sku)){ showMsg(`SKU ${sku} is already used by another product.`, false); return; }
-  const data = { sku, name, group: osGroupValue(), link: $('cLink').value || '', rate: parseFloat($('cRate').value) || 0, gstRate: parseFloat($('cGst').value) || 0, priceMode: $('cMode').value, hsn: (linkOpts.find(o => o.id === $('cLink').value) || {}).hsn || '', unit: ($('cUnit').value.trim() || 'PCS').toUpperCase(), description: $('cDesc').value.trim(), imageData: photo ? photo.data : '', imgW: photo ? photo.w : 0, imgH: photo ? photo.h : 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+  const masterId = $('cMaster').value || '', group = osGroupValue();
+  const data = { masterId, sku, name, group, link: $('cLink').value || '', rate: parseFloat($('cRate').value) || 0, gstRate: parseFloat($('cGst').value) || 0, priceMode: $('cMode').value, hsn: (linkOpts.find(o => o.id === $('cLink').value) || {}).hsn || '', unit: ($('cUnit').value.trim() || 'PCS').toUpperCase(), description: $('cDesc').value.trim(), imageData: photo ? photo.data : '', imgW: photo ? photo.w : 0, imgH: photo ? photo.h : 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
   try{
+    let masterNote = '';
+    if(masterId){
+      if(SIDE === 'buyer'){
+        const m = linkOpts.find(o => o.id === masterId);
+        if(m){
+          const changed = String(m.buyerSku || '').toUpperCase() !== sku || (m.pname || '') !== name || (m.group || '') !== group;
+          if(changed){
+            if(!confirm(`This also updates your Buyer SKU Master:\nSKU ${m.buyerSku || '—'} → ${sku}\nProduct "${m.pname}" → "${name}"\n\nContinue?`)) return;
+            await col('buyerSkuMappings').doc(masterId).set({ buyerSku: sku, productName: name, groupName: group, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            masterNote = ' Buyer SKU Master updated too.';
+          }
+        }
+      } else if(stockProds[masterId]){
+        const x = stockProds[masterId], newName = group && name ? (group + ' ' + name).replace(/\s+/g, ' ').trim() : (name || group);
+        const clash = Object.keys(stockProds).find(k => k !== masterId && String(stockProds[k].sku || '').toUpperCase() === sku);
+        if(clash){ showMsg(`SKU ${sku} is already used by "${stockProds[clash].name}" in your Product Master.`, false); return; }
+        const changed = String(x.sku || '').toUpperCase() !== sku || (x.variant || x.name || '') !== name || ((x.groupName || '').trim() || x.name || '') !== group;
+        if(changed){
+          if(!confirm(`This also updates your Product Master:\nSKU ${x.sku || '—'} → ${sku}\nName on invoice: "${x.name}" → "${newName}"\n\nContinue?`)) return;
+          await col('products').doc(masterId).set({ sku, variant: name, groupName: group, name: newName }, { merge: true });
+          masterNote = ' Product Master updated too.';
+        }
+      }
+    }
     if(id) await col('orderItems').doc(id).set(data, { merge: true }); else await col('orderItems').add(data);
-    showMsg(`${sku} saved.`, true); await osLoad(); osResetForm(); osTabs(); osRenderCatalog();
+    showMsg(`${sku} saved.${masterNote}`, true); await osLoad(); osResetForm(); osTabs(); osRenderCatalog();
   }catch(e){ showMsg('Could not save: ' + e.message, false); }
 }
 async function osDelete(id){

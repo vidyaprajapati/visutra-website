@@ -130,3 +130,25 @@ test('My products form: product list comes from the master, SKU dropdown follows
   assert.strictEqual(w.document.getElementById('cUnit').value, 'PC');
   assert.strictEqual(w.document.getElementById('cGst').value, '5');
 });
+
+test('master sync: master edits show in order items; saving an item writes back to the Product Master', async () => {
+  const { w } = setup('seller');
+  w.eval("showMsg = function(){}; confirm = function(){ return true; };");
+  w.eval("stockProds = { P1: { name:'Bed sheet 60x90', groupName:'Bed sheet', variant:'60x90', sku:'BSP-9' } };");
+  w.eval("items = [{ id:'I1', masterId:'P1', sku:'OLD', name:'old', group:'x' }]; osOverlayMaster();");
+  assert.strictEqual(w.eval('items[0].sku'), 'BSP-9');
+  assert.strictEqual(w.eval('items[0].name'), '60x90');
+  assert.strictEqual(w.eval('items[0].group'), 'Bed sheet');
+  w.eval("var __w = null; col = function(n){ return { doc: function(id){ return { set: async function(d){ __w = { n, id, d }; } }; }, add: async function(){ } }; };");
+  w.document.getElementById('cMaster').value = 'P1';
+  w.document.getElementById('cSku').value = 'BSP-10';
+  w.document.getElementById('cName').value = '72x95';
+  w.eval("osFillGroupSel('Bed sheet')");
+  w.document.getElementById('cGroup').value = 'Bed sheet';
+  await w.eval('osSaveProduct()');
+  const wr = w.eval('__w');
+  assert.ok(wr && wr.n === 'products' && wr.id === 'P1', 'write-back to products');
+  assert.strictEqual(wr.d.sku, 'BSP-10');
+  assert.strictEqual(wr.d.variant, '72x95');
+  assert.strictEqual(wr.d.name, 'Bed sheet 72x95');
+});
