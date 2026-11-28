@@ -165,7 +165,7 @@ async function osLoad(){
       (await col('buyerSkuMappings').get()).docs.forEach(d => { const x = d.data(); if(x.status !== 'INACTIVE') linkOpts.push({ id: d.id, name: (x.productName || x.name || d.id) + (x.buyerSku ? ' · ' + x.buyerSku : '') + (x.sellerSku ? '  →  seller SKU ' + x.sellerSku : ''), unit: x.unit || '', sellerId: x.sellerId || '', productId: x.productId || '', sellerSku: x.sellerSku || '', sellerProductName: x.sellerProductName || x.productName || '', ownLink: x.linkType === 'OWN', pname: x.productName || x.name || '', group: (x.groupName || '').trim(), buyerSku: x.buyerSku || '' }); });
     } else {
       stockProds = {}; (await col('products').get()).docs.forEach(d => { stockProds[d.id] = d.data(); });
-      (await col('purchaseProducts').get()).docs.forEach(d => { const x = d.data(); if(!x.deleted) linkOpts.push({ id: d.id, name: (x.name || d.id) + (x.linkedProductId && stockProds[x.linkedProductId] ? '  →  stock SKU ' + (stockProds[x.linkedProductId].sku || stockProds[x.linkedProductId].name) : ''), unit: x.unit || '', hsn: x.hsn || '', linkedProductId: x.linkedProductId || null }); });
+      (await col('purchaseProducts').get()).docs.forEach(d => { const x = d.data(); if(!x.deleted) linkOpts.push({ id: d.id, name: (x.name || d.id) + (x.linkedProductId && stockProds[x.linkedProductId] ? '  (stock added to ' + (stockProds[x.linkedProductId].sku || stockProds[x.linkedProductId].name) + ')' : ''), unit: x.unit || '', hsn: x.hsn || '', linkedProductId: x.linkedProductId || null }); });
     }
   }catch(e){ console.warn('link list', e); }
   linkOpts.sort((a, b) => a.name.localeCompare(b.name));
@@ -391,6 +391,7 @@ function osSkuPick(){
   if(x.unit) $('cUnit').value = String(x.unit).toUpperCase();
   const gs = $('cGst'); if(x.gstRate){ gs.value = String(x.gstRate); }
   if(x.link) $('cLink').value = x.link;
+  else if(SIDE === 'seller' && x.id && !$('cLink').value){ const m = linkOpts.find(o => o.linkedProductId === x.id); if(m) $('cLink').value = m.id; }
   const ex = items.find(i => x.sku && String(i.sku).toUpperCase() === String(x.sku).toUpperCase());
   if(ex && !$('cId').value) showMsg(`${x.sku} is already in My products — use Edit on it, or pick another SKU.`, false); else showMsg('', true);
 }
