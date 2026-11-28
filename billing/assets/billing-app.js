@@ -362,6 +362,7 @@ async function loadProducts(){
   renderProductDropdowns();
   renderStockDropdowns();
   renderStockTable();
+  try{ if(window.vtLowStock) window.vtLowStock(productsCache); }catch(e){ console.warn('Low-stock alert failed:', e); }
 }
 function renderProducts(){
   document.getElementById('productsTable').innerHTML = productsCache.map(p => {
@@ -2240,6 +2241,20 @@ function recalcPurchaseTotals(){
   }
   return {subtotal, gstTotal, grand};
 }
+/* After a purchase/payment is saved: offer the supplier statement (PDF) on WhatsApp. */
+function offerSupplierStatement(supId, anchorId){
+  try{
+    const sup = suppliersCache.find(x => x.id === supId);
+    if(!sup || !window.vtStatement) return;
+    window.vtStatement.offer({
+      side: 'seller', anchorId: anchorId || 'purchaseMsg',
+      ownerName: (businessData && businessData.businessName) || (currentUser && currentUser.email) || 'VISUTRA',
+      party: { name: sup.name, phone: sup.phone, gstin: sup.gstin },
+      purchases: purchasesCache.filter(x => x.supplierId === supId),
+      payments: paymentsCache.filter(x => x.supplierId === supId)
+    });
+  }catch(e){ console.warn('Statement offer failed:', e); }
+}
 async function savePurchase(){
   const supId = document.getElementById('purSupplier').value;
   const supplier = suppliersCache.find(s => s.id === supId);
@@ -2303,6 +2318,7 @@ async function savePurchase(){
     await loadPurchases();
     showMsg('purchaseMsg', `Purchase updated. Balance now ₹${fmtMoney(getSupplierBalance(supId))}.`, true);
     cancelEditPurchase();
+    offerSupplierStatement(supId);
     return;
   }
 
@@ -2348,6 +2364,7 @@ async function savePurchase(){
   const newInvNoEl = document.getElementById('purInvoiceNo'); if(newInvNoEl) newInvNoEl.value = '';
   document.getElementById('purPaidNow').value = '0'; updateAmountWords('purPaidNow','purPaidNowWords');
   await loadPurchases();
+  offerSupplierStatement(supId);
 }
 async function loadPurchases(){
   const snap = await db.collection('users').doc(currentUser.uid).collection('purchases').orderBy('date','desc').get();
@@ -2720,6 +2737,7 @@ async function recordSupplierPayment(){
   showMsg('ledgerPayMsg', 'Payment recorded.', true);
   await loadPayments();
   renderSupplierLedger(currentLedgerSupplierId);
+  offerSupplierStatement(currentLedgerSupplierId, 'ledgerPayMsg');
 }
 
 /* ---------------- Invoice line items ---------------- */

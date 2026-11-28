@@ -4,7 +4,7 @@ const { JSDOM } = require('jsdom');
 const PDFLib = require('pdf-lib');
 const R = path.join(__dirname, '..', '..') + path.sep;
 const { makeClient } = require('./fakesb');
-const SKIP = /(user-menu|auth-guard|pwa|android-download|firebase-config|vt-firebase-compat)\.js$/;
+const SKIP = /(user-menu|auth-guard|pwa|info-toggle|low-stock-alert|statement-share|android-download|firebase-config|vt-firebase-compat)\.js$/;
 const windows = [];
 const read = rel => fs.readFileSync(R + rel, 'utf8');
 function baseWindow(html, url, identity, stats, before){

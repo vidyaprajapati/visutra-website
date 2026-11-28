@@ -63,6 +63,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../assets/vt-firebase-compat.js"></script>
 <script src="../assets/firebase-config.js"></script>
+<script src="/statement-share.js"></script>
 <script src="../assets/user-menu.js"></script>
 <script src="../assets/table-sort.js"></script>
 <script>
@@ -223,11 +224,26 @@ async function savePaymentEntry(){
     ['payEntryAmount','payEntryMode','payEntryNote'].forEach(f => document.getElementById(f).value = '');
     updateAmountWords('payEntryAmount','payEntryAmountWords');
     await loadPayments();
+    offerPaymentStatement(supplierId);
   }catch(err){
     showMsg(`Could not save: ${err.message}`, false);
   }
 }
 
+/* After saving a payment: offer the supplier statement (PDF) on WhatsApp. */
+async function offerPaymentStatement(supplierId){
+  try{
+    const sup = suppliersCache.find(x => x.id === supplierId);
+    if(!sup || !window.vtStatement) return;
+    const snap = await db.collection('users').doc(currentUser.uid).collection('buyerPurchases').get();
+    const purchases = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.supplierId === supplierId && !x.deleted);
+    let owner = currentUser.email || 'VISUTRA';
+    try{ const d = await db.collection('users').doc(currentUser.uid).get(); if(d.exists && d.data().businessName) owner = d.data().businessName; }catch(e){}
+    window.vtStatement.offer({ side: 'buyer', anchorId: 'paymentEntryMsg', ownerName: owner,
+      party: { name: sup.name, phone: sup.phone, gstin: sup.gstin }, purchases,
+      payments: paymentsCache.filter(x => x.supplierId === supplierId && !x.deleted) });
+  }catch(e){ console.warn('Statement offer failed:', e); }
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtMoney(n){ return (n||0).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 
